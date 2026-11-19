@@ -100,4 +100,12 @@ pub enum HyperionError {
     ProtectedAsset = 46,
     /// A single transfer exceeds the maximum amount permitted for the chosen route.
     ExceedsRouteLimit = 47,
+    /// The quote configuration (adapter, fee, precision) changed since reviewed.
+    FingerprintMismatch = 48,
+    /// The request expired before execution.
+    RequestExpired = 49,
+    /// The batch size or aggregate transfer amount exceeds configured bounds.
+    BatchLimitExceeded = 50,
+    /// The transfer amount exceeds the destination-specific flow limit for this window.
+    DestinationFlowLimitExceeded = 51,
 }

@@ -67,6 +67,10 @@ export const SOROBAN_ERROR_NAMES = [
   "GasFloatTooLow",
   "ProtectedAsset",
   "ExceedsRouteLimit",
+  "FingerprintMismatch",
+  "RequestExpired",
+  "BatchLimitExceeded",
+  "DestinationFlowLimitExceeded",
 ] as const;
 
 export type SorobanErrorName = (typeof SOROBAN_ERROR_NAMES)[number];
@@ -122,6 +126,10 @@ export const EVM_ERROR_NAMES = [
   "ProtectedAsset",
   "ZeroAddress",
   "RefundFailed",
+  "FingerprintMismatch",
+  "RequestExpired",
+  "BatchLimitExceeded",
+  "DestinationFlowLimitExceeded",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -438,6 +446,27 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
     summary: "That transfer exceeds the maximum single transfer limit configured for this route.",
     fault: "limit",
     retryable: false,
+  },
+  FingerprintMismatch: {
+    summary:
+      "The route configuration, adapter, fee, or token precision changed since the quote was reviewed.",
+    fault: "config",
+    retryable: true,
+  },
+  RequestExpired: {
+    summary: "The request expired before execution.",
+    fault: "timing",
+    retryable: false,
+  },
+  BatchLimitExceeded: {
+    summary: "The batch transfer exceeds the item count or total amount bounds.",
+    fault: "limit",
+    retryable: false,
+  },
+  DestinationFlowLimitExceeded: {
+    summary: "The transfer exceeds the destination-specific volume ceiling for the current window.",
+    fault: "limit",
+    retryable: true,
   },
 };
 
