@@ -918,7 +918,7 @@ fn per_destination_flow_policy_respects_global_bounds_and_quotes_agree() {
         &Some(eth_chain.clone()),
     );
     let cctp_quote = quotes.get(0).unwrap();
-    assert_eq!(cctp_quote.available, false);
+    assert!(!cctp_quote.available);
     assert_eq!(
         cctp_quote.reason,
         HyperionError::DestinationFlowLimitExceeded as u32
