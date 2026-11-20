@@ -82,6 +82,12 @@ error ZeroAddress();
 // because silently keeping the difference is a second fee nobody agreed to.
 error RefundFailed();
 
+/// @notice The native provider payment exceeds the explicit sender cap.
+error ProviderBudgetExceeded();
+
+/// @notice The adapter lacks a usable local dispatch validation method.
+error AdapterMethodUnavailable();
+
 // Outbound preconditions, batching, and destination flow controls.
 error FingerprintMismatch();
 error RequestExpired();

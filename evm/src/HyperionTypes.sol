@@ -89,6 +89,22 @@ struct PendingClaim {
     bool settled;
 }
 
+/// @dev Versioned operational result for one requested claim settlement.
+enum ClaimSettlementStatus {
+    Settled,
+    NotFound,
+    AlreadySettled,
+    RecipientRestricted,
+    InsufficientRouterBalance,
+    TokenUnavailable,
+    InvalidTokenPayout
+}
+
+struct ClaimSettlementResult {
+    uint64 id;
+    ClaimSettlementStatus status;
+}
+
 /// @dev Where an inbound delivery says it came from.
 struct Origin {
     string chain;
@@ -173,6 +189,23 @@ struct RouteQuote {
     bool isCanonical;
 }
 
+/// @dev Structured reason code when a queued timelock action is cancelled.
+enum CancelReason {
+    Unspecified,
+    Superseded,
+    ParametersIncorrect,
+    SecurityConcern,
+    Expired,
+    OperatorAborted
+}
+
+/// @dev Lifecycle status of a timelock action in its audit record.
+enum ActionAuditStatus {
+    Queued,
+    Executed,
+    Cancelled
+}
+
 /// @dev Why a route turned a quote down.
 enum QuoteBlocker {
     None,
@@ -187,4 +220,15 @@ enum QuoteBlocker {
     MuxedNotSupported,
     InvalidDestination,
     ChainNotSupported
+}
+
+// Additive V2 result: the legacy RouteQuote tuple and its selectors remain unchanged.
+struct RouteQuoteV2 {
+    RouteQuote quote;
+    uint256 requestedAmount;
+    uint256 fee;
+    uint256 netAmount;
+    uint256 retainedDust;
+    uint256 actualDebit;
+    bool breakdownKnown;
 }

@@ -33,6 +33,27 @@ The legacy `bridge_out` and `dispatch` interfaces remain compatible and do not a
 The current wallet-owned router and adapter expose the paid entry point. Their activation and actual source/destination transactions are recorded in `deployments/evidence/2026-10-28-paid-its.json`. Future router upgrades use the existing timelock; adapter upgrades require its admin.
 See [the exact activation runbook](docs/TESTNET_ACTIVATION.md) for reviewed artifacts, admin commands and the live acceptance test.
 
+## Claim operations and API compatibility
+
+The additive EVM `settleClaims` and Soroban `settle_claims` process 1–50 claim IDs and return
+one confirmed outcome per input, retaining the stored token, amount and recipient. Ordinary
+recipient refusals retain unrelated progress; the exact rollback limits differ by host and are
+explained in [claim operations](docs/claim-operations.md). Archived claim markers and repeated
+IDs cannot permit another payment. Version 1 failure sidecars/events distinguish refusal,
+custody shortage and unavailable token reads; EVM also records isolated inexact token payouts.
+Successful retries clear diagnostics. Legacy single-claim calls still revert on failure and
+therefore cannot persist a new failure event.
+
+`bridge_out_bounded` adds an explicit Soroban provider cap: ITS gas-token base units (XLM on the
+active deployment), or CCTP burned-token base units (USDC), with no cross-rail unit mixing.
+`bridgeOutBounded` caps EVM native provider payment in wei; EVM CCTP retains finalized delivery
+with a zero token forwarding fee. `explain_outbound` / `explainOutbound` check the same local
+budget, destination and adapter prerequisites as their bounded dispatch path without moving
+funds. Missing validation methods are explicitly unavailable; legacy quotes never substitute
+for them. Existing request and quote schemas remain compatible. The active deployment remains
+Stellar Testnet outbound ITS/CCTP; new entrypoints require reviewed router/adapter upgrades,
+and these source changes do not activate additional deployments.
+
 ## Organization overview
 
 The StellarHyperion organization divides cross-chain routing across three dedicated repositories:

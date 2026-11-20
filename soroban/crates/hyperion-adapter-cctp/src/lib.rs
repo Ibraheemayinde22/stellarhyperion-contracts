@@ -50,11 +50,12 @@ use hyperion_core::{
     cctp::{self, BurnMessage, CctpMessage, HyperionHook},
     codec,
     inbound::{Origin, Recipient, RouterClient},
-    HyperionError, RouteKind, BPS_DENOMINATOR,
+    AdapterKeyCoverage, HyperionError, MaintenanceSummary, RouteKind, BPS_DENOMINATOR,
+    MAX_MAINTENANCE_BATCH,
 };
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractimpl, token, vec, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
+    contract, contractimpl, token, vec, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 use rail::{MessageTransmitterClient, TokenMessengerClient};
@@ -108,6 +109,27 @@ impl CctpAdapter {
     // Outbound
     // ---------------------------------------------------------------------------------------
 
+    // Shares all local dispatch checks; provider execution/balances still require simulation.
+    pub fn check_dispatch(
+        env: Env,
+        caller: Address,
+        _token: Address,
+        amount: i128,
+        destination_chain: String,
+        destination: BytesN<32>,
+        gas_amount: Option<i128>,
+    ) -> Result<(), HyperionError> {
+        validate_dispatch(
+            &env,
+            &caller,
+            amount,
+            &destination_chain,
+            &destination,
+            gas_amount,
+        )?;
+        Ok(())
+    }
+
     /// Hand funds the router has already transferred here to Circle for burning.
     ///
     /// The router is the only caller. It has already taken its fee, floored the amount to
@@ -123,21 +145,14 @@ impl CctpAdapter {
         nonce: u64,
     ) -> Result<(), HyperionError> {
         caller.require_auth();
-        let cfg = storage::config(&env)?;
-        if caller != cfg.router {
-            return Err(HyperionError::Unauthorized);
-        }
-        if amount <= 0 {
-            return Err(HyperionError::InvalidAmount);
-        }
-        let domain =
-            storage::domain_of(&env, &destination_chain).ok_or(HyperionError::UnknownChain)?;
-        // Circle rejects an all zero mint recipient too, with its own error. Catching it here
-        // means the refusal names Hyperion's reason rather than surfacing as a panic from two
-        // contracts away.
-        if destination == BytesN::from_array(&env, &[0u8; 32]) {
-            return Err(HyperionError::InvalidDestination);
-        }
+        let (cfg, domain, _) = validate_dispatch(
+            &env,
+            &caller,
+            amount,
+            &destination_chain,
+            &destination,
+            None,
+        )?;
 
         let max_fee = amount
             .checked_mul(i128::from(cfg.max_fee_bps))
@@ -204,22 +219,14 @@ impl CctpAdapter {
     ) -> Result<(), HyperionError> {
         caller.require_auth();
         sender.require_auth();
-        let cfg = storage::config(&env)?;
-        if caller != cfg.router {
-            return Err(HyperionError::Unauthorized);
-        }
-        if amount <= 0 || gas_amount <= 0 || gas_amount >= amount {
-            return Err(HyperionError::InvalidAmount);
-        }
-        let domain =
-            storage::domain_of(&env, &destination_chain).ok_or(HyperionError::UnknownChain)?;
-        if destination == BytesN::from_array(&env, &[0u8; 32]) {
-            return Err(HyperionError::InvalidDestination);
-        }
-        let destination_caller = storage::destination_caller(&env, domain);
-        if destination_caller != BytesN::from_array(&env, &[0u8; 32]) {
-            return Err(HyperionError::InvalidDestination);
-        }
+        let (cfg, domain, destination_caller) = validate_dispatch(
+            &env,
+            &caller,
+            amount,
+            &destination_chain,
+            &destination,
+            Some(gas_amount),
+        )?;
         let this = env.current_contract_address();
         let asset = token::Client::new(&env, &token);
         let sender_before = asset.balance(&sender);
@@ -420,8 +427,78 @@ impl CctpAdapter {
         env.storage()
             .instance()
             .extend_ttl(storage::BUMP_THRESHOLD, storage::BUMP_TO);
-        storage::touch_link(&env, domain);
+        let _ = storage::touch_link(&env, domain);
         Ok(())
+    }
+
+    /// Bounded storage maintenance for CCTP peer trust (`Domain`, `Chain`, `Caller`) and
+    /// token mappings (`Asset(domain, remote_token)`).
+    pub fn maintain_storage(
+        env: Env,
+        tokens: Vec<Address>,
+        peer_chains: Vec<String>,
+        peer_domains: Vec<u32>,
+        remote_tokens: Vec<BytesN<32>>,
+        inbound_messages: Vec<BytesN<32>>,
+    ) -> Result<MaintenanceSummary, HyperionError> {
+        let _ = storage::config(&env)?;
+        if tokens.len() > MAX_MAINTENANCE_BATCH
+            || peer_chains.len() > MAX_MAINTENANCE_BATCH
+            || peer_domains.len() > MAX_MAINTENANCE_BATCH
+            || remote_tokens.len() > MAX_MAINTENANCE_BATCH
+            || inbound_messages.len() > MAX_MAINTENANCE_BATCH
+            || peer_chains
+                .len()
+                .saturating_add(peer_domains.len())
+                .saturating_mul(3)
+                .saturating_add(peer_domains.len().saturating_mul(remote_tokens.len()))
+                > MAX_MAINTENANCE_BATCH
+            || !tokens.is_empty()
+            || !inbound_messages.is_empty()
+        {
+            return Err(HyperionError::InvalidLimit);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(storage::BUMP_THRESHOLD, storage::BUMP_TO);
+
+        let mut peer_trust_touched = 0u32;
+        for chain in peer_chains.iter() {
+            peer_trust_touched += storage::touch_link_by_chain(&env, &chain);
+        }
+        for domain in peer_domains.iter() {
+            peer_trust_touched += storage::touch_link(&env, domain);
+        }
+
+        let mut token_mappings_touched = 0u32;
+        for domain in peer_domains.iter() {
+            for burn_token in remote_tokens.iter() {
+                if storage::touch_asset(&env, domain, &burn_token) {
+                    token_mappings_touched += 1;
+                }
+            }
+        }
+
+        Ok(MaintenanceSummary {
+            instance_extended: true,
+            token_mappings_touched,
+            peer_trust_touched,
+            inbound_records_touched: 0,
+            total_keys_touched: peer_trust_touched + token_mappings_touched,
+        })
+    }
+
+    /// Explicit key coverage for CCTP adapter storage maintenance.
+    pub fn key_coverage(_env: Env) -> Result<AdapterKeyCoverage, HyperionError> {
+        Ok(AdapterKeyCoverage {
+            route: RouteKind::Cctp,
+            has_token_mappings: true,
+            has_peer_trust: true,
+            has_inbound_records: false,
+            token_mapping_keys: 1,
+            peer_trust_keys: 3,
+            inbound_record_keys: 0,
+        })
     }
 
     // ---------------------------------------------------------------------------------------
@@ -589,4 +666,36 @@ fn require_admin(env: &Env) -> Result<Config, HyperionError> {
 /// cheapest way to compare it against an `Address` without inventing a second address format.
 fn contract_at(env: &Env, raw: &BytesN<32>) -> Address {
     Address::from_string(&codec::contract_strkey(env, &raw.to_array()))
+}
+
+fn validate_dispatch(
+    env: &Env,
+    caller: &Address,
+    amount: i128,
+    chain: &String,
+    destination: &BytesN<32>,
+    gas_amount: Option<i128>,
+) -> Result<(Config, u32, BytesN<32>), HyperionError> {
+    let cfg = storage::config(env)?;
+    if caller != &cfg.router {
+        return Err(HyperionError::Unauthorized);
+    }
+    if amount <= 0 || gas_amount.is_some_and(|gas| gas <= 0 || gas >= amount) {
+        return Err(HyperionError::InvalidAmount);
+    }
+    let domain = storage::domain_of(env, chain).ok_or(HyperionError::UnknownChain)?;
+    let zero = BytesN::from_array(env, &[0u8; 32]);
+    if destination == &zero {
+        return Err(HyperionError::InvalidDestination);
+    }
+    let destination_caller = storage::destination_caller(env, domain);
+    if gas_amount.is_some() && destination_caller != zero {
+        return Err(HyperionError::InvalidDestination);
+    }
+    if gas_amount.is_none() {
+        amount
+            .checked_mul(i128::from(cfg.max_fee_bps))
+            .ok_or(HyperionError::DecimalOverflow)?;
+    }
+    Ok((cfg, domain, destination_caller))
 }

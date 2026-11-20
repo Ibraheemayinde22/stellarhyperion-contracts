@@ -184,6 +184,7 @@ impl MockRail {
 enum TokenKey {
     Balance(Address),
     Blocked(Address),
+    BalanceError(Address),
     Decimals,
 }
 
@@ -226,7 +227,21 @@ impl FailableToken {
             .set(&TokenKey::Blocked(who), &blocked);
     }
 
+    pub fn set_balance_error(env: Env, who: Address, unavailable: bool) {
+        env.storage()
+            .instance()
+            .set(&TokenKey::BalanceError(who), &unavailable);
+    }
+
     pub fn balance(env: Env, id: Address) -> i128 {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&TokenKey::BalanceError(id.clone()))
+            .unwrap_or(false)
+        {
+            env.panic_with_error(TokenError::NegativeAmount);
+        }
         env.storage()
             .instance()
             .get(&TokenKey::Balance(id))
@@ -418,5 +433,25 @@ impl UnreadableBalanceToken {
 
     pub fn balance(_env: Env, _id: Address) -> Result<i128, TokenError> {
         Err(TokenError::InsufficientBalance)
+    }
+}
+
+#[contract]
+pub struct HostFailureAdapter;
+#[contractimpl]
+impl HostFailureAdapter {
+    pub fn check_dispatch(
+        env: Env,
+        _caller: Address,
+        _token: Address,
+        _amount: i128,
+        _destination_chain: String,
+        _destination: BytesN<32>,
+        _gas_amount: Option<i128>,
+    ) {
+        env.panic_with_error(soroban_sdk::Error::from_type_and_code(
+            soroban_sdk::xdr::ScErrorType::Storage,
+            soroban_sdk::xdr::ScErrorCode::ExceededLimit,
+        ));
     }
 }

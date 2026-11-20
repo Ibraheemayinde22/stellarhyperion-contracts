@@ -8,7 +8,8 @@ import {
     Destination,
     QuoteBlocker,
     RouteKind,
-    RouteQuote
+    RouteQuote,
+    RouteQuoteV2
 } from "../../src/HyperionTypes.sol";
 import {Fixture} from "../Fixture.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
@@ -31,6 +32,17 @@ contract RouterQuoteTest is Fixture {
     /// CRC16 does not. Inventing a wrong address is easy; inventing a wrong address that fails
     /// for the reason a test claims is not, which is why this one is derived from a good one.
     string internal constant BROKEN_ADDR = "GA5ZYIIVYDX5GRF2BKEQD2Y47ZCPG3HX3PUUNPVQ5ZECB57MJG7RLVNV";
+
+    function test_v2_preserves_legacy_tuple_and_conserves_dust() public view {
+        for (uint256 amount = 1; amount < 13; ++amount) {
+            RouteQuoteV2 memory v = router.quoteV2(RouteKind.Cctp, address(usdc), amount, _dest(G_ADDR), 5);
+            RouteQuote memory old = router.quote(RouteKind.Cctp, address(usdc), amount, _dest(G_ADDR), 5);
+            assertEq(abi.encode(v.quote), abi.encode(old));
+            assertTrue(v.breakdownKnown);
+            assertEq(v.requestedAmount, v.actualDebit + v.retainedDust);
+            assertEq(v.actualDebit, v.fee + v.netAmount);
+        }
+    }
 
     // -------------------------------------------------------------------------------------
     // The happy answer

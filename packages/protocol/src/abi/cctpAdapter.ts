@@ -41,6 +41,41 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "function",
+    "name": "checkDispatch",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "destination",
+        "type": "tuple",
+        "internalType": "struct Destination",
+        "components": [
+          {
+            "name": "chain",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "strkey",
+            "type": "string",
+            "internalType": "string"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "dispatch",
     "inputs": [
       {

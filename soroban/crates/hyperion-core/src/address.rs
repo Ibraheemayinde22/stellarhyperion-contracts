@@ -3,34 +3,34 @@ use soroban_sdk::{contracttype, Bytes, BytesN, Env};
 use crate::error::HyperionError;
 use crate::route::RouteKind;
 
-/// Tag byte for a classic ed25519 account, the kind that starts with G.
+// Tag byte for a classic ed25519 account, the kind that starts with G.
 pub const KIND_ACCOUNT: u8 = 0;
-/// Tag byte for a Soroban contract, the kind that starts with C.
+// Tag byte for a Soroban contract, the kind that starts with C.
 pub const KIND_CONTRACT: u8 = 1;
-/// Tag byte for a muxed account, the kind that starts with M. Carries an extra 8 byte id.
+// Tag byte for a muxed account, the kind that starts with M. Carries an extra 8 byte id.
 pub const KIND_MUXED: u8 = 2;
 
-/// Length of a tagged destination with no muxed id: one tag byte plus a 32 byte key.
+// Length of a tagged destination with no muxed id: one tag byte plus a 32 byte key.
 pub const TAGGED_LEN_PLAIN: u32 = 33;
-/// Length of a tagged muxed destination: tag, 32 byte key, then a big-endian u64 id.
+// Length of a tagged muxed destination: tag, 32 byte key, then a big-endian u64 id.
 pub const TAGGED_LEN_MUXED: u32 = 41;
 
-/// Which flavour of Stellar address a destination refers to.
-///
-/// This distinction has no equivalent on the EVM side, where every account is a plain 20
-/// byte value. A raw 32 byte cross-chain field carries no type information whatsoever, so
-/// something has to say which of the three this is. That something is this enum, carried
-/// explicitly in Hyperion's own tagged encoding.
+// Which flavour of Stellar address a destination refers to.
+//
+// This distinction has no equivalent on the EVM side, where every account is a plain 20
+// byte value. A raw 32 byte cross-chain field carries no type information whatsoever, so
+// something has to say which of the three this is. That something is this enum, carried
+// explicitly in Hyperion's own tagged encoding.
 #[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum AddressKind {
-    /// Classic ed25519 account, G prefix. Needs a trustline before it can hold an asset.
+    // Classic ed25519 account, G prefix. Needs a trustline before it can hold an asset.
     Account = 0,
-    /// Soroban contract, C prefix. No trustline concept applies.
+    // Soroban contract, C prefix. No trustline concept applies.
     Contract = 1,
-    /// Muxed account, M prefix. One of many virtual sub-accounts sharing a single G
-    /// account, per SEP-23. Exchanges lean on these heavily.
+    // Muxed account, M prefix. One of many virtual sub-accounts sharing a single G
+    // account, per SEP-23. Exchanges lean on these heavily.
     MuxedAccount = 2,
 }
 
@@ -216,24 +216,23 @@ pub fn evm_to_bytes32(env: &Env, addr: &BytesN<20>) -> BytesN<32> {
 /// either a Stellar key that took a wrong turn or a deliberately malformed destination, and
 /// both deserve a revert rather than a truncation.
 pub fn bytes32_to_evm(env: &Env, raw: &BytesN<32>) -> Result<BytesN<20>, HyperionError> {
-    let src = raw.to_array();
-    let mut i = 0usize;
-    while i < 12 {
-        if src[i] != 0 {
-            return Err(HyperionError::NotEvmAddress);
-        }
-        i += 1;
-    }
+    let src = validated_evm_word(raw)?;
     let mut out = [0u8; 20];
-    let mut j = 0usize;
-    while j < 20 {
-        out[j] = src[12 + j];
-        j += 1;
+    out.copy_from_slice(&src[12..]);
+    Ok(BytesN::from_array(env, &out))
+}
+
+/// Validate a nonzero left-padded EVM address without allocating an unused narrowed host value.
+/// The returned word lets callers that do need the narrowed address reuse the same bytes.
+pub fn validated_evm_word(raw: &BytesN<32>) -> Result<[u8; 32], HyperionError> {
+    let src = raw.to_array();
+    if src[..12].iter().any(|byte| *byte != 0) {
+        return Err(HyperionError::NotEvmAddress);
     }
-    if out == [0u8; 20] {
+    if src[12..].iter().all(|byte| *byte == 0) {
         return Err(HyperionError::ZeroAddressKey);
     }
-    Ok(BytesN::from_array(env, &out))
+    Ok(src)
 }
 
 #[cfg(test)]

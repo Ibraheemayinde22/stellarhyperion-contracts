@@ -59,13 +59,13 @@ use hyperion_core::{
     address::{assert_route_supports, bytes32_to_evm, evm_to_bytes32},
     axelar::{InboundNote, OutboundNote},
     inbound::{Origin, Recipient, RouterClient},
-    HyperionError, RouteKind,
+    AdapterKeyCoverage, HyperionError, MaintenanceSummary, RouteKind, MAX_MAINTENANCE_BATCH,
 };
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contractimpl, token, vec,
     xdr::ToXdr,
-    Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
+    Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 use rail::{InterchainTokenServiceClient, Token, TokenManagerType};
@@ -113,6 +113,28 @@ impl AxelarAdapter {
     // Outbound
     // ---------------------------------------------------------------------------------------
 
+    // Auth-free validation only. Dispatch keeps caller/sender authorization unchanged.
+    pub fn check_dispatch(
+        env: Env,
+        caller: Address,
+        token: Address,
+        amount: i128,
+        destination_chain: String,
+        destination: BytesN<32>,
+        gas_amount: Option<i128>,
+    ) -> Result<(), HyperionError> {
+        validate_dispatch(
+            &env,
+            &caller,
+            &token,
+            amount,
+            &destination_chain,
+            &destination,
+            gas_amount,
+        )?;
+        Ok(())
+    }
+
     /// Hand funds the router has already moved here over to ITS.
     ///
     /// The router transfers the net amount in before calling, so by the time this runs the
@@ -128,16 +150,15 @@ impl AxelarAdapter {
         nonce: u64,
     ) -> Result<(), HyperionError> {
         caller.require_auth();
-        let cfg = storage::config(&env)?;
-        if caller != cfg.router {
-            return Err(HyperionError::Unauthorized);
-        }
-        if amount <= 0 {
-            return Err(HyperionError::InvalidAmount);
-        }
-        let link = storage::link(&env, &destination_chain).ok_or(HyperionError::UnknownChain)?;
-        let token_id = storage::token_id(&env, &token).ok_or(HyperionError::TokenNotMapped)?;
-        let recipient = bytes32_to_evm(&env, &destination)?;
+        let (cfg, link, token_id, recipient) = validate_dispatch(
+            &env,
+            &caller,
+            &token,
+            amount,
+            &destination_chain,
+            &destination,
+            None,
+        )?;
 
         let this = env.current_contract_address();
         let its = InterchainTokenServiceClient::new(&env, &cfg.its);
@@ -257,19 +278,15 @@ impl AxelarAdapter {
     ) -> Result<(), HyperionError> {
         caller.require_auth();
         sender.require_auth();
-        let cfg = storage::config(&env)?;
-        if caller != cfg.router {
-            return Err(HyperionError::Unauthorized);
-        }
-        if cfg.route != RouteKind::AxelarIts {
-            return Err(HyperionError::UnsupportedRoute);
-        }
-        if amount <= 0 || gas_amount <= 0 {
-            return Err(HyperionError::InvalidAmount);
-        }
-        let link = storage::link(&env, &destination_chain).ok_or(HyperionError::UnknownChain)?;
-        let token_id = storage::token_id(&env, &token).ok_or(HyperionError::TokenNotMapped)?;
-        let recipient = bytes32_to_evm(&env, &destination)?;
+        let (cfg, link, token_id, recipient) = validate_dispatch(
+            &env,
+            &caller,
+            &token,
+            amount,
+            &destination_chain,
+            &destination,
+            Some(gas_amount),
+        )?;
         let its = InterchainTokenServiceClient::new(&env, &cfg.its);
         let destination_address = Bytes::from_array(&env, &recipient.to_array());
         let asset = token::Client::new(&env, &token);
@@ -493,8 +510,75 @@ impl AxelarAdapter {
         env.storage()
             .instance()
             .extend_ttl(storage::BUMP_THRESHOLD, storage::BUMP_TO);
-        storage::touch_link(&env, &chain);
+        let _ = storage::touch_link(&env, &chain);
         Ok(())
+    }
+
+    /// Bounded storage maintenance for Axelar peer trust (`Link`, `Source`) and token mappings
+    /// (`TokenId`, `Token`).
+    pub fn maintain_storage(
+        env: Env,
+        tokens: Vec<Address>,
+        peer_chains: Vec<String>,
+        peer_domains: Vec<u32>,
+        remote_tokens: Vec<BytesN<32>>,
+        inbound_messages: Vec<BytesN<32>>,
+    ) -> Result<MaintenanceSummary, HyperionError> {
+        let _ = storage::config(&env)?;
+        if tokens.len() > MAX_MAINTENANCE_BATCH
+            || peer_chains.len() > MAX_MAINTENANCE_BATCH
+            || peer_domains.len() > MAX_MAINTENANCE_BATCH
+            || remote_tokens.len() > MAX_MAINTENANCE_BATCH
+            || inbound_messages.len() > MAX_MAINTENANCE_BATCH
+            || peer_chains
+                .len()
+                .saturating_add(tokens.len())
+                .saturating_add(remote_tokens.len())
+                .saturating_mul(2)
+                > MAX_MAINTENANCE_BATCH
+            || !peer_domains.is_empty()
+            || !inbound_messages.is_empty()
+        {
+            return Err(HyperionError::InvalidLimit);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(storage::BUMP_THRESHOLD, storage::BUMP_TO);
+
+        let mut peer_trust_touched = 0u32;
+        for chain in peer_chains.iter() {
+            peer_trust_touched += storage::touch_link(&env, &chain);
+        }
+
+        let mut token_mappings_touched = 0u32;
+        for token in tokens.iter() {
+            token_mappings_touched += storage::touch_token(&env, &token);
+        }
+        for token_id in remote_tokens.iter() {
+            token_mappings_touched += storage::touch_remote_token(&env, &token_id);
+        }
+
+        Ok(MaintenanceSummary {
+            instance_extended: true,
+            token_mappings_touched,
+            peer_trust_touched,
+            inbound_records_touched: 0,
+            total_keys_touched: peer_trust_touched + token_mappings_touched,
+        })
+    }
+
+    /// Explicit key coverage for Axelar adapter storage maintenance.
+    pub fn key_coverage(env: Env) -> Result<AdapterKeyCoverage, HyperionError> {
+        let cfg = storage::config(&env)?;
+        Ok(AdapterKeyCoverage {
+            route: cfg.route,
+            has_token_mappings: true,
+            has_peer_trust: true,
+            has_inbound_records: false,
+            token_mapping_keys: 2,
+            peer_trust_keys: 2,
+            inbound_record_keys: 0,
+        })
     }
 
     // ---------------------------------------------------------------------------------------
@@ -651,4 +735,37 @@ fn replay_key(env: &Env, source_chain: &String, message_id: &String) -> BytesN<3
     env.crypto()
         .keccak256(&(source_chain.clone(), message_id.clone()).to_xdr(env))
         .into()
+}
+
+fn validate_dispatch(
+    env: &Env,
+    caller: &Address,
+    token: &Address,
+    amount: i128,
+    chain: &String,
+    destination: &BytesN<32>,
+    gas_amount: Option<i128>,
+) -> Result<(Config, ChainLink, BytesN<32>, BytesN<20>), HyperionError> {
+    let cfg = storage::config(env)?;
+    if caller != &cfg.router {
+        return Err(HyperionError::Unauthorized);
+    }
+    if gas_amount.is_some() && cfg.route != RouteKind::AxelarIts {
+        return Err(HyperionError::UnsupportedRoute);
+    }
+    if amount <= 0 || gas_amount.is_some_and(|gas| gas <= 0) {
+        return Err(HyperionError::InvalidAmount);
+    }
+    let link = storage::link(env, chain).ok_or(HyperionError::UnknownChain)?;
+    let token_id = storage::token_id(env, token).ok_or(HyperionError::TokenNotMapped)?;
+    let recipient = bytes32_to_evm(env, destination)?;
+    // ITS debits both legs from the same balance when gas uses the bridged asset.
+    if let Some(gas) = gas_amount {
+        if InterchainTokenServiceClient::new(env, &cfg.its).native_token_address() == *token {
+            amount
+                .checked_add(gas)
+                .ok_or(HyperionError::DecimalOverflow)?;
+        }
+    }
+    Ok((cfg, link, token_id, recipient))
 }

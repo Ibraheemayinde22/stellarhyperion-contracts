@@ -9,9 +9,16 @@ import {
     NotRailReceiver,
     RecipientNotReady,
     ReplayedMessage,
+    Unauthorized,
     ZeroAddress
 } from "../../src/HyperionErrors.sol";
-import {Origin, PendingClaim, RouteKind} from "../../src/HyperionTypes.sol";
+import {
+    ClaimSettlementResult,
+    ClaimSettlementStatus,
+    Origin,
+    PendingClaim,
+    RouteKind
+} from "../../src/HyperionTypes.sol";
 import {IHyperionRouter} from "../../src/interfaces/IHyperionRouter.sol";
 import {Fixture} from "../Fixture.sol";
 import {FeeOnTransferToken} from "../mocks/HostileCallers.sol";
@@ -151,6 +158,55 @@ contract RouterInboundTest is Fixture {
         fot.mint(railReceiver, 1000e6);
         vm.prank(railReceiver);
         fot.approve(address(router), type(uint256).max);
+    }
+
+    function test_batch_inexact_payout_rolls_back_only_the_failed_item() public {
+        _assertIsolatedHostileBatch(false, false);
+    }
+
+    function test_batch_false_after_move_cannot_consume_a_claim_or_block_later_items() public {
+        _assertIsolatedHostileBatch(true, true);
+    }
+
+    function _assertIsolatedHostileBatch(bool falseAfterMove, bool hostileFirst) private {
+        uint256 aliceBefore = usdc.balanceOf(alice);
+        FeeOnTransferToken fot = _hostileInbound();
+        fot.setBlocked(bob, true);
+        usdc.setBlocked(alice, true);
+        vm.startPrank(railReceiver);
+        uint64 bad = router.bridgeIn(RouteKind.Cctp, address(fot), DELIVERY, bob, _origin(MESSAGE_ID));
+        uint64 good =
+            router.bridgeIn(RouteKind.Cctp, address(usdc), DELIVERY, alice, _origin(keccak256("healthy")));
+        vm.stopPrank();
+        fot.setBlocked(bob, false);
+        usdc.setBlocked(alice, false);
+        fot.configure(bob, falseAfterMove ? 0 : 500, false, falseAfterMove);
+        uint64[] memory ids = new uint64[](3);
+        ids[0] = hostileFirst ? bad : good;
+        ids[1] = hostileFirst ? good : bad;
+        ids[2] = good;
+        ClaimSettlementResult[] memory results = router.settleClaims(ids);
+        uint8 failedStatus = uint8(results[hostileFirst ? 0 : 1].status);
+        assertEq(failedStatus, uint8(ClaimSettlementStatus.InvalidTokenPayout));
+        assertEq(uint8(results[hostileFirst ? 1 : 0].status), uint8(ClaimSettlementStatus.Settled));
+        assertEq(uint8(results[2].status), uint8(ClaimSettlementStatus.AlreadySettled));
+        assertTrue(router.pendingClaim(good).settled);
+        assertFalse(router.pendingClaim(bad).settled);
+        assertEq(router.pendingClaim(bad).recipient, bob);
+        assertEq(router.pendingClaim(bad).amount, DELIVERY);
+        assertEq(fot.balanceOf(address(router)), DELIVERY);
+        assertEq(fot.balanceOf(bob), 0);
+        assertEq(usdc.balanceOf(alice), aliceBefore + DELIVERY);
+        assertEq(router.claimFailureReason(bad), 4);
+        fot.configure(bob, 0, false, false);
+        router.settleClaim(bad);
+        assertEq(fot.balanceOf(bob), DELIVERY);
+        assertEq(router.claimFailureReason(bad), 0);
+    }
+
+    function test_atomic_item_entrypoint_rejects_external_callers() public {
+        vm.expectRevert(Unauthorized.selector);
+        router.settleClaimItem(1, alice);
     }
 
     // -------------------------------------------------------------------------------------
@@ -356,6 +412,37 @@ contract RouterInboundTest is Fixture {
         // being burned by one early attempt.
         assertFalse(router.pendingClaim(claimId).settled);
         assertEq(usdc.balanceOf(address(router)), DELIVERY);
+    }
+
+    function test_batch_settlement_keeps_claims_independent_and_reports_each_outcome() public {
+        uint256 aliceBefore = usdc.balanceOf(alice);
+        usdc.setBlocked(bob, true);
+        usdc.setBlocked(alice, true);
+        vm.startPrank(railReceiver);
+        uint64 first = router.bridgeIn(RouteKind.Cctp, address(usdc), DELIVERY, bob, _origin(MESSAGE_ID));
+        uint64 second = router.bridgeIn(
+            RouteKind.Cctp, address(usdc), DELIVERY, alice, _origin(keccak256("batch second"))
+        );
+        vm.stopPrank();
+        usdc.setBlocked(alice, false);
+
+        uint64[] memory ids = new uint64[](4);
+        ids[0] = first;
+        ids[1] = second;
+        ids[2] = 99;
+        ids[3] = second;
+        ClaimSettlementResult[] memory results = router.settleClaims(ids);
+
+        assertEq(uint8(results[0].status), uint8(ClaimSettlementStatus.RecipientRestricted));
+        assertEq(uint8(results[1].status), uint8(ClaimSettlementStatus.Settled));
+        assertEq(uint8(results[2].status), uint8(ClaimSettlementStatus.NotFound));
+        assertEq(uint8(results[3].status), uint8(ClaimSettlementStatus.AlreadySettled));
+        assertFalse(router.pendingClaim(first).settled);
+        assertTrue(router.pendingClaim(second).settled);
+        assertEq(router.claimFailureReason(first), 1);
+        assertEq(router.claimFailureReason(second), 0);
+        assertEq(usdc.balanceOf(address(router)), DELIVERY);
+        assertEq(usdc.balanceOf(alice), aliceBefore + DELIVERY);
     }
 
     function test_claims_are_numbered_in_order() public {

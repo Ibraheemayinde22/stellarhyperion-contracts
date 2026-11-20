@@ -51,6 +51,10 @@ contract MockRailAdapter is IRailAdapter {
         return _supported[chain];
     }
 
+    function checkDispatch(address, uint256 amount, Destination calldata destination) external view override {
+        if (_supportsReverts || !_supported[destination.chain] || amount == 0) revert Rejected();
+    }
+
     function quoteFee(string calldata, uint256) external pure override returns (uint256) {
         return 0;
     }

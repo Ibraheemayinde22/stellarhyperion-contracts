@@ -149,6 +149,32 @@ contract AxelarItsAdapter is IRailAdapter, IInterchainTokenExecutable, Ownable2S
     }
 
     /// @inheritdoc IRailAdapter
+    function checkDispatch(address token, uint256 amount, Destination calldata destination)
+        external
+        view
+        override
+    {
+        _dispatchPlan(token, amount, destination);
+    }
+
+    function _dispatchPlan(address token, uint256 amount, Destination calldata destination)
+        private
+        view
+        returns (Peer memory peer, bytes32 tokenId, AddressKind kind)
+    {
+        if (amount == 0) revert InvalidAmount();
+
+        tokenId = tokenIdOf[token];
+        if (tokenId == bytes32(0)) revert TokenNotMapped();
+
+        peer = _peers[destination.chain];
+        if (!peer.configured) revert UnknownChain();
+        if (!peer.enabled) revert RailNotConfigured();
+
+        (kind,,) = StellarAddress.parse(destination.strkey);
+    }
+
+    /// @inheritdoc IRailAdapter
     function dispatch(address token, uint256 amount, Destination calldata destination, uint64 nonce)
         external
         payable
@@ -156,18 +182,8 @@ contract AxelarItsAdapter is IRailAdapter, IInterchainTokenExecutable, Ownable2S
         returns (bytes32)
     {
         if (msg.sender != ROUTER) revert Unauthorized();
-        if (amount == 0) revert InvalidAmount();
-
-        bytes32 tokenId = tokenIdOf[token];
-        if (tokenId == bytes32(0)) revert TokenNotMapped();
-
-        Peer memory peer = _peers[destination.chain];
-        if (!peer.configured) revert UnknownChain();
-        if (!peer.enabled) revert RailNotConfigured();
-
-        (AddressKind kind,,) = StellarAddress.parse(destination.strkey);
+        (Peer memory peer, bytes32 tokenId, AddressKind kind) = _dispatchPlan(token, amount, destination);
         bytes memory note = HyperionNotes.encodeInboundNote(kind, destination.strkey, nonce);
-
         emit TransferSubmitted(destination.chain, tokenId, amount, nonce, msg.value, note);
 
         IERC20(token).forceApprove(address(ITS), amount);

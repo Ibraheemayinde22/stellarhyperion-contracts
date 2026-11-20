@@ -1,17 +1,19 @@
 use hyperion_core::RouteKind;
-use soroban_sdk::{contractevent, Address, Env};
+use soroban_sdk::{contractevent, Address, BytesN, Env};
 
 use crate::types::{
-    AdminAction, Config, InboundRecord, PendingClaim, QueuedAction, TokenConfig, TransferRecord,
+    ActionAuditStatus, AdminAction, CancelReason, Config, InboundRecord, MigrationStatus,
+    PendingClaim, QueuedAction, TokenConfig, TransferRecord,
 };
 
-/// Every state change the router makes is announced here.
-///
-/// The indexer reads these to answer "where is my transfer", and the monitoring job watches the
-/// privileged ones so a parameter change outside a known maintenance window gets somebody's
-/// attention. Each event carries a `hyperion` topic first so a subscriber can filter server side
-/// instead of pulling the whole ledger and sorting it out afterwards, and each is part of the
-/// contract spec so the TypeScript side reads these as real types rather than loose maps.
+// Every state change the router makes is announced here.
+// Every state change the router makes is announced here.
+//
+// The indexer reads these to answer "where is my transfer", and the monitoring job watches the
+// privileged ones so a parameter change outside a known maintenance window gets somebody's
+// attention. Each event carries a `hyperion` topic first so a subscriber can filter server side
+// instead of pulling the whole ledger and sorting it out afterwards, and each is part of the
+// contract spec so the TypeScript side reads these as real types rather than loose maps.
 
 #[contractevent(topics = ["hyperion", "out"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,7 +35,7 @@ pub struct BridgeIn {
     pub inbound: InboundRecord,
 }
 
-/// An inbound delivery the recipient could not accept yet. Almost always a missing trustline.
+// An inbound delivery the recipient could not accept yet. Almost always a missing trustline.
 #[contractevent(topics = ["hyperion", "park"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimParked {
@@ -53,6 +55,33 @@ pub struct ClaimSettled {
     pub claim_id: u64,
     pub amount: i128,
     pub settled_by: Address,
+}
+
+// V1 reasons: 1 refused unchanged payout, 2 custody short, 3 token/accounting unavailable.
+#[contractevent(topics = ["hyperion", "claim_failure_v1"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimPayoutFailureV1 {
+    #[topic]
+    pub claim_id: u64,
+    pub reason: u32,
+    pub outstanding_amount: i128,
+    pub recipient: Address,
+}
+
+#[contractevent(topics = ["hyperion", "claim_archived"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimArchived {
+    #[topic]
+    pub recipient: Address,
+    #[topic]
+    pub token: Address,
+    pub claim_id: u64,
+    pub amount: i128,
+    pub source_nonce: u64,
+    pub claim: PendingClaim,
+    pub provenance: Option<crate::types::ClaimProvenance>,
+    pub settled_at: u64,
+    pub archived_at: u64,
 }
 
 #[contractevent(topics = ["hyperion", "pause"])]
@@ -88,6 +117,30 @@ pub struct ActionCancelled {
     pub id: u64,
 }
 
+// Stable action lifecycle audit event emitted on queue, execution, and cancellation (#44).
+#[contractevent(topics = ["hyperion", "audit"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionAuditRecorded {
+    #[topic]
+    pub id: u64,
+    pub version: u32,
+    pub status: ActionAuditStatus,
+    // Actor for this lifecycle transition; legacy queuing authors are never invented.
+    pub actor: Address,
+    pub reason: CancelReason,
+    pub note: soroban_sdk::String,
+}
+
+// Emitted when bounded storage migration advances or completes (#46).
+#[contractevent(topics = ["hyperion", "migrated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StorageMigrated {
+    pub version: u32,
+    #[topic]
+    pub by: Address,
+    pub status: MigrationStatus,
+}
+
 #[contractevent(topics = ["hyperion", "config"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfigChanged {
@@ -110,8 +163,9 @@ pub struct RouteConfigured {
     pub enabled: bool,
 }
 
-/// Emitted when a limit is tightened without waiting out the timelock, which is allowed
-/// precisely because it only ever narrows what the bridge will do.
+// Emitted when a limit is tightened without waiting out the timelock, which is allowed precisely because it only ever narrows what the bridge will do.
+// Emitted when a limit is tightened without waiting out the timelock, which is allowed
+// precisely because it only ever narrows what the bridge will do.
 #[contractevent(topics = ["hyperion", "flow"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowLimitLowered {
@@ -160,6 +214,31 @@ pub fn claim_settled(env: &Env, claim: &PendingClaim, settled_by: &Address) {
     .publish(env);
 }
 
+pub fn claim_payout_failure_v1(env: &Env, claim: &PendingClaim, reason: u32) {
+    ClaimPayoutFailureV1 {
+        claim_id: claim.id,
+        reason,
+        outstanding_amount: claim.amount,
+        recipient: claim.recipient.clone(),
+    }
+    .publish(env);
+}
+
+pub fn claim_archived(env: &Env, claim: &PendingClaim, settled_at: u64, archived_at: u64) {
+    ClaimArchived {
+        recipient: claim.recipient.clone(),
+        token: claim.token.clone(),
+        claim_id: claim.id,
+        amount: claim.amount,
+        source_nonce: claim.source_nonce,
+        claim: claim.clone(),
+        provenance: crate::storage::claim_provenance(env, claim.id),
+        settled_at,
+        archived_at,
+    }
+    .publish(env);
+}
+
 pub fn paused(env: &Env, by: &Address, state: bool) {
     PauseSet {
         by: by.clone(),
@@ -168,20 +247,20 @@ pub fn paused(env: &Env, by: &Address, state: bool) {
     .publish(env);
 }
 
-pub fn action_queued(env: &Env, action: &QueuedAction) {
+pub fn action_queued(env: &Env, action: QueuedAction) {
     ActionQueued {
         id: action.id,
-        action: action.action.clone(),
+        action: action.action,
         eta: action.eta,
         expires_at: action.expires_at,
     }
     .publish(env);
 }
 
-pub fn action_executed(env: &Env, action: &QueuedAction) {
+pub fn action_executed(env: &Env, action: QueuedAction) {
     ActionExecuted {
         id: action.id,
-        action: action.action.clone(),
+        action: action.action,
         queued_at: action.queued_at,
     }
     .publish(env);
@@ -189,6 +268,34 @@ pub fn action_executed(env: &Env, action: &QueuedAction) {
 
 pub fn action_cancelled(env: &Env, id: u64, by: &Address) {
     ActionCancelled { by: by.clone(), id }.publish(env);
+}
+
+pub fn action_audit(
+    env: &Env,
+    id: u64,
+    status: ActionAuditStatus,
+    actor: &Address,
+    reason: CancelReason,
+    note: soroban_sdk::String,
+) {
+    ActionAuditRecorded {
+        id,
+        version: 1,
+        status,
+        actor: actor.clone(),
+        reason,
+        note,
+    }
+    .publish(env);
+}
+
+pub fn storage_migrated(env: &Env, by: &Address, status: &MigrationStatus) {
+    StorageMigrated {
+        version: 1,
+        by: by.clone(),
+        status: status.clone(),
+    }
+    .publish(env);
 }
 
 pub fn config_changed(env: &Env, cfg: &Config) {
@@ -215,6 +322,30 @@ pub fn flow_limit_lowered(env: &Env, token: &Address, limit: i128, by: &Address)
         token: token.clone(),
         by: by.clone(),
         limit,
+    }
+    .publish(env);
+}
+
+// Durable journal identity for each successfully processed message; consumers archive all bytes.
+#[contractevent(topics = ["hyperion", "replay"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplayRecorded {
+    #[topic]
+    pub route: RouteKind,
+    #[topic]
+    pub message_id: BytesN<32>,
+    pub version: u32,
+    pub ledger: u32,
+    pub timestamp: u64,
+}
+
+pub fn replay_recorded(env: &Env, route: RouteKind, message_id: &BytesN<32>) {
+    ReplayRecorded {
+        route,
+        message_id: message_id.clone(),
+        version: 1,
+        ledger: env.ledger().sequence(),
+        timestamp: env.ledger().timestamp(),
     }
     .publish(env);
 }

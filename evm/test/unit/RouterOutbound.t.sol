@@ -2,12 +2,14 @@
 pragma solidity 0.8.28;
 
 import {
+    AdapterMethodUnavailable,
     AdapterNotSet,
     AmountNotRepresentable,
     FlowLimitExceeded,
     InvalidAmount,
     InvalidDestination,
     MuxedNotSupported,
+    ProviderBudgetExceeded,
     RefundFailed,
     RouteDisabled,
     RouteIsPaused,
@@ -19,6 +21,7 @@ import {
 import {HyperionRouter} from "../../src/HyperionRouter.sol";
 import {ActionKind, AdminAction, OutboundRequest, RouteKind, TokenConfig} from "../../src/HyperionTypes.sol";
 import {IHyperionRouter} from "../../src/interfaces/IHyperionRouter.sol";
+import {IRailAdapter} from "../../src/interfaces/IRailAdapter.sol";
 import {Fixture} from "../Fixture.sol";
 import {FeeOnTransferToken, ReenteringToken, RefundRefuser} from "../mocks/HostileCallers.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
@@ -33,6 +36,45 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 /// somebody for dust that never left the chain, which is a real bug that reads as a rounding
 /// detail in a diff.
 contract RouterOutboundTest is Fixture {
+    function test_bounded_provider_payment_refuses_before_any_fee_or_flow_movement() public {
+        OutboundRequest memory request = _itsRequest(1000e6);
+        uint256 balance = usdc.balanceOf(alice);
+        vm.deal(alice, 3);
+        vm.prank(alice);
+        vm.expectRevert(ProviderBudgetExceeded.selector);
+        router.bridgeOutBounded{value: 2}(request, 1);
+        assertEq(usdc.balanceOf(alice), balance);
+        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(router.outboundNonce(), 0);
+        assertEq(itsRail.callCount(), 0);
+        assertEq(alice.balance, 3);
+        assertEq(router.explainOutbound(request, 2, 1), ProviderBudgetExceeded.selector);
+        assertEq(router.explainOutbound(request, type(uint256).max, type(uint256).max), bytes4(0));
+        vm.prank(alice);
+        router.bridgeOutBounded{value: 1}(request, 1);
+        assertEq(itsRail.lastCall().value, 1);
+        assertEq(alice.balance, 2);
+        assertEq(router.outboundNonce(), 1);
+    }
+
+    function test_bounded_missing_adapter_method_is_reported_and_rolls_back_the_source() public {
+        OutboundRequest memory request = _itsRequest(1000e6);
+        vm.mockCallRevert(
+            address(itsRail), abi.encodeWithSelector(IRailAdapter.checkDispatch.selector), bytes("")
+        );
+        uint256 balance = usdc.balanceOf(alice);
+        assertEq(router.explainOutbound(request, 0, 0), AdapterMethodUnavailable.selector);
+        vm.prank(alice);
+        vm.expectRevert(AdapterMethodUnavailable.selector);
+        router.bridgeOutBounded(request, 0);
+        assertEq(usdc.balanceOf(alice), balance);
+        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(router.outboundNonce(), 0);
+        request.amount = 0;
+        assertEq(router.explainOutbound(request, 0, 0), InvalidAmount.selector);
+        assertEq(router.explainOutbound(request, 1, 0), ProviderBudgetExceeded.selector);
+    }
+
     function test_a_plain_transfer_charges_the_fee_and_sends_the_rest() public {
         uint256 amount = 1000e6;
         uint256 expectedFee = 1e6; // ten basis points

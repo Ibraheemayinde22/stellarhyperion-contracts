@@ -48,6 +48,25 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "actionCancelled",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "actionCount",
     "inputs": [],
     "outputs": [
@@ -204,12 +223,103 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "bridgeOutBounded",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "tuple",
+        "internalType": "struct OutboundRequest",
+        "components": [
+          {
+            "name": "token",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "route",
+            "type": "uint8",
+            "internalType": "enum RouteKind"
+          },
+          {
+            "name": "destination",
+            "type": "tuple",
+            "internalType": "struct Destination",
+            "components": [
+              {
+                "name": "chain",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "strkey",
+                "type": "string",
+                "internalType": "string"
+              }
+            ]
+          },
+          {
+            "name": "destinationDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "minDestinationAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "maxProviderBudget",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "nonce",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
     "name": "cancelAction",
     "inputs": [
       {
         "name": "id",
         "type": "uint64",
         "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "cancelActionWithReason",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "reason",
+        "type": "uint8",
+        "internalType": "enum CancelReason"
+      },
+      {
+        "name": "note",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "outputs": [],
@@ -246,6 +356,73 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "checkOutbound",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "tuple",
+        "internalType": "struct OutboundRequest",
+        "components": [
+          {
+            "name": "token",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "route",
+            "type": "uint8",
+            "internalType": "enum RouteKind"
+          },
+          {
+            "name": "destination",
+            "type": "tuple",
+            "internalType": "struct Destination",
+            "components": [
+              {
+                "name": "chain",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "strkey",
+                "type": "string",
+                "internalType": "string"
+              }
+            ]
+          },
+          {
+            "name": "destinationDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "minDestinationAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "providerPayment",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxProviderBudget",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "claimCount",
     "inputs": [],
     "outputs": [
@@ -253,6 +430,25 @@ export const hyperionRouterAbi = [
         "name": "",
         "type": "uint64",
         "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "claimFailureReason",
+    "inputs": [
+      {
+        "name": "claimId",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "reason",
+        "type": "uint8",
+        "internalType": "uint8"
       }
     ],
     "stateMutability": "view"
@@ -282,6 +478,79 @@ export const hyperionRouterAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "explainOutbound",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "tuple",
+        "internalType": "struct OutboundRequest",
+        "components": [
+          {
+            "name": "token",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "route",
+            "type": "uint8",
+            "internalType": "enum RouteKind"
+          },
+          {
+            "name": "destination",
+            "type": "tuple",
+            "internalType": "struct Destination",
+            "components": [
+              {
+                "name": "chain",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "strkey",
+                "type": "string",
+                "internalType": "string"
+              }
+            ]
+          },
+          {
+            "name": "destinationDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "minDestinationAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "providerPayment",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxProviderBudget",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "blocker",
+        "type": "bytes4",
+        "internalType": "bytes4"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -440,6 +709,19 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_CLAIMS_PER_BATCH",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_FLOW_WINDOW",
     "inputs": [],
     "outputs": [
@@ -447,6 +729,19 @@ export const hyperionRouterAbi = [
         "name": "",
         "type": "uint64",
         "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_REASON_LEN",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -948,6 +1243,146 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "quoteV2",
+    "inputs": [
+      {
+        "name": "route",
+        "type": "uint8",
+        "internalType": "enum RouteKind"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "destination",
+        "type": "tuple",
+        "internalType": "struct Destination",
+        "components": [
+          {
+            "name": "chain",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "strkey",
+            "type": "string",
+            "internalType": "string"
+          }
+        ]
+      },
+      {
+        "name": "destinationDecimals",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "v",
+        "type": "tuple",
+        "internalType": "struct RouteQuoteV2",
+        "components": [
+          {
+            "name": "quote",
+            "type": "tuple",
+            "internalType": "struct RouteQuote",
+            "components": [
+              {
+                "name": "route",
+                "type": "uint8",
+                "internalType": "enum RouteKind"
+              },
+              {
+                "name": "available",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "reason",
+                "type": "uint8",
+                "internalType": "enum QuoteBlocker"
+              },
+              {
+                "name": "grossAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "fee",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "netAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "destinationAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "flowAvailable",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "waitsOnAttestation",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "isCanonical",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          },
+          {
+            "name": "requestedAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "fee",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "netAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "retainedDust",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "actualDebit",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "breakdownKnown",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "railReceiver",
     "inputs": [
       {
@@ -1050,6 +1485,55 @@ export const hyperionRouterAbi = [
       }
     ],
     "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "settleClaimItem",
+    "inputs": [
+      {
+        "name": "claimId",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "settler",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "settleClaims",
+    "inputs": [
+      {
+        "name": "claimIds",
+        "type": "uint64[]",
+        "internalType": "uint64[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "results",
+        "type": "tuple[]",
+        "internalType": "struct ClaimSettlementResult[]",
+        "components": [
+          {
+            "name": "id",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum ClaimSettlementStatus"
+          }
+        ]
+      }
+    ],
     "stateMutability": "nonpayable"
   },
   {
@@ -1157,6 +1641,49 @@ export const hyperionRouterAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "ActionAuditUpdated",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "id",
+        "type": "uint64",
+        "indexed": true,
+        "internalType": "uint64"
+      },
+      {
+        "name": "status",
+        "type": "uint8",
+        "indexed": true,
+        "internalType": "enum ActionAuditStatus"
+      },
+      {
+        "name": "actor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "cancelReason",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum CancelReason"
+      },
+      {
+        "name": "reasonNote",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
   },
   {
     "type": "event",
@@ -1407,6 +1934,37 @@ export const hyperionRouterAbi = [
         "type": "uint64",
         "indexed": false,
         "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ClaimPayoutFailureV1",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint64",
+        "indexed": true,
+        "internalType": "uint64"
+      },
+      {
+        "name": "reason",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      },
+      {
+        "name": "outstandingAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "recipient",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -1750,6 +2308,11 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "error",
+    "name": "AdapterMethodUnavailable",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "AdapterNotSet",
     "inputs": []
   },
@@ -1842,6 +2405,16 @@ export const hyperionRouterAbi = [
   {
     "type": "error",
     "name": "NotRailReceiver",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProviderBudgetExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RailNotConfigured",
     "inputs": []
   },
   {
@@ -1947,6 +2520,11 @@ export const hyperionRouterAbi = [
   {
     "type": "error",
     "name": "TokenDisabled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TokenNotMapped",
     "inputs": []
   },
   {

@@ -1,21 +1,32 @@
 use soroban_sdk::{contractclient, Address, BytesN, Env, String};
 
 /// What the router expects from every rail adapter.
-///
-/// The router hands an adapter the net amount and the destination, and the adapter's job is to
-/// speak whichever dialect its rail speaks. That is the whole seam: the router knows about fees,
-/// limits and bookkeeping, the adapter knows about Circle's burn call or Axelar's gateway, and
-/// neither knows about the other's problems. Retiring a rail means pointing one storage slot
-/// somewhere else.
-///
-/// Router accounting guarantees exact integer transfers: tokens admitted to the router must
-/// deliver exact amounts without fee-on-transfer deduction or balance mutation. The amount
-/// received in this adapter's balance is guaranteed to equal `amount` exactly.
+// What the router expects from every rail adapter.
+//
+// The router hands an adapter the net amount and the destination, and the adapter's job is to
+// speak whichever dialect its rail speaks. That is the whole seam: the router knows about fees,
+// limits and bookkeeping, the adapter knows about Circle's burn call or Axelar's gateway, and
+// neither knows about the other's problems. Retiring a rail means pointing one storage slot
+// somewhere else.
+//
+// Router accounting guarantees exact integer transfers: tokens admitted to the router must
+// deliver exact amounts without fee-on-transfer deduction or balance mutation. The amount
+// received in this adapter's balance is guaranteed to equal `amount` exactly.
 #[contractclient(name = "RailAdapterClient")]
 pub trait RailAdapter {
+    fn check_dispatch(
+        env: Env,
+        caller: Address,
+        token: Address,
+        amount: i128,
+        destination_chain: String,
+        destination: BytesN<32>,
+        gas_amount: Option<i128>,
+    );
     /// Push `amount` of `token`, already sitting in this adapter's balance, onto the rail.
-    ///
-    /// `caller` is the router, and the adapter is expected to refuse anyone else.
+    // Push `amount` of `token`, already sitting in this adapter's balance, onto the rail.
+    //
+    // `caller` is the router, and the adapter is expected to refuse anyone else.
     fn dispatch(
         env: Env,
         caller: Address,
@@ -27,6 +38,11 @@ pub trait RailAdapter {
     );
 }
 
+/// Paid rail adapter interface for routes that collect destination relay gas upfront.
+///
+/// Router quotes report `actual_debit` for the bridge transfer itself (`fee + net_amount`).
+/// When `bridge_out_with_gas` is used and `gas_token() == token`, the atomic source transaction
+/// debits `actual_debit + gas_amount` from `sender`.
 #[soroban_sdk::contractclient(name = "PaidRailAdapterClient")]
 pub trait PaidRailAdapter {
     fn gas_token(env: Env) -> Address;

@@ -130,6 +130,15 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/stellar" --version
 
+      - name: Set up Node for read-only maintenance tool regressions
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Test read-only RPC inspection, discovery and replay journal
+        working-directory: .
+        run: node --test script/stellar/test/*.test.mjs
+
       - name: Build the contracts and hold them to the 64KB ledger limit
         # This runs the repository's own script rather than reimplementing it. The 64KB ceiling and
         # the two thirds warning line live in script/stellar/build.sh, so a contributor running it
@@ -138,6 +147,11 @@ jobs:
         # quietly.
         working-directory: .
         run: script/stellar/build.sh
+
+      - name: Measure actual WASM replay upkeep resources and TTL
+        env:
+          HYPERION_MEASURE_ROUTER_WASM: ${{ github.workspace }}/soroban/target/wasm32v1-none/release/hyperion_router.wasm
+        run: cargo test --locked -p hyperion-router discovery::measure_bounded_replay_upkeep_resources_and_exact_ttl -- --nocapture
 
       - name: Report the wasm sizes
         # Runs even when the build step failed, because the first question after an over limit

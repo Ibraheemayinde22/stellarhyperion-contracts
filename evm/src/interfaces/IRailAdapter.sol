@@ -36,6 +36,12 @@ interface IRailAdapter {
     /// @notice Which rail this adapter speaks for.
     function route() external view returns (RouteKind);
 
+    /// @notice Validate local dispatch without approval, payment or provider invocation.
+    /// @param token The token to dispatch.
+    /// @param amount The representable net amount.
+    /// @param destination The destination chain and Stellar address.
+    function checkDispatch(address token, uint256 amount, Destination calldata destination) external view;
+
     /// @notice Whether this adapter can deliver to a chain by that name.
     /// @dev Asked before a quote is shown, so somebody finds out a route is unavailable while
     /// they are still reading rather than after they have signed.

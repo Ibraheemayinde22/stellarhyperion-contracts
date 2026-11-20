@@ -102,47 +102,122 @@ fn strangers_and_restricted_destination_callers_cannot_request_forwarding() {
 
 #[test]
 fn a_wallet_signature_authorizes_the_exact_fee_and_burn_without_a_contract_signature() {
-    let w = World::new();
-    let req = request(&w);
-    let fee = HUNDRED - net_of(HUNDRED);
-    w.env.mock_auths(&[MockAuth {
-        address: &w.user,
-        invoke: &MockAuthInvoke {
-            contract: &w.router_id,
-            fn_name: "bridge_out_with_gas",
-            args: (w.user.clone(), req.clone(), 1_000_000i128).into_val(&w.env),
-            sub_invokes: &[
-                MockAuthInvoke {
-                    contract: &w.token_id,
-                    fn_name: "transfer",
-                    args: (w.user.clone(), w.treasury.clone(), fee).into_val(&w.env),
-                    sub_invokes: &[],
+    for bounded in [false, true] {
+        let w = World::new();
+        let req = request(&w);
+        let fee = HUNDRED - net_of(HUNDRED);
+        w.env.mock_auths(&[MockAuth {
+            address: &w.user,
+            invoke: &MockAuthInvoke {
+                contract: &w.router_id,
+                fn_name: if bounded {
+                    "bridge_out_bounded"
+                } else {
+                    "bridge_out_with_gas"
                 },
-                MockAuthInvoke {
-                    contract: &w.adapter_id,
-                    fn_name: "dispatch_from",
-                    args: (
-                        w.router_id.clone(),
-                        w.user.clone(),
-                        w.token_id.clone(),
-                        net_of(HUNDRED),
-                        w.ethereum(),
-                        req.destination.address.clone(),
-                        1u64,
-                        1_000_000i128,
-                    )
-                        .into_val(&w.env),
-                    sub_invokes: &[MockAuthInvoke {
+                args: if bounded {
+                    (w.user.clone(), req.clone(), 1_000_000i128, 1_000_000i128).into_val(&w.env)
+                } else {
+                    (w.user.clone(), req.clone(), 1_000_000i128).into_val(&w.env)
+                },
+                sub_invokes: &[
+                    MockAuthInvoke {
                         contract: &w.token_id,
                         fn_name: "transfer",
-                        args: (w.user.clone(), w.adapter_id.clone(), net_of(HUNDRED))
-                            .into_val(&w.env),
+                        args: (w.user.clone(), w.treasury.clone(), fee).into_val(&w.env),
                         sub_invokes: &[],
-                    }],
-                },
-            ],
-        },
-    }]);
-    w.router().bridge_out_with_gas(&w.user, &req, &1_000_000);
-    assert_eq!(w.messenger().burn_count(), 1);
+                    },
+                    MockAuthInvoke {
+                        contract: &w.adapter_id,
+                        fn_name: "dispatch_from",
+                        args: (
+                            w.router_id.clone(),
+                            w.user.clone(),
+                            w.token_id.clone(),
+                            net_of(HUNDRED),
+                            w.ethereum(),
+                            req.destination.address.clone(),
+                            1u64,
+                            1_000_000i128,
+                        )
+                            .into_val(&w.env),
+                        sub_invokes: &[MockAuthInvoke {
+                            contract: &w.token_id,
+                            fn_name: "transfer",
+                            args: (w.user.clone(), w.adapter_id.clone(), net_of(HUNDRED))
+                                .into_val(&w.env),
+                            sub_invokes: &[],
+                        }],
+                    },
+                ],
+            },
+        }]);
+        if bounded {
+            w.router()
+                .bridge_out_bounded(&w.user, &req, &1_000_000, &1_000_000);
+        } else {
+            w.router().bridge_out_with_gas(&w.user, &req, &1_000_000);
+        }
+        assert_eq!(w.messenger().burn_count(), 1);
+    }
+}
+
+#[test]
+fn explicit_cctp_cap_is_burned_token_units_and_has_an_exact_boundary() {
+    let w = World::new();
+    let req = request(&w);
+    let before = w.token().balance(&w.user);
+    assert_eq!(
+        w.router()
+            .explain_outbound(&req, &Some(1_000_000), &999_999),
+        HyperionError::ProviderBudgetExceeded as u32
+    );
+    assert_eq!(
+        w.router()
+            .try_bridge_out_bounded(&w.user, &req, &1_000_000, &999_999),
+        Err(Ok(HyperionError::ProviderBudgetExceeded))
+    );
+    assert_eq!(w.token().balance(&w.user), before);
+    assert_eq!(w.token().balance(&w.treasury), 0);
+    assert_eq!(w.messenger().burn_count(), 0);
+    assert_eq!(w.router().last_out_nonce(), 0);
+    assert_eq!(
+        w.router()
+            .explain_outbound(&req, &Some(1_000_000), &1_000_000),
+        0
+    );
+    w.router()
+        .bridge_out_bounded(&w.user, &req, &1_000_000, &1_000_000);
+    assert_eq!(w.token().balance(&w.user), before - HUNDRED);
+    assert_eq!(w.messenger().last_burn().max_fee, 1_000_000);
+    assert_eq!(w.messenger().last_burn().amount, net_of(HUNDRED));
+}
+
+#[test]
+fn cctp_explanation_rejects_restricted_forwarding_and_unrepresentable_receive() {
+    let w = World::new();
+    let req = request(&w);
+    w.adapter()
+        .link_domain(&w.ethereum(), &0, &BytesN::from_array(&w.env, &[1; 32]));
+    assert_eq!(
+        w.router()
+            .explain_outbound(&req, &Some(1_000_000), &1_000_000),
+        HyperionError::InvalidDestination as u32
+    );
+    assert_eq!(
+        w.router()
+            .try_bridge_out_bounded(&w.user, &req, &1_000_000, &1_000_000),
+        Err(Ok(HyperionError::InvalidDestination))
+    );
+    // Amount validation precedes the restricted-forwarding check, just as real dispatch does.
+    assert_eq!(
+        w.router().explain_outbound(&req, &Some(1), &1),
+        HyperionError::AmountNotRepresentable as u32
+    );
+    assert_eq!(
+        w.router().try_bridge_out_bounded(&w.user, &req, &1, &1),
+        Err(Ok(HyperionError::AmountNotRepresentable))
+    );
+    assert_eq!(w.messenger().burn_count(), 0);
+    assert_eq!(w.token().balance(&w.treasury), 0);
 }

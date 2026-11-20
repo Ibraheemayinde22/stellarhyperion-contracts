@@ -1,23 +1,23 @@
 use soroban_sdk::contracttype;
 
-/// The interoperability rails Hyperion routes over.
-///
-/// Hyperion deliberately owns none of these. Each variant names a rail that is already
-/// live on Stellar mainnet, already audited by someone else, and already carrying real
-/// volume. Adding a variant means adding an adapter, never a new trust mechanism.
+// The interoperability rails Hyperion routes over.
+//
+// Hyperion deliberately owns none of these. Each variant names a rail that is already
+// live on Stellar mainnet, already audited by someone else, and already carrying real
+// volume. Adding a variant means adding an adapter, never a new trust mechanism.
 #[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum RouteKind {
-    /// Circle CCTP V2. Native USDC burn and mint, zero slippage, no wrapped asset.
-    /// Stellar is domain 27.
+    // Circle CCTP V2. Native USDC burn and mint, zero slippage, no wrapped asset.
+    // Stellar is domain 27.
     Cctp = 0,
-    /// Axelar Interchain Token Service. Canonical token registration with built-in
-    /// flow limits.
+    // Axelar Interchain Token Service. Canonical token registration with built-in
+    // flow limits.
     AxelarIts = 1,
-    /// Axelar General Message Passing. Arbitrary cross-chain instructions.
+    // Axelar General Message Passing. Arbitrary cross-chain instructions.
     AxelarGmp = 2,
-    /// Allbridge Core. Pooled liquidity, no attestation wait, pays for it in slippage.
+    // Allbridge Core. Pooled liquidity, no attestation wait, pays for it in slippage.
     Allbridge = 3,
 }
 

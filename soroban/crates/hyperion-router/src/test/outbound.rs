@@ -951,3 +951,42 @@ fn per_destination_flow_policy_respects_global_bounds_and_quotes_agree() {
         dest_limit / 2
     );
 }
+
+#[test]
+fn missing_and_host_failing_adapter_checks_are_unavailable_without_fabricated_quotes() {
+    let w = World::new();
+    let req = OutboundRequest {
+        token: w.token_id.clone(),
+        amount: HUNDRED,
+        route: RouteKind::AxelarIts,
+        destination: dest(&w),
+        destination_decimals: EVM_DECIMALS,
+        min_destination_amount: 0,
+    };
+    for adapter in [
+        w.rail_id.clone(),
+        w.env.register(super::doubles::HostFailureAdapter, ()),
+    ] {
+        w.run_action(AdminAction::SetAdapter(RouteKind::AxelarIts, adapter));
+        assert_eq!(
+            w.router().explain_outbound(&req, &Some(1000), &1000),
+            HyperionError::AdapterMethodUnavailable as u32
+        );
+        assert_eq!(
+            w.router()
+                .try_bridge_out_bounded(&w.user, &req, &1000, &1000),
+            Err(Ok(HyperionError::AdapterMethodUnavailable))
+        );
+        assert_eq!(w.token().balance(&w.treasury), 0);
+        assert_eq!(w.router().last_out_nonce(), 0);
+    }
+    w.router().pause(&w.admin);
+    assert_eq!(
+        w.router().explain_outbound(&req, &Some(1000), &999),
+        HyperionError::ProviderBudgetExceeded as u32
+    );
+    assert_eq!(
+        w.router().explain_outbound(&req, &Some(1000), &1000),
+        HyperionError::Paused as u32
+    );
+}

@@ -108,6 +108,31 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
     }
 
     /// @inheritdoc IRailAdapter
+    function checkDispatch(address token, uint256 amount, Destination calldata destination)
+        external
+        view
+        override
+    {
+        _dispatchPlan(token, amount, destination);
+    }
+
+    function _dispatchPlan(address token, uint256 amount, Destination calldata destination)
+        private
+        view
+        returns (Lane memory lane, bytes memory hookData)
+    {
+        if (token != USDC) revert TokenNotMapped();
+        if (amount == 0) revert InvalidAmount();
+
+        lane = _lanes[destination.chain];
+        if (!lane.configured) revert UnknownChain();
+        if (!lane.enabled) revert RailNotConfigured();
+
+        (AddressKind kind, bytes32 key, uint64 muxedId) = StellarAddress.parse(destination.strkey);
+        hookData = HyperionNotes.encodeCctpHook(kind, key, muxedId);
+    }
+
+    /// @inheritdoc IRailAdapter
     function dispatch(address token, uint256 amount, Destination calldata destination, uint64 nonce)
         external
         payable
@@ -115,16 +140,7 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         returns (bytes32)
     {
         if (msg.sender != ROUTER) revert Unauthorized();
-        if (token != USDC) revert TokenNotMapped();
-        if (amount == 0) revert InvalidAmount();
-
-        Lane memory lane = _lanes[destination.chain];
-        if (!lane.configured) revert UnknownChain();
-        if (!lane.enabled) revert RailNotConfigured();
-
-        (AddressKind kind, bytes32 key, uint64 muxedId) = StellarAddress.parse(destination.strkey);
-        bytes memory hookData = HyperionNotes.encodeCctpHook(kind, key, muxedId);
-
+        (Lane memory lane, bytes memory hookData) = _dispatchPlan(token, amount, destination);
         emit BurnSubmitted(destination.chain, lane.domain, amount, lane.mintRecipient, nonce, hookData);
 
         IERC20(USDC).forceApprove(address(TOKEN_MESSENGER), amount);

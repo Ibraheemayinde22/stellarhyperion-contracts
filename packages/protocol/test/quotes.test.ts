@@ -7,6 +7,7 @@ import {
   describeBlocker,
   minimumFromTolerance,
   planQuote,
+  planQuoteV2,
   planQuotes,
   quoteBatch,
   quoteRoute,
@@ -421,5 +422,27 @@ describe("batch quote simulation with gas projections (quoteBatch)", () => {
   it("exports convenience aliases quoteRoute and quoteAllRails", () => {
     expect(quoteRoute).toBe(planQuote);
     expect(quoteAllRails).toBe(planQuotes);
+  });
+});
+
+describe("additive V2 source debit schema", () => {
+  it("preserves the legacy result and conserves seven-to-six dust including near-zero refusals", () => {
+    for (const amount of [1n, 9n, 10n, 10_000_005n]) {
+      const r = { ...request, route: RouteKind.Cctp, amount, destinationDecimals: 6 };
+      const state = snapshot({ tokenDecimals: 7, feeBps: 10 });
+      const v = planQuoteV2(r, state);
+      expect(v.quote).toEqual(planQuote(r, state));
+      expect(v.breakdownKnown).toBe(true);
+      expect(v.actualDebit + v.retainedDust).toBe(amount);
+      expect(v.fee + v.netAmount).toBe(v.actualDebit);
+    }
+  });
+  it("keeps no-debit refusals explicit and rejects unknown or oversized arithmetic", () => {
+    const r = { ...request, route: RouteKind.Cctp };
+    expect(planQuoteV2(r, snapshot({ paused: true })).quote.available).toBe(false);
+    expect(planQuoteV2(r, snapshot({ tokenRegistered: false })).breakdownKnown).toBe(false);
+    expect(planQuoteV2({ ...r, amount: MAX_QUOTE_AMOUNT + 1n }, snapshot()).breakdownKnown).toBe(
+      false,
+    );
   });
 });

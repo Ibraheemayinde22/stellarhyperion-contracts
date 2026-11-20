@@ -76,6 +76,17 @@ pub fn effective_consumed(
     window_ledgers: u32,
 ) -> Result<i128, HyperionError> {
     let rolled = roll_forward(window, ledger, window_ledgers)?;
+    effective_consumed_rolled(&rolled, ledger, window_ledgers)
+}
+
+// Reuse the already advanced window in consume instead of advancing it a second time.
+// Both callers first validate the positive window size through roll_forward.
+#[inline(never)]
+fn effective_consumed_rolled(
+    rolled: &FlowWindow,
+    ledger: u32,
+    window_ledgers: u32,
+) -> Result<i128, HyperionError> {
     let elapsed = (ledger % window_ledgers) as i128;
     let span = window_ledgers as i128;
     let remaining = span - elapsed;
@@ -121,7 +132,7 @@ pub fn consume(
         return Err(HyperionError::InvalidLimit);
     }
     let mut rolled = roll_forward(window, ledger, window_ledgers)?;
-    let used = effective_consumed(window, ledger, window_ledgers)?;
+    let used = effective_consumed_rolled(&rolled, ledger, window_ledgers)?;
     let would_be = used
         .checked_add(amount)
         .ok_or(HyperionError::DecimalOverflow)?;

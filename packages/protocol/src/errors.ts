@@ -67,6 +67,8 @@ export const SOROBAN_ERROR_NAMES = [
   "GasFloatTooLow",
   "ProtectedAsset",
   "ExceedsRouteLimit",
+  "ProviderBudgetExceeded",
+  "AdapterMethodUnavailable",
   "FingerprintMismatch",
   "RequestExpired",
   "BatchLimitExceeded",
@@ -126,6 +128,8 @@ export const EVM_ERROR_NAMES = [
   "ProtectedAsset",
   "ZeroAddress",
   "RefundFailed",
+  "ProviderBudgetExceeded",
+  "AdapterMethodUnavailable",
   "FingerprintMismatch",
   "RequestExpired",
   "BatchLimitExceeded",
@@ -440,6 +444,17 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
     summary:
       "Change was owed and the sender would not accept it. A contract that rejects a plain transfer cannot send through Hyperion.",
     fault: "input",
+    retryable: false,
+  },
+  ProviderBudgetExceeded: {
+    summary: "The provider payment exceeds the maximum you authorized for this rail.",
+    fault: "input",
+    retryable: false,
+  },
+  AdapterMethodUnavailable: {
+    summary:
+      "This adapter cannot validate the requested dispatch locally. Update the adapter or use a supported deployment.",
+    fault: "config",
     retryable: false,
   },
   ExceedsRouteLimit: {

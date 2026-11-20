@@ -2,8 +2,11 @@
 pragma solidity 0.8.28;
 
 import {
+    ActionAuditStatus,
     ActionKind,
     AdminAction,
+    CancelReason,
+    ClaimSettlementResult,
     Destination,
     Origin,
     OutboundRequest,
@@ -11,6 +14,7 @@ import {
     QueuedAction,
     RouteKind,
     RouteQuote,
+    RouteQuoteV2,
     TokenConfig
 } from "../HyperionTypes.sol";
 
@@ -104,6 +108,15 @@ interface IHyperionRouter {
         uint64 indexed id, address indexed recipient, address token, uint256 amount, address settledBy
     );
 
+    /// @notice Version 1 diagnostic for a claim payout that remains outstanding.
+    /// @dev The claim amount and fixed recipient remain in `pendingClaim`; this event adds only
+    /// the bounded reason so existing claim/indexing records remain valid.
+    /// @param id The parked claim ID.
+    /// @param reason Version 1 refusal, shortage, unreadable-token or inexact-payout code.
+    /// @param outstandingAmount The full amount still owed to the recorded recipient.
+    /// @param recipient The recorded payout recipient.
+    event ClaimPayoutFailureV1(uint64 indexed id, uint8 reason, uint256 outstandingAmount, address recipient);
+
     /// @notice A privileged change was proposed, and the clock started.
     /// @param id The action's id.
     /// @param kind What sort of change it is.
@@ -120,6 +133,22 @@ interface IHyperionRouter {
     /// @param id The action that was dropped.
     /// @param by Who dropped it.
     event ActionCancelled(uint64 indexed id, address indexed by);
+
+    /// @notice Emitted on queue, execute, and cancel with bounded audit metadata.
+    /// @param version Audit encoding version, currently one.
+    /// @param id The original action identifier.
+    /// @param status The lifecycle transition.
+    /// @param actor The caller responsible for this transition.
+    /// @param cancelReason Structured cancellation reason, or Unspecified.
+    /// @param reasonNote At most 128 printable ASCII bytes.
+    event ActionAuditUpdated(
+        uint32 version,
+        uint64 indexed id,
+        ActionAuditStatus indexed status,
+        address indexed actor,
+        CancelReason cancelReason,
+        string reasonNote
+    );
 
     /// @notice A token's flow limit was tightened without waiting.
     /// @dev Allowed to skip the timelock precisely because it only ever narrows what the bridge
@@ -210,6 +239,33 @@ interface IHyperionRouter {
     /// @param claimId The claim to clear.
     function settleClaim(uint64 claimId) external;
 
+    /// @notice Attempt a bounded set of claims independently, returning one outcome per input.
+    /// @param claimIds At most 50 stored claim IDs, including duplicates if desired.
+    /// @return results Confirmed outcome for each input ID, in input order.
+    function settleClaims(uint64[] calldata claimIds)
+        external
+        returns (ClaimSettlementResult[] memory results);
+
+    /// @notice Dispatch with a native provider cap while preserving legacy request fields.
+    /// @param request The legacy outbound request.
+    /// @param maxProviderBudget Maximum msg.value passed to the provider, in native-currency wei.
+    /// @return nonce The outbound nonce.
+    function bridgeOutBounded(OutboundRequest calldata request, uint256 maxProviderBudget)
+        external
+        payable
+        returns (uint64 nonce);
+
+    /// @notice Return zero for passing local bounded checks, otherwise the earliest error selector.
+    /// @param request The legacy outbound request.
+    /// @param providerPayment Prospective native payment in wei.
+    /// @param maxProviderBudget Maximum native payment in wei.
+    /// @return blocker Zero or the earliest error selector; provider execution still needs simulation.
+    function explainOutbound(
+        OutboundRequest calldata request,
+        uint256 providerPayment,
+        uint256 maxProviderBudget
+    ) external view returns (bytes4 blocker);
+
     /// @notice What a transfer would cost and whether it would go through, without sending it.
     /// @dev Never reverts for a blocked route. It returns a reason instead, because the app has
     /// to explain the blockage to somebody, and a bare revert gives it nothing to say.
@@ -254,6 +310,12 @@ interface IHyperionRouter {
     /// @param id The action to drop.
     function cancelAction(uint64 id) external;
 
+    /// @notice Drop a proposed change with a structured reason code and bounded audit note.
+    /// @param id The action to drop.
+    /// @param reason Structured cancellation reason.
+    /// @param note Bounded human-readable audit note (max 128 bytes).
+    function cancelActionWithReason(uint64 id, CancelReason reason, string calldata note) external;
+
     /// @notice Tighten a token's flow limit immediately.
     /// @param token The token to tighten.
     /// @param limit The new ceiling, which has to be below the one in force.
@@ -271,6 +333,10 @@ interface IHyperionRouter {
     /// @param id The action to read.
     /// @return The action, its timestamps, and whether it has already been executed.
     function queuedAction(uint64 id) external view returns (QueuedAction memory);
+
+    /// @notice Whether the action was cancelled; its original payload remains queryable.
+    /// @param id The action to read.
+    function actionCancelled(uint64 id) external view returns (bool);
 
     /// @notice Read a parked claim.
     /// @param id The claim to read.
@@ -297,4 +363,18 @@ interface IHyperionRouter {
     /// @param route The rail to check.
     /// @return True if the rail is paused.
     function routePaused(RouteKind route) external view returns (bool);
+    /// @notice Versioned debit breakdown preserving the legacy quote tuple.
+    /// @param route The rail being priced.
+    /// @param token The registered source asset.
+    /// @param amount Requested source units before fees and flooring.
+    /// @param destination Recipient and destination chain.
+    /// @param destinationDecimals Decimal precision of the destination asset.
+    /// @return The legacy quote with an explicit prospective debit breakdown.
+    function quoteV2(
+        RouteKind route,
+        address token,
+        uint256 amount,
+        Destination calldata destination,
+        uint8 destinationDecimals
+    ) external view returns (RouteQuoteV2 memory);
 }
