@@ -98,9 +98,22 @@ contract Verify is DeployConfig {
                 : "  WARN admin role not yet handed over"
         );
         if (!adminHolds) {
+            problems += 1;
             console.log("       recorded admin    ", recordedAdmin);
             console.log("       deployer          ", record.readAddress(".deployer"));
-            console.log("       run Execute.s.sol if the handover action is still queued");
+            console.log("       authority policy is not satisfied");
+        }
+
+        // Treasury is intentionally checked independently above: a multisig may govern while a
+        // separate operations wallet receives fees. Guardian zero is an explicit policy choice,
+        // not a missing value, so the ready report checks the role only when one was recorded.
+        address recordedGuardian = record.readAddress(".guardian");
+        bool guardianHolds = recordedGuardian != address(0)
+            && router.hasRole(router.GUARDIAN_ROLE(), recordedGuardian);
+        if (recordedGuardian == address(0)) {
+            _expectFalse("guardian role disabled", guardianHolds);
+        } else {
+            _expectTrue("guardian role", guardianHolds);
         }
 
         console.log("");
