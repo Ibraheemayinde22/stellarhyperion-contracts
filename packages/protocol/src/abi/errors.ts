@@ -79,6 +79,9 @@ export const GENERATED_EVM_ERROR_NAMES = [
   "TopUpBindingMismatch",
   "FeeTokenNotSupported",
   "InvalidRelayerFee",
+  "TokenRecoveryForbidden",
+  "RecoveryExceedsSurplus",
+  "ClaimLiabilityInsufficient",
 ] as const;
 
 /** Four byte selector to error, for every error the compiled contracts can actually revert with. */
@@ -115,6 +118,7 @@ export const EVM_ERROR_SELECTORS = {
   "0x6f4636ea": { name: "AdapterCodeMissing", signature: "AdapterCodeMissing()" },
   "0x71c4efed": { name: "SlippageExceeded", signature: "SlippageExceeded(uint256,uint256)" },
   "0x72942d97": { name: "TimelockNotReady", signature: "TimelockNotReady(uint64)" },
+  "0x73c48d61": { name: "RecoveryExceedsSurplus", signature: "RecoveryExceedsSurplus()" },
   "0x768fade0": { name: "TimelockExpired", signature: "TimelockExpired(uint64)" },
   "0x78c488a4": { name: "RecipientNotReady", signature: "RecipientNotReady()" },
   "0x7d372854": { name: "IntentExpired", signature: "IntentExpired(uint256)" },
@@ -133,6 +137,8 @@ export const EVM_ERROR_SELECTORS = {
   "0xa2168faf": { name: "UpgradeableAdapterUnsupported", signature: "UpgradeableAdapterUnsupported()" },
   "0xac6b05f5": { name: "InvalidDestination", signature: "InvalidDestination()" },
   "0xb3c237e0": { name: "UnexpectedRailContract", signature: "UnexpectedRailContract()" },
+  "0xbe3a7f80": { name: "TokenRecoveryForbidden", signature: "TokenRecoveryForbidden()" },
+  "0xc3f35927": { name: "ClaimLiabilityInsufficient", signature: "ClaimLiabilityInsufficient()" },
   "0xcc3da7e0": { name: "TimelockDelayOutOfRange", signature: "TimelockDelayOutOfRange()" },
   "0xcd4e6167": { name: "FeeTooHigh", signature: "FeeTooHigh()" },
   "0xd25598a0": { name: "InvalidDecimals", signature: "InvalidDecimals()" },
