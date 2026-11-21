@@ -278,6 +278,62 @@ export function maximumSend(request: MaximumSendRequest): MaximumSendResult {
   };
 }
 
+export interface BoundedQuoteSearchRequest {
+  readonly balance: bigint;
+  readonly maxAmount: bigint;
+  readonly minDestinationAmount: bigint;
+  readonly strkey: string;
+  readonly destinationDecimals: number;
+  readonly snapshot: RouterSnapshot;
+  readonly allowedRoutes?: readonly RouteKind[];
+}
+
+export interface BoundedQuoteSearchResult {
+  readonly route: RouteKind;
+  readonly quote: RouteQuote | null;
+  readonly requestAmount: bigint;
+  readonly included: boolean;
+  readonly reason: QuoteBlocker | "RouteNotAllowed" | "DestinationMinimumNotMet";
+}
+
+/** Search every permitted route locally, with deterministic integer bounds and no network calls. */
+export function searchBoundedQuotes(
+  request: BoundedQuoteSearchRequest,
+): readonly BoundedQuoteSearchResult[] {
+  const upperBound = request.balance < request.maxAmount ? request.balance : request.maxAmount;
+  return ROUTE_KINDS.map((route) => {
+    if (request.allowedRoutes && !request.allowedRoutes.includes(route)) {
+      return { route, quote: null, requestAmount: 0n, included: false, reason: "RouteNotAllowed" };
+    }
+    const maximum = maximumSend({
+      route,
+      balance: upperBound,
+      strkey: request.strkey,
+      destinationDecimals: request.destinationDecimals,
+      snapshot: request.snapshot,
+    });
+    if (!maximum.executable || maximum.quote === null) {
+      return { route, quote: null, requestAmount: 0n, included: false, reason: maximum.reason };
+    }
+    if (maximum.quote.destinationAmount < request.minDestinationAmount) {
+      return {
+        route,
+        quote: maximum.quote,
+        requestAmount: maximum.requestAmount,
+        included: false,
+        reason: "DestinationMinimumNotMet",
+      };
+    }
+    return {
+      route,
+      quote: maximum.quote,
+      requestAmount: maximum.requestAmount,
+      included: true,
+      reason: QuoteBlocker.None,
+    };
+  });
+}
+
 function blocked(base: RouteQuote, reason: QuoteBlocker): RouteQuote {
   return { ...base, available: false, reason };
 }
