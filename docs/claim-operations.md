@@ -157,3 +157,11 @@ is valid if the cumulative cap permits it. The message/refund binding and cap ar
 the first payment, and repeated identical calls cannot spend beyond the remaining cap. A new
 dispatch has a different nonce and therefore a different intent. This remains an EVM-development
 path and does not change the active Stellar Testnet deployment gate.
+## Local crash-and-upgrade rehearsal
+
+The deterministic local fixture `node script/stellar/claim-lifecycle-harness.mjs` records the
+public state before and after parking, a failed payout, an interrupted upgrade/restore, and final
+settlement. It uses a `BigInt` amount so the output cannot silently round a wire integer. The final
+replay of settlement is intentionally a no-op; its snapshot proves that one claim produces one
+payout and that its liability reaches zero only after the successful settlement. The fixture is
+local evidence for lifecycle behavior, not evidence of a signed testnet transaction.
