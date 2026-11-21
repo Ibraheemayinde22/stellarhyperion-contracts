@@ -134,6 +134,29 @@ export interface DeploymentSet {
   readonly schemaVersion: number;
   readonly generatedAt: string;
   readonly networks: Readonly<Partial<Record<ChainKey, Deployment>>>;
+  /** Explicit activation capabilities. A registry or deployment route is not activated without this. */
+  readonly routeCapabilities?: RouteCapabilitySet;
+}
+
+export const ROUTE_CAPABILITY_REVISION = 1;
+export const ROUTE_CAPABILITY_SCHEMA_VERSION = ROUTE_CAPABILITY_REVISION;
+
+export type RouteRecipientKind = "account" | "contract" | "muxed-account";
+export type RecipientKind = RouteRecipientKind;
+
+export interface RouteCapabilityRecord {
+  readonly revision: number;
+  readonly chain: ChainKey;
+  readonly symbol: string;
+  readonly route: RouteKind;
+  readonly status: "active" | "gated";
+  readonly paidDispatch: boolean;
+  readonly recipientKinds: readonly RouteRecipientKind[];
+}
+
+export interface RouteCapabilitySet {
+  readonly revision: number;
+  readonly records: readonly RouteCapabilityRecord[];
 }
 
 /** Thrown when a deployment file does not hold together. Carries the path to the bad field. */
@@ -230,6 +253,11 @@ function asTimestamp(value: unknown, path: string): string {
   const text = asString(value, path);
   if (Number.isNaN(Date.parse(text))) fail(path, "expected an ISO 8601 timestamp");
   return text;
+}
+
+function asBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") fail(path, "expected a boolean");
+  return value;
 }
 
 /**
@@ -463,6 +491,138 @@ function readStellarDeployment(
   };
 }
 
+export function parseRouteCapabilitySet(value: unknown): RouteCapabilitySet {
+  const raw = asRecord(value, "$.routeCapabilities");
+  const revision = asInteger(raw.revision, "$.routeCapabilities.revision", 1);
+  if (revision !== ROUTE_CAPABILITY_REVISION) {
+    fail(
+      "$.routeCapabilities.revision",
+      `unknown route capability revision ${String(revision)}; expected ${String(ROUTE_CAPABILITY_REVISION)}`,
+    );
+  }
+  const recordsRaw = asRecord(raw, "$.routeCapabilities");
+  const entries = (recordsRaw.records ?? recordsRaw.entries) as unknown;
+  if (!Array.isArray(entries)) {
+    fail("$.routeCapabilities.records", "expected an array");
+  }
+
+  const records: RouteCapabilityRecord[] = [];
+  const identities = new Set<string>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const path = `$.routeCapabilities.records[${String(index)}]`;
+    const entry = asRecord(entries[index], path);
+    const recordRevision = asInteger(entry.revision, `${path}.revision`, 1);
+    if (recordRevision !== ROUTE_CAPABILITY_REVISION) {
+      fail(`${path}.revision`, `unknown route capability revision ${String(recordRevision)}`);
+    }
+    const chainName = asString(entry.chain, `${path}.chain`);
+    if (!isChainKey(chainName)) fail(`${path}.chain`, `unknown chain key "${chainName}"`);
+    const symbol = asString(entry.symbol, `${path}.symbol`);
+    const routeSlug = asString(entry.route, `${path}.route`);
+    const route = tryRouteFromSlug(routeSlug);
+    if (route === null) fail(`${path}.route`, `unknown rail slug "${routeSlug}"`);
+
+    const status = asString(entry.status, `${path}.status`);
+    if (status !== "active" && status !== "gated") {
+      fail(`${path}.status`, 'expected "active" or "gated"');
+    }
+    const paidDispatch = asBoolean(entry.paidDispatch, `${path}.paidDispatch`);
+
+    const recipientRaw = entry.recipientKinds;
+    if (!Array.isArray(recipientRaw)) {
+      fail(`${path}.recipientKinds`, "expected an array");
+    }
+    const recipientKinds: RouteRecipientKind[] = [];
+    const recipientSeen = new Set<RouteRecipientKind>();
+    for (let recipientIndex = 0; recipientIndex < recipientRaw.length; recipientIndex += 1) {
+      const recipientPath = `${path}.recipientKinds[${String(recipientIndex)}]`;
+      const recipient = asString(recipientRaw[recipientIndex], recipientPath);
+      if (recipient !== "account" && recipient !== "contract" && recipient !== "muxed-account") {
+        fail(recipientPath, 'expected "account", "contract", or "muxed-account"');
+      }
+      if (recipientSeen.has(recipient)) fail(recipientPath, "duplicate recipient kind");
+      recipientSeen.add(recipient);
+      recipientKinds.push(recipient);
+    }
+
+    const identity = `${chainName}:${symbol}:${ROUTE_SLUGS[route]}`;
+    if (identities.has(identity)) {
+      fail(path, "duplicate capability identity");
+    }
+    identities.add(identity);
+    records.push({
+      revision: recordRevision,
+      chain: chainName,
+      symbol,
+      route,
+      status,
+      paidDispatch,
+      recipientKinds,
+    });
+  }
+  return Object.freeze({ revision, records: Object.freeze(records) });
+}
+
+export const parseRouteCapabilities = parseRouteCapabilitySet;
+
+export function routeCapabilityFor(
+  set: RouteCapabilitySet | DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+): RouteCapabilityRecord | null {
+  const capabilitySet =
+    "records" in set && "revision" in set ? (set as RouteCapabilitySet) : set.routeCapabilities;
+  if (capabilitySet === undefined) return null;
+  return (
+    capabilitySet.records.find(
+      (record) =>
+        record.chain === chain && record.symbol === symbol && record.route === route,
+    ) ?? null
+  );
+}
+
+export const routeCapability = routeCapabilityFor;
+
+export function hasActivatedRouteCapability(
+  set: DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+): boolean {
+  const deployment = set.networks[chain];
+  if (deployment?.status !== "active") return false;
+  if (!deployment.adapters[route]) return false;
+  const token = deployment.tokens[symbol];
+  if (!token?.routes.includes(route)) return false;
+  return routeCapabilityFor(set, chain, symbol, route)?.status === "active";
+}
+
+export const isRouteCapabilityActive = hasActivatedRouteCapability;
+
+export function supportsPaidDispatch(
+  set: DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+): boolean {
+  return (
+    hasActivatedRouteCapability(set, chain, symbol, route) &&
+    routeCapabilityFor(set, chain, symbol, route)?.paidDispatch === true
+  );
+}
+
+export function supportsRecipientKind(
+  set: DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+  recipientKind: RouteRecipientKind,
+): boolean {
+  if (!hasActivatedRouteCapability(set, chain, symbol, route)) return false;
+  return routeCapabilityFor(set, chain, symbol, route)?.recipientKinds.includes(recipientKind) === true;
+}
+
 /**
  * Read a deployment set, checking every field.
  *
@@ -517,7 +677,29 @@ export function parseDeploymentSet(value: unknown): DeploymentSet {
     }
   }
 
-  return { schemaVersion, generatedAt, networks };
+  const routeCapabilities =
+    raw.routeCapabilities === undefined
+      ? undefined
+      : parseRouteCapabilitySet(raw.routeCapabilities);
+  if (routeCapabilities !== undefined) {
+    for (const record of routeCapabilities.records) {
+      const deployment = networks[record.chain];
+      if (deployment?.status !== "active") continue;
+      if (deployment.tokens[record.symbol] === undefined) {
+        fail(
+          `$.routeCapabilities.records`,
+          `capability names unknown token "${record.symbol}" on ${record.chain}`,
+        );
+      }
+    }
+  }
+
+  return {
+    schemaVersion,
+    generatedAt,
+    networks,
+    ...(routeCapabilities !== undefined ? { routeCapabilities } : {}),
+  };
 }
 
 /** Records that are still in service. Archived records are excluded by construction. */

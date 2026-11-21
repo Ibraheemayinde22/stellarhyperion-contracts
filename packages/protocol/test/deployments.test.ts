@@ -10,6 +10,11 @@ import {
   isStellarDeployment,
   parseDeploymentSet,
   providerAddressOverridesFromDeploymentSet,
+  parseRouteCapabilitySet,
+  routeCapabilityFor,
+  hasActivatedRouteCapability,
+  supportsPaidDispatch,
+  supportsRecipientKind,
   tokenFor,
 } from "../src/deployments.js";
 import { RouteKind } from "../src/routes.js";
@@ -85,6 +90,43 @@ function set(networks: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe("reading a record that holds together", () => {
+  it("models route activation independently from registry and deployment presence", () => {
+    const parsed = parseDeploymentSet(set({ "stellar-testnet": stellarRecord() }));
+    expect(hasActivatedRouteCapability(parsed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(false);
+
+    const capabilities = parseRouteCapabilitySet({
+      revision: 1,
+      records: [
+        {
+          revision: 1,
+          chain: "stellar-testnet",
+          symbol: "USDC",
+          route: "cctp",
+          status: "active",
+          paidDispatch: true,
+          recipientKinds: ["account", "contract", "muxed-account"],
+        },
+      ],
+    });
+    expect(routeCapabilityFor(capabilities, "stellar-testnet", "USDC", RouteKind.Cctp)?.status).toBe(
+      "active",
+    );
+
+    const activated = { ...parsed, routeCapabilities: capabilities };
+    expect(hasActivatedRouteCapability(activated, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+      true,
+    );
+    expect(supportsPaidDispatch(activated, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(true);
+    expect(
+      supportsRecipientKind(
+        activated,
+        "stellar-testnet",
+        "USDC",
+        RouteKind.Cctp,
+        "muxed-account",
+      ),
+    ).toBe(true);
+  });
   it("reads an EVM deployment", () => {
     const parsed = parseDeploymentSet(set({ base: evmRecord() }));
     const base = deploymentFor(parsed, "base");
@@ -208,6 +250,15 @@ describe("reading a record that holds together", () => {
 });
 
 describe("refusing a record that does not", () => {
+  it("refuses unknown route capability revisions conservatively", () => {
+    expect(() =>
+      parseRouteCapabilitySet({
+        revision: 2,
+        records: [],
+      }),
+    ).toThrow(/route capability revision/);
+  });
+
   it("names the field it choked on", () => {
     try {
       parseDeploymentSet(set({ base: evmRecord({ router: "0xnope" }) }));
