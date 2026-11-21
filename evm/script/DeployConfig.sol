@@ -16,6 +16,8 @@ import {RouteKind} from "../src/HyperionTypes.sol";
 /// `CCTP_TOKEN_MESSENGER` should stop the deployment, not deploy an adapter pointed at the zero
 /// address that reverts on first use.
 abstract contract DeployConfig is Script {
+    string internal constant VERIFIED_EVM_VERSION = "cancun";
+    string internal constant VERIFIED_SOLC_VERSION = "0.8.28";
     /// @dev The one hard coded value, and only because Circle assigned it rather than deployed it.
     /// Stellar is domain twenty seven on CCTP. It is not a chain id, not derived from one, and not
     /// configurable, so putting it in the environment would only create a way to get it wrong.
@@ -73,6 +75,27 @@ abstract contract DeployConfig is Script {
             // rather than a reset time.
             flowWindow: uint64(vm.envOr("HYPERION_FLOW_WINDOW", uint256(1 hours)))
         });
+    }
+
+    /// @dev Refuse to queue any deployment action when the compiler/fork assumptions are not the
+    /// ones reviewed for this tree. Chain IDs are explicit because a fork can share an ID with a
+    /// live network while exposing different opcode and precompile behavior.
+    function requireCompatibleExecutionTarget() internal view {
+        string memory evmVersion = vm.envOr("HYPERION_EVM_VERSION", string(VERIFIED_EVM_VERSION));
+        string memory solcVersion = vm.envOr("HYPERION_SOLC_VERSION", string(VERIFIED_SOLC_VERSION));
+        require(
+            keccak256(bytes(evmVersion)) == keccak256(bytes(VERIFIED_EVM_VERSION)),
+            "unsupported EVM revision; use cancun"
+        );
+        require(
+            keccak256(bytes(solcVersion)) == keccak256(bytes(VERIFIED_SOLC_VERSION)),
+            "unsupported compiler revision; use 0.8.28"
+        );
+        require(
+            block.chainid == 31_337 || block.chainid == 1_337 || block.chainid == 11_155_111
+                || block.chainid == 84_532 || block.chainid == 5_042_002,
+            "unsupported deployment chain"
+        );
     }
 
     function railParams() internal view returns (RailParams memory params) {

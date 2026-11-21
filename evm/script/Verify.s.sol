@@ -42,6 +42,8 @@ contract Verify is DeployConfig {
         console.log("");
 
         _expectUint("chain id", block.chainid, record.readUint(".chainId"));
+        _expectString("EVM revision", record.readString(".evmVersion"), VERIFIED_EVM_VERSION);
+        _expectString("compiler revision", record.readString(".solcVersion"), VERIFIED_SOLC_VERSION);
         _expectAddress("treasury", router.treasury(), record.readAddress(".treasury"));
         _expectUint("fee bps", router.feeBps(), record.readUint(".feeBps"));
         _expectUint("timelock delay", router.timelockDelay(), record.readUint(".timelockDelay"));
@@ -151,6 +153,17 @@ contract Verify is DeployConfig {
             console.log("  BAD ", what);
             console.log("        found", vm.toString(found));
             console.log("        want ", vm.toString(want));
+        }
+    }
+
+    function _expectString(string memory what, string memory found, string memory want) private {
+        if (keccak256(bytes(found)) == keccak256(bytes(want))) {
+            console.log("  ok  ", what, found);
+        } else {
+            problems += 1;
+            console.log("  BAD ", what);
+            console.log("        found", found);
+            console.log("        want ", want);
         }
     }
 
