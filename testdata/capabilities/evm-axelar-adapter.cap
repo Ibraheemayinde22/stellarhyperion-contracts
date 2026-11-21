@@ -1,0 +1,47 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+surface evm/axelar-adapter
+contract AxelarItsAdapter
+status gated
+# Public callable methods, sorted.
+method EXECUTE_SUCCESS
+method GAS_SERVICE
+method ITS
+method MIN_ROTATION_DELAY
+method ROUTER
+method acceptOwnership
+method applyPeerRotation
+method cancelPeerRotation
+method chainForAxelarName
+method checkDispatch
+method dispatch
+method executeWithInterchainToken
+method inspectInboundNote
+method inspectOutboundNote
+method linkToken
+method owner
+method peerOf
+method pendingOwner
+method pendingRotationOf
+method proposePeerRotation
+method quoteFee
+method removePeer
+method renounceOwnership
+method requiredNoteVersion
+method route
+method setPeer
+method setPeerEnabled
+method setRequiredNoteVersion
+method supportsChain
+method tokenIdOf
+method topUpGas
+method transferOwnership
+
+# Routes this surface can carry, as protocol slugs.
+route axelar-its
+
+# Entry points that attach a provider payment.
+paid-method dispatch

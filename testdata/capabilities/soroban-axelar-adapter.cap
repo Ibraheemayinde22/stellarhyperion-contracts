@@ -1,0 +1,50 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+#
+# One WASM, two instances; an instance never changes the route it speaks.
+surface soroban/axelar-adapter
+contract AxelarAdapter
+status active
+# Public callable methods, sorted.
+method apply_peer_rotation
+method cancel_peer_rotation
+method chain_for
+method check_dispatch
+method dispatch
+method dispatch_from
+method execute_with_interchain_token
+method gas_token
+method get_config
+method get_link
+method get_pending_rotation
+method get_required_note_version
+method initialize
+method inspect_inbound_note
+method inspect_outbound_note
+method is_chain_enabled
+method keep_alive
+method key_coverage
+method link_chain
+method maintain_storage
+method manager_type_for
+method map_token
+method propose_peer_rotation
+method rail_flow_limit
+method set_admin
+method set_chain_enabled
+method set_required_note_version
+method sweep
+method token_for
+method token_id_for
+method unlink_chain
+method upgrade
+
+# Routes this surface can carry, as protocol slugs.
+route axelar-its
+route axelar-gmp
+
+# Entry points that attach a provider payment.
+paid-method dispatch_from
