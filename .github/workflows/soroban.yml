@@ -148,6 +148,12 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install locked registry compiler dependencies
+        # Registry verification transpiles the selected committed protocol source.
+        # Each reusable job has its own checkout and needs its own dependencies.
+        working-directory: packages/protocol
+        run: npm ci --ignore-scripts
+
       - name: Test read-only RPC inspection, discovery and replay journal
         working-directory: .
         run: node --test script/stellar/test/*.test.mjs
