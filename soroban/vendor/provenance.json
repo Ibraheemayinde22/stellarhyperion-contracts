@@ -1,0 +1,26 @@
+{
+  "crate": "soroban-env-host",
+  "version": "29.0.1",
+  "upstream_repository": "https://github.com/stellar/rs-soroban-env",
+  "upstream_revision": "ff6ae01b3465ac44185d2824876491e62c9a4cc4",
+  "archive_sha256": "e545c3ba835e63894f23dae1e5f1e0221b0b15ae2f119ddeb88c5eb2b4ae9751",
+  "license_sha256": "1d8e79dfd4c7a8702e6fa49e45a2f1b4b553a9507b29b2dc14d3656b7c47862f",
+  "patch_file": "soroban-env-host-rustcrypto.patch",
+  "patch_sha256": "48a21c883fafa443d1df73c3d58ba147415b12fe2f2cd2e923619d2e9e97ef0d",
+  "patch_paths": [
+    "Cargo.toml",
+    "src/crypto/mod.rs",
+    "src/cost_runner/util.rs",
+    "tests/secp256r1_sig_ver.rs"
+  ],
+  "source_only_paths": ["Cargo.lock", "src/test/hostile.rs"],
+  "added_paths": [
+    "LICENSE",
+    "tests/hyperion_crypto_compatibility.rs"
+  ],
+  "omitted_archive_paths": [
+    "src/test/hostile_inputs/example_add_i32.wasm",
+    "src/test/hostile_inputs/smoke.wasm"
+  ],
+  "vector_test": "tests/hyperion_crypto_compatibility.rs"
+}

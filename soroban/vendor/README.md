@@ -35,6 +35,13 @@ from the cryptography patch.
 
 ## Verification and maintenance
 
+`../../.github/scripts/verify_vendor_provenance.py` verifies the crates.io archive
+checksum, upstream revision, license and patch checksum, reports every
+unexpected vendored path, and confirms that the native host remains outside
+the contract workspace. Run it with `python3 -B .github/scripts/verify_vendor_provenance.py`.
+Use `--offline` for metadata and dependency-boundary checks when network access
+is intentionally unavailable.
+
 From `soroban/`:
 
 ```sh

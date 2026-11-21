@@ -1,3 +1,4 @@
+// Provenance: vectors validate the native host patch at ff6ae01b3465ac44185d2824876491e62c9a4cc4.
 use soroban_env_host::{budget::AsBudget, Env, EnvBase, Host, HostError, U32Val};
 
 // Public go-ethereum secp256k1 vector retained by upstream src/test/crypto.rs.
