@@ -20,6 +20,8 @@ import {
   pow10,
 } from "./amounts.js";
 import { tryParseStellarAddress, AddressKind } from "./addresses.js";
+import type { Asset, AssetIdentity } from "./registry/assets.js";
+import { ASSETS, assetByIdentity } from "./registry/assets.js";
 import type { RouteKind } from "./routes.js";
 import {
   ROUTE_KINDS,
@@ -660,6 +662,56 @@ export const quoteAllRails = planQuotes;
 
 export * from "./quotes/types.js";
 export * from "./quotes/ladder.js";
+
+/**
+ * A quote request that names the asset by identity rather than by ticker.
+ *
+ * `planQuote` prices whatever the snapshot's `tokenRegistered` and `tokenDecimals` describe, which
+ * is enough for a single-asset router view and not enough for one that lists native USDC and an
+ * ITS representation side by side. Here the asset carries its chain, its representation and its
+ * address or issuer, so a quote cannot silently be for the other USDC.
+ */
+export interface AssetQuoteRequest extends QuoteRequest {
+  readonly asset: AssetIdentity;
+}
+
+/**
+ * Price one rail for one specific asset representation.
+ *
+ * The rail must be one the asset is registered for, and the identity must resolve to exactly one
+ * entry in the registry. Anything else is `TokenNotRegistered`: the snapshot describes what the
+ * router holds, and this says whether the asset the caller named is the thing being priced.
+ */
+export function planQuoteForAsset(
+  request: AssetQuoteRequest,
+  snapshot: RouterSnapshot,
+  registry: readonly Asset[] = ASSETS,
+): RouteQuote {
+  const asset = assetByIdentity(request.asset, registry);
+  const base: RouteQuote = {
+    route: request.route,
+    available: false,
+    reason: QuoteBlocker.TokenNotRegistered,
+    grossAmount: request.amount,
+    fee: 0n,
+    netAmount: 0n,
+    destinationAmount: 0n,
+    flowAvailable: snapshot.flowAvailable[request.route] ?? 0n,
+    waitsOnAttestation: waitsOnAttestation(request.route),
+    isCanonical: isCanonical(request.route),
+  };
+  if (!asset?.routes.includes(request.route)) return base;
+  return planQuote(request, snapshot);
+}
+
+/** Price every rail this asset is registered for, leaving the rest blocked. */
+export function planQuotesForAsset(
+  request: Omit<AssetQuoteRequest, "route">,
+  snapshot: RouterSnapshot,
+  registry: readonly Asset[] = ASSETS,
+): readonly RouteQuote[] {
+  return ROUTE_KINDS.map((route) => planQuoteForAsset({ ...request, route }, snapshot, registry));
+}
 
 /** Additive V2 wrapper. `quote`, planQuote and quoteBatch retain their legacy schema. */
 export interface RouteQuoteV2 {
