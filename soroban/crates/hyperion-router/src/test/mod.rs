@@ -7,6 +7,7 @@ mod setup;
 
 mod admin;
 mod capabilities;
+mod benchmarks;
 mod discovery;
 mod inbound;
 mod maintenance;
