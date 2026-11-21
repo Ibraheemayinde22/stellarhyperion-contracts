@@ -134,6 +134,53 @@ impl Operation {
             },
         }
     }
+
+    /// One deterministic administrative sequence for timelock boundary exploration.
+    ///
+    /// This is fixture vocabulary, not contract state.  It covers nomination, supersession,
+    /// cancellation, disable (pause), early/execution-race, maturity and expiration.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct TimelockBoundaryCase {
+        pub name: &'static str,
+        pub operation: Operation,
+    }
+
+    pub const fn timelock_boundary_cases() -> [TimelockBoundaryCase; 8] {
+        [
+            TimelockBoundaryCase {
+                name: "nomination",
+                operation: Operation::QueueFee { actor: 0, bps: 20 },
+            },
+            TimelockBoundaryCase {
+                name: "superseded nomination",
+                operation: Operation::QueueFee { actor: 0, bps: 30 },
+            },
+            TimelockBoundaryCase {
+                name: "cancellation",
+                operation: Operation::Cancel { actor: 1, id: 1 },
+            },
+            TimelockBoundaryCase {
+                name: "disable",
+                operation: Operation::Pause { actor: 1 },
+            },
+            TimelockBoundaryCase {
+                name: "early execution race",
+                operation: Operation::Execute { actor: 0, id: 2 },
+            },
+            TimelockBoundaryCase {
+                name: "maturity boundary",
+                operation: Operation::Advance { seconds: 3600, ledgers: 360 },
+            },
+            TimelockBoundaryCase {
+                name: "execution",
+                operation: Operation::Execute { actor: 0, id: 2 },
+            },
+            TimelockBoundaryCase {
+                name: "expiration",
+                operation: Operation::Advance { seconds: 604801, ledgers: 60481 },
+            },
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

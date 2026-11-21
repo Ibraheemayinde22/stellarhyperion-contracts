@@ -7,7 +7,7 @@ use super::{
 use crate::types::{AdminAction, Destination, OutboundRequest};
 use hyperion_core::{
     model::{MODEL_FUNDS, MODEL_LIMIT},
-    AddressKind, ChainClock, ModelRouter, Operation, Rail, RouteKind,
+    timelock_boundary_cases, AddressKind, ChainClock, ModelRouter, Operation, Rail, RouteKind,
 };
 use proptest::prelude::*;
 use soroban_sdk::{
@@ -146,7 +146,13 @@ impl Driver {
     fn step(&mut self, word: u64) -> Result<u64, ()> {
         let op = Operation::decode(word);
         let expected = self.model.apply(op).map_err(|_| ());
-        assert_eq!(self.real(op), expected, "operation {op:?} word={word}");
+        assert_eq!(
+            self.real(op),
+            expected,
+            "chain_time={} ledger={} operation={op:?} full_payload_word={word:#018x}",
+            self.w.env.ledger().timestamp(),
+            self.w.env.ledger().sequence(),
+        );
         let token = self.w.failable(&self.token);
         let addresses = [
             &self.w.user,
@@ -215,6 +221,25 @@ fn common_generated_corpus_matches_real_soroban() {
         assert_eq!(&driver.model.balances, &row[3..9]);
     }
 }
+
+#[test]
+fn generated_timelock_boundary_sequence_preserves_authority() {
+    let mut driver = Driver::new();
+    for case in timelock_boundary_cases() {
+        let result = driver.model.apply(case.operation);
+        let real = driver.real(case.operation);
+        assert_eq!(
+            real,
+            result.map_err(|_| ()).map(|_| 0),
+            "timelock phase={} chain_time={} ledger={} operation={:?}",
+            case.name,
+            driver.w.env.ledger().timestamp(),
+            driver.w.env.ledger().sequence(),
+            case.operation,
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 48, max_shrink_iters: 4096, .. ProptestConfig::default() })]
     #[test]

@@ -466,6 +466,16 @@ describe("the documented inbound trust surface", () => {
       "EVM timelock delay",
     );
     requireEvidence(
+      solidityFunction(evmRouter, "actionStatus"),
+      /block\.timestamp\s*<\s*queued\.eta[\s\S]*block\.timestamp\s*>\s*queued\.expiresAt/,
+      "EVM typed timelock boundary status",
+    );
+    requireEvidence(
+      solidityFunction(evmRouter, "actionStatus"),
+      /keccak256\(abi\.encode\(queued\.action\)\)/,
+      "EVM timelock payload identity",
+    );
+    requireEvidence(
       read(join(evmTest, "Fixture.sol")),
       /target\.executeAction\(id\)/,
       "EVM fixture timelock path",
