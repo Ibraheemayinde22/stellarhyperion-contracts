@@ -25,6 +25,8 @@ import {
 import {HyperionRouter} from "../../src/HyperionRouter.sol";
 import {
     ActionKind,
+    ActionStatus,
+    ActionStatusView,
     AdminAction,
     CancelReason,
     QueuedAction,
@@ -44,6 +46,41 @@ import {MockRailAdapter} from "../mocks/MockRailAdapter.sol";
 /// executed twice, an action that matured in March and got run in November, a limit raise
 /// measured against a ceiling that moved while it waited.
 contract RouterAdminTest is Fixture {
+    function test_typed_action_status_tracks_payload_boundaries() public {
+        AdminAction memory action = _empty(ActionKind.SetFeeBps);
+        action.amount = 22;
+        vm.prank(admin);
+        uint64 id = router.queueAction(action);
+
+        ActionStatusView memory pending = router.actionStatus(id);
+        assertEq(uint256(pending.status), uint256(ActionStatus.Pending));
+        assertEq(pending.payloadIdentity, keccak256(abi.encode(action)));
+
+        vm.warp(pending.queued.eta);
+        assertEq(uint256(router.actionStatus(id).status), uint256(ActionStatus.Executable));
+
+        vm.warp(pending.queued.expiresAt);
+        assertEq(uint256(router.actionStatus(id).status), uint256(ActionStatus.Executable));
+
+        vm.warp(pending.queued.expiresAt + 1);
+        assertEq(uint256(router.actionStatus(id).status), uint256(ActionStatus.Expired));
+
+        uint64 freshId = router.queueAction(action);
+        vm.warp(block.timestamp + TIMELOCK + 1);
+        vm.prank(admin);
+        router.executeAction(freshId);
+        assertEq(uint256(router.actionStatus(freshId).status), uint256(ActionStatus.Executed));
+
+        uint64 cancelledId = router.queueAction(action);
+        vm.prank(guardian);
+        router.cancelAction(cancelledId);
+        assertEq(uint256(router.actionStatus(cancelledId).status), uint256(ActionStatus.Cancelled));
+        assertEq(
+            keccak256(abi.encode(router.actionStatus(cancelledId).queued.action)),
+            keccak256(abi.encode(action))
+        );
+    }
+
     function test_cancellation_preserves_payload_and_non_executable_status() public {
         AdminAction memory action = _empty(ActionKind.SetFeeBps);
         action.amount = 22;

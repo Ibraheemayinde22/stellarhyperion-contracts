@@ -44,6 +44,8 @@ import {
 import {
     ActionAuditStatus,
     ActionKind,
+    ActionStatus,
+    ActionStatusView,
     AddressKind,
     AdminAction,
     CancelReason,
@@ -962,6 +964,36 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @inheritdoc IHyperionRouter
     function actionCancelled(uint64 id) external view override returns (bool) {
         return _cancelledActions[id];
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function actionStatus(uint64 id) external view override returns (ActionStatusView memory) {
+        QueuedAction memory queued = _actions[id];
+        bool cancelled = _cancelledActions[id];
+        bytes32 payloadIdentity =
+            queued.id == 0 ? bytes32(0) : keccak256(abi.encode(queued.action));
+
+        ActionStatus status;
+        if (queued.id == 0) {
+            status = ActionStatus.NotFound;
+        } else if (cancelled) {
+            status = ActionStatus.Cancelled;
+        } else if (queued.executed) {
+            status = ActionStatus.Executed;
+        } else if (block.timestamp < queued.eta) {
+            status = ActionStatus.Pending;
+        } else if (block.timestamp > queued.expiresAt) {
+            status = ActionStatus.Expired;
+        } else {
+            status = ActionStatus.Executable;
+        }
+
+        return ActionStatusView({
+            status: status,
+            queued: queued,
+            cancelled: cancelled,
+            payloadIdentity: payloadIdentity
+        });
     }
 
     /// @inheritdoc IHyperionRouter
