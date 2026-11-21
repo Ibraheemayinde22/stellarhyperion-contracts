@@ -41,6 +41,8 @@ const packageRoot = resolve(here, "..");
 const evmRoot = resolve(packageRoot, "..", "..", "evm");
 const sorobanRoot = resolve(packageRoot, "..", "..", "soroban");
 const coreSrc = join(sorobanRoot, "crates", "hyperion-core", "src");
+const repoRoot = resolve(evmRoot, "..");
+const malformedCorpus = join(repoRoot, "testdata", "malformed-message-corpus.tsv");
 const sorobanRouterSrc = join(sorobanRoot, "crates", "hyperion-router", "src");
 const sorobanCctpSrc = join(sorobanRoot, "crates", "hyperion-adapter-cctp", "src");
 const sorobanAxelarSrc = join(sorobanRoot, "crates", "hyperion-adapter-axelar", "src");
@@ -49,6 +51,27 @@ const evmTest = join(evmRoot, "test");
 function read(path: string): string {
   return readFileSync(path, "utf8");
 }
+
+describe("the versioned malformed-message corpus", () => {
+  it("has unique cases for truncation, trailing bytes, versions and wide values", () => {
+    const rows = read(malformedCorpus)
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => line.split("|"));
+    const ids = rows.map(([id]) => id);
+    expect(new Set(ids).size).toBe(rows.length);
+    expect(rows.map(([id]) => id)).toEqual([
+      "outbound-valid",
+      "outbound-wide-nonce",
+      "outbound-truncated",
+      "outbound-trailing-byte",
+      "outbound-unsupported-version",
+    ]);
+    expect(rows.every(([, direction, payload, expected]) =>
+      direction === "outbound" && /^0x(?:[0-9a-f]{2})+$/i.test(payload ?? "") && expected,
+    )).toBe(true);
+  });
+});
 
 function bracedBlock(source: string, anchor: RegExp, label: string): string {
   const match = anchor.exec(source);
