@@ -68,6 +68,9 @@ and checks that:
   side has ever emitted, each one plausibly, which is the worst kind of wrong.
 - `EVM_ERROR_NAMES` matches the declaration order in `HyperionErrors.sol`.
 - Every error selector equals `keccak256` of its signature, so no selector is ever typed by hand.
+- `describeError` and `HyperionProtocolError` expose a stable `recovery` class: `transient`,
+  `user_correctable`, `operator_action`, or `unknown_outcome`. Unknown names and submission
+  uncertainty use `unknown_outcome` and are never automatic retry recommendations.
 - `RouteKind`, `AddressKind` and `QuoteBlocker` carry the same integers in all three languages.
 - The CCTP offsets, the SEP-23 version bytes, the note layout and the fee and decimal ceilings
   match the constants the contracts actually use.
