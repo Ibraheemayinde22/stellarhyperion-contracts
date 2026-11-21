@@ -106,6 +106,13 @@ decimal ceilings have drifted apart. Three implementations of one wire format is
 this design, and that test is what turns drift into a red branch rather than a transfer that
 arrives somewhere unexpected.
 
+Every contract surface also has a committed capability snapshot under `testdata/capabilities/`:
+the public methods it exports and the routes it advertises, recorded separately for each router and
+adapter. The Rust and Foundry suites compare their own surfaces with those files and the protocol
+suite compares the EVM surfaces with the generated ABIs. A paid entry point cannot disappear
+without an explicit compatibility acknowledgement. See
+[interface capabilities](docs/INTERFACE_CAPABILITIES.md) for the format and the upgrade rules.
+
 ## Things that are easy to get wrong, and what was done about them
 
 **A Stellar address is not a 32 byte key.** It is a string with a CRC16 over its own contents, and

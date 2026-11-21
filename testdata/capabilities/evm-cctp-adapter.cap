@@ -1,0 +1,39 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+surface evm/cctp-adapter
+contract CctpAdapter
+status gated
+# Public callable methods, sorted.
+method APPROVAL_DIAGNOSTICS_VERSION
+method DOCUMENTED_RESIDUAL_ALLOWANCE
+method FINALITY_THRESHOLD_FINALIZED
+method ROUTER
+method TOKEN_MESSENGER
+method USDC
+method acceptOwnership
+method auditAllowance
+method checkDispatch
+method dispatch
+method laneOf
+method laneReadiness
+method messageTransmitter
+method owner
+method pendingOwner
+method prepareRenewal
+method quoteFee
+method renounceOwnership
+method route
+method setLane
+method setLaneEnabled
+method setMessageTransmitter
+method supportsChain
+method transferOwnership
+
+# Routes this surface can carry, as protocol slugs.
+route cctp
+
+# Entry points that attach a provider payment.
+paid-method dispatch
