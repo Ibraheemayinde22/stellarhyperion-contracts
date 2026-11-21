@@ -38,6 +38,7 @@ method checkDestination
 method checkOutbound
 method claimCount
 method claimFailureReason
+method completeTokenRecovery
 method executeAction
 method explainOutbound
 method feeBps

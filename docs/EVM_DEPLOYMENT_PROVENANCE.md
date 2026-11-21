@@ -5,34 +5,28 @@ with 200 runs and `viaIR=true`. Deployment and verification read these settings 
 actual compiled artifact metadata; environment labels alone cannot certify the build.
 Foundry uses the same profile locally and in CI, with additional CI fuzz and invariant runs.
 
-| Contract           | Runtime bytes | Initcode bytes |
-| ------------------ | ------------: | -------------: |
-| HyperionRouter     |        24,476 |         35,120 |
-| OutboundProvenance |         9,426 |          9,507 |
-
-The router has 100 bytes below the 24,576-byte EIP-170 runtime limit. Its six constructor
-arguments add 192 bytes to the artifact creation bytecode, making actual deployment initcode
-35,312 bytes with 13,840 bytes below the 49,152-byte EIP-3860 limit. The child has no constructor
-arguments. These measurements use pinned Foundry 1.5.1 and the ordinary production profile;
-size limits are unchanged. Future source or build changes must remeasure both contracts and
-preserve deployment headroom.
+The previously recorded router and provenance sizes describe the source before the token-recovery
+manager was added and are not current measurements. Rebuild and remeasure the router and both
+support children with the pinned production profile before any deployment; preserve the EIP-170
+runtime and EIP-3860 initcode limits.
 
 ## Immutable support contract
 
-The router constructor creates exactly one `OutboundProvenance` contract using CREATE nonce
-`1`. The child inherits read-only action validation and also handles typed hashing/recovery,
-quotes and historical records. Its immutable `ROUTER` is the creating router. It has no
-administrator, authority setter, upgrade hook, delegatecall or independent authorized writer.
-The router's reference to the child is immutable too.
+The router constructor creates `OutboundProvenance` at CREATE nonce `1` and
+`TokenRecoveryManager` at nonce `2`. Both children are immutably bound to their creating router.
+The provenance child handles read-only action validation, typed hashing, quotes and historical
+records. The recovery manager tracks outstanding claim liabilities and owns the separate
+timelocked accidental-token recovery surface; it cannot transfer tokens itself, and the router
+only accepts its guarded transfer callback.
 
-The deployment record includes `provenanceStore` and `provenanceStoreCodeHash`. Deployment
-and verification derive the child address from the router address and CREATE nonce, check
-its deployed runtime hash and confirm its `ROUTER` binding. Adapter and router permissions
-remain in the router; the child only reads current router state to validate proposals or
-answer quotes.
+The deployment record includes each child's address and runtime code hash. Deployment and
+verification derive both addresses from the router address and CREATE nonce, check deployed code,
+and confirm each child's `ROUTER` binding. The manager uses the router's admin/guardian roles and
+current timelock delay; it introduces no independent privileged key.
 
-The existing router selectors and return schemas remain available. `checkDestination` stays
-pure. `outboundRecord` performs a static call and forwards the child's exact ABI return or
+The existing router selectors and return schemas remain available. `completeTokenRecovery` is an
+additive, manager-only callback; recovery scheduling and reads are on the separately recorded
+manager. `checkDestination` stays pure. `outboundRecord` performs a static call and forwards the child's exact ABI return or
 revert bytes through a documented memory-safe assembly block, avoiding an extra decode and
 encode of the destination strings.
 

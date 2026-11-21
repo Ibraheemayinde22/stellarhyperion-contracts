@@ -315,6 +315,10 @@ interface IHyperionRouter {
         external
         returns (ClaimSettlementResult[] memory results);
 
+    /// @notice Complete the exact transfer authorized by the router-owned recovery manager.
+    /// @dev Only the manager deployed at router CREATE nonce 2 may call this guarded hook.
+    function completeTokenRecovery(address token, address recipient, uint256 amount) external;
+
     /// @notice Dispatch with a native provider cap while preserving legacy request fields.
     /// @param request The legacy outbound request.
     /// @param maxProviderBudget Maximum msg.value passed to the provider, in native-currency wei.
@@ -393,6 +397,12 @@ interface IHyperionRouter {
     /// @notice Apply a proposed change that has waited long enough and has not expired.
     /// @param id The action to apply.
     function executeAction(uint64 id) external;
+
+    /// @notice Current delay applied to new router governance and recovery proposals.
+    function timelockDelay() external view returns (uint64);
+
+    /// @notice Execution grace period after a queued action matures.
+    function GRACE_PERIOD() external view returns (uint64);
 
     /// @notice Drop a proposed change.
     /// @param id The action to drop.

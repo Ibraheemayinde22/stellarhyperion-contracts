@@ -45,6 +45,18 @@ const TARGETS = [
     symbol: "hyperionRouterInterfaceAbi",
   },
   {
+    contract: "TokenRecoveryManager",
+    file: "TokenRecoveryManager.sol",
+    module: "tokenRecoveryManager",
+    symbol: "tokenRecoveryManagerAbi",
+  },
+  {
+    contract: "ITokenRecoveryManager",
+    file: "ITokenRecoveryManager.sol",
+    module: "tokenRecoveryManagerInterface",
+    symbol: "tokenRecoveryManagerInterfaceAbi",
+  },
+  {
     contract: "CctpAdapter",
     file: "CctpAdapter.sol",
     module: "cctpAdapter",

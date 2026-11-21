@@ -218,6 +218,18 @@ contract OutboundProvenance is RouterActionValidator {
         return q;
     }
 
+    function quoteAll(
+        address token,
+        uint256 amount,
+        Destination calldata destination,
+        uint8 destinationDecimals
+    ) external view returns (RouteQuote[] memory quotes) {
+        quotes = new RouteQuote[](4);
+        for (uint256 i; i < quotes.length; ++i) {
+            quotes[i] = quote(RouteKind(i), token, amount, destination, destinationDecimals);
+        }
+    }
+
     function _blocked(RouteQuote memory q, QuoteBlocker reason) private pure returns (RouteQuote memory) {
         q.available = false;
         q.reason = reason;

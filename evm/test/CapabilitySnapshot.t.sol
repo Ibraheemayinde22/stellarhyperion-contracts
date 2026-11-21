@@ -25,6 +25,7 @@ contract CapabilitySnapshotTest is Fixture {
     string internal constant ROUTER_SNAPSHOT = "../testdata/capabilities/evm-router.cap";
     string internal constant CCTP_SNAPSHOT = "../testdata/capabilities/evm-cctp-adapter.cap";
     string internal constant AXELAR_SNAPSHOT = "../testdata/capabilities/evm-axelar-adapter.cap";
+    string internal constant RECOVERY_SNAPSHOT = "../testdata/capabilities/evm-token-recovery-manager.cap";
 
     function testRouterAdvertisesOnlyRoutesItCanReach() public view {
         string[] memory slugs = _values(ROUTER_SNAPSHOT, "route");
@@ -81,6 +82,7 @@ contract CapabilitySnapshotTest is Fixture {
         assertEq(_single(ROUTER_SNAPSHOT, "status"), "gated", "the EVM router must stay gated");
         assertEq(_single(CCTP_SNAPSHOT, "status"), "gated", "the EVM CCTP adapter must stay gated");
         assertEq(_single(AXELAR_SNAPSHOT, "status"), "gated", "the EVM Axelar adapter must stay gated");
+        assertEq(_single(RECOVERY_SNAPSHOT, "status"), "gated", "the EVM recovery manager must stay gated");
     }
 
     // -------------------------------------------------------------------------------------

@@ -146,6 +146,9 @@ export const EVM_ERROR_NAMES = [
   "OldMessengerExpired",
   "TopUpIntentNotFound",
   "TopUpBindingMismatch",
+  "TokenRecoveryForbidden",
+  "RecoveryExceedsSurplus",
+  "ClaimLiabilityInsufficient",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -528,6 +531,21 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     summary:
       "The gas top-up changes the sender, destination, token, amount, or message already bound to this transfer.",
     fault: "input",
+    retryable: false,
+  },
+  TokenRecoveryForbidden: {
+    summary: "Registered tokens and addresses without token code cannot be recovered.",
+    fault: "input",
+    retryable: false,
+  },
+  RecoveryExceedsSurplus: {
+    summary: "The requested recovery exceeds the token balance left after outstanding claims.",
+    fault: "input",
+    retryable: false,
+  },
+  ClaimLiabilityInsufficient: {
+    summary: "Tracked claim liabilities cannot cover this settlement.",
+    fault: "config",
     retryable: false,
   },
   ExceedsRouteLimit: {

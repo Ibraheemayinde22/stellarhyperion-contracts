@@ -70,9 +70,11 @@ import {
     TransferIntent
 } from "./HyperionTypes.sol";
 import {OutboundProvenance} from "./OutboundProvenance.sol";
+import {TokenRecoveryManager} from "./TokenRecoveryManager.sol";
 import {IAxelarItsIntentAdapter} from "./interfaces/IAxelarItsIntentAdapter.sol";
 import {IHyperionRouter} from "./interfaces/IHyperionRouter.sol";
 import {IRailAdapter} from "./interfaces/IRailAdapter.sol";
+import {ITokenRecoveryManager} from "./interfaces/ITokenRecoveryManager.sol";
 import {AmountMath} from "./libraries/AmountMath.sol";
 import {FlowGuard, FlowWindow} from "./libraries/FlowGuard.sol";
 import {RouteMeta} from "./libraries/RouteMeta.sol";
@@ -122,7 +124,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     /// @notice How long a matured action stays executable before it expires.
     /// @dev A change approved in March and executed in November is a change nobody reviewed.
-    uint64 public constant GRACE_PERIOD = 7 days;
+    uint64 public constant override GRACE_PERIOD = 7 days;
 
     /// @notice Maximum length in bytes of a timelock cancellation reason note.
     uint256 public constant MAX_REASON_LEN = 128;
@@ -140,7 +142,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     uint16 public feeBps;
 
     /// @notice How long a privileged change has to wait before it may be applied.
-    uint64 public timelockDelay;
+    uint64 public override timelockDelay;
 
     /// @notice How long a flow window runs, in seconds.
     uint64 public flowWindow;
@@ -209,6 +211,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @notice Native refunds that could not be delivered in opt-in credit mode.
     mapping(address beneficiary => uint256 amount) public refundCredits;
 
+    ITokenRecoveryManager private immutable TOKEN_RECOVERY_MANAGER;
+
     /// @param admin Holds every privileged power, all of them behind the timelock.
     /// @notice Wires up the router with its roles, its treasury, and its fee and timing limits.
     /// @param admin Holds every role that can widen what the bridge will do.
@@ -233,6 +237,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (flowWindow_ < MIN_FLOW_WINDOW || flowWindow_ > MAX_FLOW_WINDOW) revert InvalidWindow();
 
         OUTBOUND_PROVENANCE = new OutboundProvenance();
+        TOKEN_RECOVERY_MANAGER = ITokenRecoveryManager(address(new TokenRecoveryManager(address(this))));
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         if (guardian_ != address(0)) _grantRole(GUARDIAN_ROLE, guardian_);
 
@@ -594,6 +599,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         });
         uint8 reason = _payoutFailureReason(token, amount);
         claimFailureReason[claimId] = reason;
+        TOKEN_RECOVERY_MANAGER.recordClaim(token, amount);
         emit ClaimParked(claimId, recipient, token, amount, route, origin.chain, origin.nonce);
         emit ClaimPayoutFailureV1(claimId, reason, amount, recipient);
         emit BridgeIn(route, recipient, token, amount, origin.chain, origin.nonce, origin.messageId);
@@ -656,8 +662,19 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (claim.settled) revert ClaimAlreadySettled();
         claim.settled = true;
         if (!_tryPay(claim.token, claim.recipient, claim.amount)) revert RecipientNotReady();
+        TOKEN_RECOVERY_MANAGER.releaseClaim(claim.token, claim.amount);
         delete claimFailureReason[claimId];
         emit ClaimSettled(claimId, claim.recipient, claim.token, claim.amount, settler);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function completeTokenRecovery(address tokenAddress, address recipient, uint256 amount)
+        external
+        override
+        nonReentrant
+    {
+        if (msg.sender != address(TOKEN_RECOVERY_MANAGER)) revert Unauthorized();
+        IERC20(tokenAddress).safeTransfer(recipient, amount);
     }
 
     /// @dev V1: 1 refusal, 2 shortage, 3 unreadable token, 4 inexact token payout.
@@ -753,10 +770,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         Destination calldata destination,
         uint8 destinationDecimals
     ) external view override returns (RouteQuote[] memory quotes) {
-        quotes = new RouteQuote[](4);
-        for (uint256 i = 0; i < 4; ++i) {
-            quotes[i] = quote(RouteKind(i), token, amount, destination, destinationDecimals);
-        }
+        return OUTBOUND_PROVENANCE.quoteAll(token, amount, destination, destinationDecimals);
     }
 
     /// @notice Take a Stellar address apart and say whether it holds together.

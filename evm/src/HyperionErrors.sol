@@ -108,3 +108,12 @@ error TopUpIntentNotFound();
 
 /// @notice A top-up changed an intent's bound message, destination, or refund recipient.
 error TopUpBindingMismatch();
+
+/// @notice Token recovery is not available for this asset.
+error TokenRecoveryForbidden();
+
+/// @notice Requested recovery exceeds custody after outstanding claims are reserved.
+error RecoveryExceedsSurplus();
+
+/// @notice Tracked claim liabilities cannot cover a claim being settled.
+error ClaimLiabilityInsufficient();

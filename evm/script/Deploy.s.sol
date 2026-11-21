@@ -6,6 +6,7 @@ import {console} from "forge-std/console.sol";
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {ActionKind, AdminAction, RouteKind} from "../src/HyperionTypes.sol";
 import {OutboundProvenance} from "../src/OutboundProvenance.sol";
+import {TokenRecoveryManager} from "../src/TokenRecoveryManager.sol";
 import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
 import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
 
@@ -206,6 +207,15 @@ contract Deploy is DeployConfig {
         );
         vm.serializeAddress(key, "provenanceStore", provenanceStore);
         vm.serializeBytes32(key, "provenanceStoreCodeHash", provenanceStore.codehash);
+        address recoveryManager =
+            address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"02")))));
+        require(
+            recoveryManager.code.length != 0
+                && TokenRecoveryManager(recoveryManager).ROUTER() == address(router),
+            "router recovery manager identity differs"
+        );
+        vm.serializeAddress(key, "recoveryManager", recoveryManager);
+        vm.serializeBytes32(key, "recoveryManagerCodeHash", recoveryManager.codehash);
         vm.serializeAddress(key, "deployer", deployer);
         vm.serializeAddress(key, "admin", params.admin);
         vm.serializeAddress(key, "guardian", params.guardian);

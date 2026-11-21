@@ -139,6 +139,29 @@ behavior. Canonical supported-token deliveries retain their exact amount. This a
 storage, or wire-format change and requires no state migration. EVM remains development-only;
 Stellar Testnet outbound ITS/CCTP remains active, and this work does not authorize EVM activation.
 
+## EVM-development accidental-token recovery
+
+The router-owned `TokenRecoveryManager` is deployed at CREATE nonce 2 and its address and code
+hash are recorded by the EVM deployment scripts. Only the router admin can queue and execute a
+recovery; the router guardian or admin can cancel it. A proposal records a fixed token, recipient,
+and exact integer amount, waits for the current router timelock, and expires after its grace
+period. Queue, cancellation, execution, and the complete proposal are observable through manager
+events and its read methods.
+
+Registered router tokens are never recoverable, even when disabled or currently holding no
+claims. For unregistered tokens, recoverable amount is capped at actual router balance minus the
+manager's tracked outstanding claim liability. Claim liabilities increase only when a delivery
+is parked and decrease only after exact settlement. Execution rechecks token registration and
+surplus, and the router enforces exact token debit and recipient credit under its reentrancy guard.
+Fee-on-transfer or otherwise inexact recoveries revert atomically.
+
+This adds a new manager contract and router callback selector; it does not change existing transfer
+or claim selectors, amount formats, replay keys, or claim recipients. Existing non-upgradeable
+router deployments cannot gain the manager or its historical liability accounting in place.
+Their existing claims remain on their original router; any replacement deployment or claim
+migration requires a separate reviewed process. EVM remains development-only and no activation is
+authorized.
+
 ## EVM-development Axelar ITS gas top-ups
 
 Each EVM Axelar ITS dispatch records a fixed-size intent keyed by the router nonce, adapter,
