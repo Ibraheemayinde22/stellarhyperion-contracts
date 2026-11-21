@@ -5,30 +5,42 @@ with 200 runs and `viaIR=true`. Deployment and verification read these settings 
 actual compiled artifact metadata; environment labels alone cannot certify the build.
 Foundry uses the same profile locally and in CI, with additional CI fuzz and invariant runs.
 
-The previously recorded router and provenance sizes describe the source before the token-recovery
-manager was added and are not current measurements. Rebuild and remeasure the router and both
-support children with the pinned production profile before any deployment; preserve the EIP-170
-runtime and EIP-3860 initcode limits.
+| Contract           | Runtime bytes | Initcode bytes |
+| ------------------ | ------------: | -------------: |
+| HyperionRouter     |        24,364 |         37,772 |
+| OutboundProvenance |        12,155 |         12,243 |
+
+The router has 212 bytes below the 24,576-byte EIP-170 runtime limit. Its six constructor
+arguments add 192 bytes to the artifact creation bytecode, making actual deployment initcode
+37,964 bytes with 11,188 bytes below the 49,152-byte EIP-3860 limit. The child has no constructor
+arguments. These measurements use pinned Foundry 1.5.1 and the ordinary production profile;
+size limits are unchanged. Future source or build changes must remeasure both contracts and
+preserve deployment headroom.
 
 ## Immutable support contract
 
-The router constructor creates `OutboundProvenance` at CREATE nonce `1` and
-`TokenRecoveryManager` at nonce `2`. Both children are immutably bound to their creating router.
-The provenance child handles read-only action validation, typed hashing, quotes and historical
-records. The recovery manager tracks outstanding claim liabilities and owns the separate
-timelocked accidental-token recovery surface; it cannot transfer tokens itself, and the router
-only accepts its guarded transfer callback.
+The router constructor creates exactly one `OutboundProvenance` contract using CREATE nonce
+`1`. The child inherits read-only action validation and also handles typed hashing/recovery,
+quotes, exact outbound amount calculations, address parsing, refusal classification and historical records. Its immutable `ROUTER` is the creating router. It has no
+administrator, authority setter, upgrade hook, delegatecall or independent authorized writer.
+The router's reference to the child is immutable too.
 
-The deployment record includes each child's address and runtime code hash. Deployment and
-verification derive both addresses from the router address and CREATE nonce, check deployed code,
-and confirm each child's `ROUTER` binding. The manager uses the router's admin/guardian roles and
-current timelock delay; it introduces no independent privileged key.
+The deployment record includes `provenanceStore` and `provenanceStoreCodeHash`. Deployment
+and verification derive the child address from the router address and CREATE nonce, check
+its deployed runtime hash and confirm its `ROUTER` binding. Adapter and router permissions
+remain in the router; the child only reads current router state to validate proposals or
+answer quotes.
 
-The existing router selectors and return schemas remain available. `completeTokenRecovery` is an
-additive, manager-only callback; recovery scheduling and reads are on the separately recorded
-manager. `checkDestination` stays pure. `outboundRecord` performs a static call and forwards the child's exact ABI return or
+The existing router selectors and return schemas remain available. `checkDestination` now
+uses a static call to the child's unchanged pure Stellar parser; its Solidity ABI mutability
+is `view`. It still reads no mutable protocol state and returns the same validation errors.
+`quoteV2`, `quoteAll` and `outboundRecord` perform static calls and forward the child's exact ABI return or
 revert bytes through a documented memory-safe assembly block, avoiding an extra decode and
 encode of the destination strings.
+
+`quoteV2` is now declared `external` so forwarding its return data cannot terminate an internal
+Solidity caller. Its external selector and return schema are unchanged. Derived contracts must
+use an external call instead of an unqualified internal `quoteV2(...)` call.
 
 ## Historical storage and atomic accounting
 
@@ -46,19 +58,21 @@ retrieval adds one static call; quote and action validation also add calls to th
 module and its router state getters. Gas measurements should distinguish first/cold calls
 from later calls in the same transaction.
 
-The default-profile gas report measures the following fixture costs. The first two outbound
-calls occur in one test transaction and include mock provider accounting and provenance;
-they are not an isolated estimate of provenance overhead or a live-chain fee quote.
+The ordinary full-suite gas report measures router deployment and its historical read; the
+focused provenance report measures child deployment/read/commit and the two outbound calls.
+Those outbound calls occur in one test transaction and include mock provider accounting and
+provenance. These are fixture measurements, not a live-chain fee quote; gas attribution differs
+between full-suite and focused reports.
 
-| Measurement                                                                |       Gas |
-| -------------------------------------------------------------------------- | --------: |
-| Router deployment, including its child                                     | 7,551,940 |
-| Direct child deployment in the append-only test                            | 2,089,921 |
-| First outbound in the conservation fixture                                 |   719,109 |
-| Subsequent outbound in the same test                                       |   487,443 |
-| Router historical-record read in that fixture                              |    31,200 |
-| Child historical-record read in that fixture                               |    26,083 |
-| Successful child commit in the short-string, otherwise minimal record test |   105,611 |
+| Measurement                                                 |       Gas |
+| ----------------------------------------------------------- | --------: |
+| Router deployment, including its child (full suite)         | 7,464,733 |
+| Direct child deployment in the append-only test             | 2,679,886 |
+| First outbound in the conservation fixture                  |   721,280 |
+| Subsequent outbound in the same test                        |   489,614 |
+| Router historical-record read, maximum (full suite)         |    31,368 |
+| Child historical-record read, maximum (focused)             |    26,207 |
+| Successful child commit, maximum in the minimal record test |   105,691 |
 
 Reproduce these reports with `FOUNDRY_GAS_REPORTS='["HyperionRouter","OutboundProvenance"]'
 forge test --match-test test_provenanceStorageGasCostIsMeasuredPerDispatch --gas-report -vv`

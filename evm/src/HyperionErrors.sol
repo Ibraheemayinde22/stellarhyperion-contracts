@@ -109,11 +109,7 @@ error TopUpIntentNotFound();
 /// @notice A top-up changed an intent's bound message, destination, or refund recipient.
 error TopUpBindingMismatch();
 
-/// @notice Token recovery is not available for this asset.
-error TokenRecoveryForbidden();
-
-/// @notice Requested recovery exceeds custody after outstanding claims are reserved.
-error RecoveryExceedsSurplus();
-
-/// @notice Tracked claim liabilities cannot cover a claim being settled.
-error ClaimLiabilityInsufficient();
+/// @notice A relayer fee names an unregistered or disabled fee asset.
+error FeeTokenNotSupported();
+/// @notice Fee fields or observed token balance changes violate the signed charge.
+error InvalidRelayerFee();

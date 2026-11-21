@@ -32,6 +32,7 @@ method bridgeOutBounded
 method bridgeOutWithIntent
 method bridgeOutWithPermit
 method bridgeOutWithRefundCredit
+method bridgeOutWithRelayerFee
 method cancelAction
 method cancelActionWithReason
 method checkDestination
@@ -48,6 +49,7 @@ method getRoleAdmin
 method grantRole
 method hasRole
 method hashTransferIntent
+method hashTransferIntentWithRelayerFee
 method intentNonce
 method lowerTokenFlowLimit
 method outboundNonce
@@ -89,3 +91,4 @@ paid-method bridgeOutBounded
 paid-method bridgeOutWithIntent
 paid-method bridgeOutWithPermit
 paid-method bridgeOutWithRefundCredit
+paid-method bridgeOutWithRelayerFee

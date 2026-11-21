@@ -146,9 +146,8 @@ export const EVM_ERROR_NAMES = [
   "OldMessengerExpired",
   "TopUpIntentNotFound",
   "TopUpBindingMismatch",
-  "TokenRecoveryForbidden",
-  "RecoveryExceedsSurplus",
-  "ClaimLiabilityInsufficient",
+  "FeeTokenNotSupported",
+  "InvalidRelayerFee",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -524,6 +523,16 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
   },
   TopUpIntentNotFound: {
     summary: "This gas top-up does not match an outbound transfer recorded by the adapter.",
+    fault: "input",
+    retryable: false,
+  },
+  FeeTokenNotSupported: {
+    summary: "The signed relayer fee uses an asset that is not registered and enabled.",
+    fault: "config",
+    retryable: false,
+  },
+  InvalidRelayerFee: {
+    summary: "The relayer fee fields or token balance changes do not match the signed charge.",
     fault: "input",
     retryable: false,
   },
