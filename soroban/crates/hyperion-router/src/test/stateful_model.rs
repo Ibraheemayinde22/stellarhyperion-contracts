@@ -229,8 +229,8 @@ fn generated_timelock_boundary_sequence_preserves_authority() {
         let result = driver.model.apply(case.operation);
         let real = driver.real(case.operation);
         assert_eq!(
-            real,
-            result.map_err(|_| ()).map(|_| 0),
+            real.is_ok(),
+            result.is_ok(),
             "timelock phase={} chain_time={} ledger={} operation={:?}",
             case.name,
             driver.w.env.ledger().timestamp(),

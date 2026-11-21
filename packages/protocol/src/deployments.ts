@@ -501,7 +501,7 @@ export function parseRouteCapabilitySet(value: unknown): RouteCapabilitySet {
     );
   }
   const recordsRaw = asRecord(raw, "$.routeCapabilities");
-  const entries = (recordsRaw.records ?? recordsRaw.entries) as unknown;
+  const entries = recordsRaw.records ?? recordsRaw.entries;
   if (!Array.isArray(entries)) {
     fail("$.routeCapabilities.records", "expected an array");
   }
@@ -571,8 +571,7 @@ export function routeCapabilityFor(
   symbol: string,
   route: RouteKind,
 ): RouteCapabilityRecord | null {
-  const capabilitySet =
-    "records" in set && "revision" in set ? (set as RouteCapabilitySet) : set.routeCapabilities;
+  const capabilitySet = "records" in set && "revision" in set ? set : set.routeCapabilities;
   if (capabilitySet === undefined) return null;
   return (
     capabilitySet.records.find(
