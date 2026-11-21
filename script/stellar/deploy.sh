@@ -25,6 +25,9 @@ source "$(dirname "$0")/lib.sh"
 require_tools
 require_identity
 
+# Public-only operation journal. Existing uncertain intents are reused instead of resubmitted.
+JOURNAL="${HYPERION_JOURNAL:-$RECORD_DIR/stellar-$NETWORK-operations.json}"
+
 DEPLOYER=$(deployer_address)
 
 # Who governs, and the three numbers that shape the router's behaviour. Defaults point at the
