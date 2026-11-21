@@ -92,6 +92,11 @@ error ProviderBudgetExceeded();
 /// @notice The adapter lacks a usable local dispatch validation method.
 error AdapterMethodUnavailable();
 
+error InvalidSignature();
+error IntentExpired(uint256 deadline);
+error IntentNonceMismatch(uint256 expected, uint256 provided);
+error IntentDomainMismatch();
+
 // Messenger rotation.
 error RotationAlreadyPending();
 error RotationNotPending();

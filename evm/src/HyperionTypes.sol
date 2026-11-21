@@ -67,6 +67,22 @@ struct OutboundRecord {
     bytes32 railRef;
 }
 
+/// @dev An EIP-712 authorization for one outbound transfer.
+struct TransferIntent {
+    address sender;
+    address token;
+    uint256 amount;
+    RouteKind route;
+    Destination destination;
+    uint8 destinationDecimals;
+    uint256 minDestinationAmount;
+    uint256 maxProviderBudget;
+    uint256 nonce;
+    uint256 deadline;
+    uint256 chainId;
+    address router;
+}
+
 /// @dev Everything the router knows about an asset it is willing to move.
 struct TokenConfig {
     bool registered;
