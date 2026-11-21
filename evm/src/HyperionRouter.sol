@@ -979,15 +979,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
                     ? ActionStatus.Executed
                     : block.timestamp < queued.eta
                         ? ActionStatus.Pending
-                        : block.timestamp > queued.expiresAt
-                            ? ActionStatus.Expired
-                            : ActionStatus.Executable;
-        return ActionStatusView({
-            status: status,
-            queued: queued,
-            cancelled: cancelled,
-            payloadIdentity: identity
-        });
+                        : block.timestamp > queued.expiresAt ? ActionStatus.Expired : ActionStatus.Executable;
+        return
+            ActionStatusView({
+                status: status, queued: queued, cancelled: cancelled, payloadIdentity: identity
+            });
     }
 
     /// @inheritdoc IHyperionRouter
