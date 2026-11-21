@@ -1,7 +1,8 @@
 # Native Soroban host security patch
 
-`soroban-env-host/` is the complete published `soroban-env-host` 29.0.1 crate,
-with a local RustCrypto compatibility patch for RUSTSEC-2026-0387. Upstream:
+`soroban-env-host/` contains the published `soroban-env-host` 29.0.1 crate sources,
+with the reviewed changes below and a local RustCrypto compatibility patch for
+RUSTSEC-2026-0387. Upstream:
 https://github.com/stellar/rs-soroban-env/tree/ff6ae01b3465ac44185d2824876491e62c9a4cc4/soroban-env-host
 
 The crates.io archive SHA-256 is
@@ -9,6 +10,8 @@ The crates.io archive SHA-256 is
 matching the original Cargo.lock checksum. `.cargo_vcs_info.json` is preserved.
 `LICENSE` is the Apache-2.0 license fetched from the same upstream commit.
 No upstream host source or cryptographic functionality is removed.
+The two published hostile-input WASM binaries are omitted; their corresponding
+native cases remain ignored. The exact paths are recorded in `provenance.json`.
 
 ## Changes
 
@@ -35,19 +38,47 @@ from the cryptography patch.
 
 ## Verification and maintenance
 
-`../../.github/scripts/verify_vendor_provenance.py` verifies the crates.io archive
-checksum, upstream revision, license and patch checksum, reports every
-unexpected vendored path, and confirms that the native host remains outside
-the contract workspace. Run it with `python3 -B .github/scripts/verify_vendor_provenance.py`.
-Use `--offline` for metadata and dependency-boundary checks when network access
-is intentionally unavailable.
+`../../.github/scripts/verify_vendor_provenance.py` verifies every vendored file
+against the reviewed 270-file SHA-256 inventory and its pinned aggregate digest.
+It checks the upstream revision, license, patch, source-only overlays and added
+tests, rejects missing or unexpected files and symlinks, and confirms the host
+is excluded from the contract workspace and direct WASM dependencies. Patched
+and source-only files receive the same exact byte checks as upstream files.
+
+The full check downloads the checksum-pinned crates.io archive, rejects unsafe
+archive entries, applies the reviewed zero-context patch, copies individually
+pinned overlays and removes only the two documented binary omissions. That
+reconstructed tree must match both the pinned inventory and every local file.
+From the repository root:
+
+```sh
+python3 -B .github/scripts/verify_vendor_provenance.py
+python3 -B .github/scripts/verify_vendor_provenance.py --offline
+```
+
+`--offline` verifies actual local bytes and dependency boundaries without a
+download. For full reconstruction without network access, pass an existing
+archive with `--archive /path/to/soroban-env-host-29.0.1.crate`; its checksum is
+always rechecked. Run the mutation regressions with that same cached archive:
+
+```sh
+VENDOR_PROVENANCE_ARCHIVE=/path/to/soroban-env-host-29.0.1.crate \
+  python3 -B -m unittest discover -s .github/scripts -p test_verify_vendor_provenance.py -v
+```
+
+CI runs full reconstruction and mutation regressions immediately after checkout,
+before Cargo writes build artifacts. Keep standalone native build output outside
+the vendored source tree with `CARGO_TARGET_DIR`; unexpected generated files also
+fail provenance verification. Updating this dependency requires reviewing and
+updating the archive, patch, overlay hashes, full file inventory and verifier
+trust pins together.
 
 From `soroban/`:
 
 ```sh
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --manifest-path vendor/soroban-env-host/Cargo.toml --locked \
+CARGO_TARGET_DIR=target cargo test --manifest-path vendor/soroban-env-host/Cargo.toml --locked \
   --features testutils --test secp256r1_sig_ver --test ed25519_edge_cases \
   --test hyperion_crypto_compatibility
 cargo audit --file Cargo.lock
