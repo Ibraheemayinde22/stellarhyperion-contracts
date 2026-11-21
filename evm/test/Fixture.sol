@@ -229,18 +229,57 @@ contract Fixture is Test {
         request.token = address(usdc);
     }
 
-    /// @dev Snapshot of the balances a conservation invariant needs: what the router holds,
-    /// what the treasury holds and what the sender holds. Taken before and after an operation
-    /// so a test can assert that the three sum to the same total.
+    /// @dev Snapshot every account that can hold the test token during a local transfer.
+    /// Keeping the rail receiver and both mock rails in the set catches accidental parking or
+    /// double-crediting that a router/treasury/sender-only check would miss.
     struct BalanceSnapshot {
         uint256 router;
         uint256 treasury;
         uint256 sender;
+        uint256 recipient;
+        uint256 railReceiver;
+        uint256 cctpRail;
+        uint256 itsRail;
+        uint256 total;
+        uint256 senderNative;
+        uint256 recipientNative;
+        uint256 routerNative;
+        uint256 cctpRailNative;
+        uint256 itsRailNative;
+        uint256 totalNative;
     }
 
-    function _snapshot(address sender) internal view returns (BalanceSnapshot memory s) {
+    function _snapshot(address sender, address recipient)
+        internal
+        view
+        returns (BalanceSnapshot memory s)
+    {
         s.router = usdc.balanceOf(address(router));
         s.treasury = usdc.balanceOf(treasury);
         s.sender = usdc.balanceOf(sender);
+        s.recipient = usdc.balanceOf(recipient);
+        s.railReceiver = usdc.balanceOf(railReceiver);
+        s.cctpRail = usdc.balanceOf(address(cctpRail));
+        s.itsRail = usdc.balanceOf(address(itsRail));
+        s.total = s.router + s.treasury + s.sender + s.recipient + s.railReceiver + s.cctpRail + s.itsRail;
+        s.senderNative = sender.balance;
+        s.recipientNative = recipient.balance;
+        s.routerNative = address(router).balance;
+        s.cctpRailNative = address(cctpRail).balance;
+        s.itsRailNative = address(itsRail).balance;
+        s.totalNative = s.senderNative + s.recipientNative + s.routerNative + s.cctpRailNative + s.itsRailNative;
+    }
+
+    /// @dev Assert conservation with an operation name that identifies the failing path.
+    function _assertConserved(BalanceSnapshot memory before_, BalanceSnapshot memory after_, string memory operation)
+        internal
+        pure
+    {
+        assertEq(after_.total, before_.total, string.concat(operation, ": token balance delta is non-zero"));
+        assertEq(
+            after_.totalNative,
+            before_.totalNative,
+            string.concat(operation, ": relay currency balance delta is non-zero")
+        );
     }
 }

@@ -53,12 +53,15 @@ contract RouterInboundTest is Fixture {
     // -------------------------------------------------------------------------------------
 
     function test_a_delivery_pays_the_recipient_straight_away() public {
+        BalanceSnapshot memory before_ = _snapshot(alice, bob);
+
         vm.prank(railReceiver);
         uint64 claimId = router.bridgeIn(RouteKind.Cctp, address(usdc), DELIVERY, bob, _origin(MESSAGE_ID));
 
         assertEq(claimId, 0, "nothing was parked");
         assertEq(usdc.balanceOf(bob), DELIVERY);
         assertEq(usdc.balanceOf(address(router)), 0, "the router is not a vault");
+        _assertConserved(before_, _snapshot(alice, bob), "CCTP inbound delivery");
     }
 
     function test_a_delivery_says_so_in_the_log() public {
