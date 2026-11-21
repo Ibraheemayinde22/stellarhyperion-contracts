@@ -19,6 +19,9 @@ error NotRailReceiver();
 error RouteDisabled();
 error RouteIsPaused(RouteKind route);
 error AdapterNotSet();
+error AdapterCodeMissing();
+error AdapterIdentityMismatch();
+error UpgradeableAdapterUnsupported();
 
 // Amounts, decimals and fees.
 error InvalidAmount();

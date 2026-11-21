@@ -48,6 +48,10 @@ contract MockRailAdapter is IRailAdapter, IAxelarItsIntentAdapter {
         return ROUTE;
     }
 
+    function ROUTER() external view returns (address) {
+        return ROUTER;
+    }
+
     function supportsChain(string calldata chain) external view override returns (bool) {
         if (_supportsReverts) revert Rejected();
         return _supported[chain];

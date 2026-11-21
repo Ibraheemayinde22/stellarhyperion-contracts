@@ -184,6 +184,9 @@ interface IHyperionRouter {
     /// @param adapter Its new adapter, or zero when the rail was unwired.
     event AdapterSet(RouteKind indexed route, address indexed adapter);
 
+    /// @notice Records the deployed adapter code identity accepted at activation time.
+    event AdapterIdentityRecorded(RouteKind indexed route, address indexed adapter, bytes32 codeHash);
+
     /// @notice The contract allowed to call `bridgeIn` for a rail was changed.
     /// @param route The rail.
     /// @param receiver The only address that rail's arrivals may come from.

@@ -12,6 +12,8 @@ import {
     ActionFieldNotEmpty,
     AdapterMethodUnavailable,
     AdapterNotSet,
+    AdapterCodeMissing,
+    AdapterIdentityMismatch,
     AmountNotRepresentable,
     ClaimAlreadySettled,
     ClaimNotFound,
@@ -44,7 +46,8 @@ import {
     Unauthorized,
     UnknownChain,
     ZeroAddress,
-    ZeroAddressKey
+    ZeroAddressKey,
+    UpgradeableAdapterUnsupported
 } from "./HyperionErrors.sol";
 import {
     ActionAuditStatus,
@@ -147,6 +150,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     uint64 private _actionCount;
 
     mapping(RouteKind route => address adapterAddress) private _adapters;
+    /// @notice Code hash captured when each adapter was activated.
+    mapping(RouteKind route => bytes32 codeHash) public adapterCodeHash;
     mapping(RouteKind route => address receiver) private _railReceivers;
     /// @notice Whether a rail is open for new transfers. Deliveries already in flight are not
     /// affected, because a transfer that has left is a transfer that has to be able to land.
@@ -1087,6 +1092,29 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (kind == ActionKind.SetFlowWindow) {
             if (action.amount < MIN_FLOW_WINDOW || action.amount > MAX_FLOW_WINDOW) revert InvalidWindow();
         }
+        if (kind == ActionKind.SetAdapter) {
+            if (action.subject.code.length == 0) revert AdapterCodeMissing();
+            (bool okRouter, bytes memory routerData) =
+                action.subject.staticcall(abi.encodeWithSignature("ROUTER()"));
+            if (!okRouter || routerData.length != 32 || abi.decode(routerData, (address)) != address(this)) {
+                revert AdapterIdentityMismatch();
+            }
+            (bool okRoute, bytes memory routeData) =
+                action.subject.staticcall(abi.encodeWithSignature("route()"));
+            if (!okRoute || routeData.length != 32 || abi.decode(routeData, (RouteKind)) != action.route) {
+                revert AdapterIdentityMismatch();
+            }
+            (bool okSupports,) = action.subject.staticcall(
+                abi.encodeWithSignature("supportsChain(string)", "")
+            );
+            if (!okSupports) revert AdapterMethodUnavailable();
+            (bool okImplementation, bytes memory implementationData) =
+                action.subject.staticcall(abi.encodeWithSignature("implementation()"));
+            if (okImplementation && implementationData.length == 32
+                && abi.decode(implementationData, (address)) != address(0)) {
+                revert UpgradeableAdapterUnsupported();
+            }
+        }
     }
 
     function _applyAction(AdminAction memory action) private {
@@ -1102,7 +1130,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             _grantRole(GUARDIAN_ROLE, action.subject);
         } else if (kind == ActionKind.SetAdapter) {
             _adapters[action.route] = action.subject;
+            adapterCodeHash[action.route] = action.subject.codehash;
             emit AdapterSet(action.route, action.subject);
+            emit AdapterIdentityRecorded(action.route, action.subject, action.subject.codehash);
         } else if (kind == ActionKind.SetRailReceiver) {
             _railReceivers[action.route] = action.subject;
             emit RailReceiverSet(action.route, action.subject);
@@ -1138,7 +1168,6 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         } else {
             flowWindow = uint64(action.amount);
         }
-
         emit ConfigChanged(treasury, feeBps, timelockDelay, flowWindow);
     }
 }
