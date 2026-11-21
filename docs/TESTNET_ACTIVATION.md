@@ -407,3 +407,22 @@ production pricing and funded broadcasts require separate operator evidence.
 The active deployment remains Stellar Testnet outbound ITS/CCTP. EVM and other
 rails remain gated until independently validated; these local fixtures do not
 activate them or publish a live deployment.
+
+## Registry verification
+
+Compare a read-only live snapshot with the exact protocol SDK registry revision selected for a
+deployment before queueing a change:
+
+```sh
+node script/stellar/verify-registry.mjs \
+  --live path/to/live-snapshot.json \
+  --network stellar-testnet \
+  --revision git:<selected-commit>
+```
+
+The command checks network identity, token identity, provider addresses and provider names. Each
+field is labelled `verified` when its registry entry has primary-source provenance, `inferred` when
+the entry is explicitly unconfirmed, and `unknown` when the live provider could not be read. A
+mismatched address is `drift` and makes the command fail; an unavailable read is never reported as
+healthy. The revision is required so a report cannot silently compare a deployment against
+whichever SDK happens to be installed on the operator's machine.
