@@ -328,6 +328,7 @@ export const quoteAllRails = planQuotes;
 
 export * from "./quotes/types.js";
 export * from "./quotes/ladder.js";
+export * from "./quotes/snapshot.js";
 
 /** Additive V2 wrapper. `quote`, planQuote and quoteBatch retain their legacy schema. */
 export interface RouteQuoteV2 {
