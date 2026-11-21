@@ -123,6 +123,22 @@ recipient, and a later successful retry clears the reason. Soroban's documented 
 rollback for successful nonconforming token changes remains different because its host does not
 support the EVM item's invocation rollback mechanism. These local changes activate no deployment.
 
+## EVM inbound custody reconciliation
+
+Before attempting a payout or parking a claim, `bridgeIn` snapshots both the authenticated
+receiver's balance and the router's balance. It requires the receiver's debit and router's actual
+credit to each equal the exact requested integer amount. A short transfer, extra debit, or
+unreadable/inexact post-transfer state reverts the entire inbound transaction, including its
+replay marker; it cannot create an underfunded claim. A successful payout is separately checked
+for exact debit and recipient credit. A refusing recipient is parked only if the failed payout
+left both balances unchanged.
+
+The EVM regression fixture exercises a fee-on-transfer token that short-pays the router during
+the initial custody pull, then retries the identical message after restoring exact transfer
+behavior. Canonical supported-token deliveries retain their exact amount. This adds no interface,
+storage, or wire-format change and requires no state migration. EVM remains development-only;
+Stellar Testnet outbound ITS/CCTP remains active, and this work does not authorize EVM activation.
+
 ## EVM-development Axelar ITS gas top-ups
 
 Each EVM Axelar ITS dispatch records a fixed-size intent keyed by the router nonce, adapter,
