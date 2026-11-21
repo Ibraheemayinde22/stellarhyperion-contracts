@@ -15,7 +15,8 @@ import {
     RouteKind,
     RouteQuote,
     RouteQuoteV2,
-    TokenConfig
+    TokenConfig,
+    TransferIntent
 } from "../HyperionTypes.sol";
 
 /// @title The router, as everything outside it sees it
@@ -27,6 +28,10 @@ import {
 /// Everything else here is either a question you can ask before committing money, or an admin
 /// action that has to sit in a timelock first.
 interface IHyperionRouter {
+    event TransferIntentExecuted(
+        address indexed sender, uint256 indexed intentNonce, address indexed relayer
+    );
+
     /// @notice A transfer left for another chain.
     /// @dev The Soroban router writes a `TransferRecord` to storage as well as emitting, because
     /// Soroban events age out after about a week and an indexer that fell behind has nowhere else
@@ -254,6 +259,15 @@ interface IHyperionRouter {
         external
         payable
         returns (uint64 nonce);
+
+    function bridgeOutWithIntent(TransferIntent calldata intent, bytes calldata signature)
+        external
+        payable
+        returns (uint64 nonce);
+
+    function intentNonce(address sender) external view returns (uint256);
+
+    function hashTransferIntent(TransferIntent calldata intent) external view returns (bytes32);
 
     /// @notice Return zero for passing local bounded checks, otherwise the earliest error selector.
     /// @param request The legacy outbound request.

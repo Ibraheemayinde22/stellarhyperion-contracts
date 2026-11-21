@@ -18,6 +18,10 @@ import {
     InvalidAmount,
     InvalidDecimals,
     InvalidDestination,
+    InvalidSignature,
+    IntentDomainMismatch,
+    IntentExpired,
+    IntentNonceMismatch,
     InvalidLimit,
     InvalidWindow,
     LimitNotRaised,
@@ -61,7 +65,8 @@ import {
     RouteKind,
     RouteQuote,
     RouteQuoteV2,
-    TokenConfig
+    TokenConfig,
+    TransferIntent
 } from "./HyperionTypes.sol";
 import {IAxelarItsIntentAdapter} from "./interfaces/IAxelarItsIntentAdapter.sol";
 import {IHyperionRouter} from "./interfaces/IHyperionRouter.sol";
@@ -138,6 +143,15 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     /// @notice This router's own counter for outbound transfers.
     uint64 public outboundNonce;
+
+    bytes32 public constant EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 public constant TRANSFER_INTENT_TYPEHASH = keccak256(
+        "TransferIntent(address sender,address token,uint256 amount,uint8 route,string destinationChain,string destinationAddress,uint8 destinationDecimals,uint256 minDestinationAmount,uint256 maxProviderBudget,uint256 nonce,uint256 deadline,uint256 chainId,address router)"
+    );
+    bytes32 private constant _EIP712_NAME_HASH = keccak256("HyperionRouter");
+    bytes32 private constant _EIP712_VERSION_HASH = keccak256("1");
+    mapping(address sender => uint256 nonce) public intentNonce;
 
     uint64 private _claimCount;
     uint64 private _actionCount;
@@ -237,7 +251,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         whenNotPaused
         returns (uint64 nonce)
     {
-        return _bridgeOut(request);
+        return _bridgeOut(request, msg.sender, false);
     }
 
     /// @inheritdoc IHyperionRouter
@@ -250,24 +264,112 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     {
         if (msg.value > maxProviderBudget) revert ProviderBudgetExceeded();
         _requireNotPaused();
-        return _bridgeOut(request);
+        return _bridgeOut(request, msg.sender, true);
     }
 
-    function _bridgeOut(OutboundRequest calldata request) private returns (uint64 nonce) {
+    /// @inheritdoc IHyperionRouter
+    function bridgeOutWithIntent(TransferIntent calldata intent, bytes calldata signature)
+        external
+        payable
+        override
+        nonReentrant
+        returns (uint64 nonce)
+    {
+        if (intent.router != address(this) || intent.chainId != block.chainid) {
+            revert IntentDomainMismatch();
+        }
+        if (intent.deadline < block.timestamp) revert IntentExpired(intent.deadline);
+        uint256 expectedNonce = intentNonce[intent.sender];
+        if (intent.nonce != expectedNonce) revert IntentNonceMismatch(expectedNonce, intent.nonce);
+        if (msg.value > intent.maxProviderBudget) revert ProviderBudgetExceeded();
+
+        if (_recover(hashTransferIntent(intent), signature) != intent.sender) revert InvalidSignature();
+        intentNonce[intent.sender] = expectedNonce + 1;
+
+        OutboundRequest memory request = OutboundRequest({
+            token: intent.token,
+            amount: intent.amount,
+            route: intent.route,
+            destination: intent.destination,
+            destinationDecimals: intent.destinationDecimals,
+            minDestinationAmount: intent.minDestinationAmount
+        });
+        nonce = _bridgeOut(request, intent.sender, true);
+        emit TransferIntentExecuted(intent.sender, intent.nonce, msg.sender);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function hashTransferIntent(TransferIntent calldata intent) public view override returns (bytes32) {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                TRANSFER_INTENT_TYPEHASH,
+                intent.sender,
+                intent.token,
+                intent.amount,
+                intent.route,
+                keccak256(bytes(intent.destination.chain)),
+                keccak256(bytes(intent.destination.strkey)),
+                intent.destinationDecimals,
+                intent.minDestinationAmount,
+                intent.maxProviderBudget,
+                intent.nonce,
+                intent.deadline,
+                intent.chainId,
+                intent.router
+            )
+        );
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
+    }
+
+    function _domainSeparator() private view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                EIP712_DOMAIN_TYPEHASH,
+                _EIP712_NAME_HASH,
+                _EIP712_VERSION_HASH,
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    function _recover(bytes32 digest, bytes calldata signature) private pure returns (address signer) {
+        if (signature.length != 65) revert InvalidSignature();
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(signature.offset)
+            s := calldataload(add(signature.offset, 32))
+            v := byte(0, calldataload(add(signature.offset, 64)))
+        }
+        if (v < 27) v += 27;
+        if (
+            (v != 27 && v != 28)
+                || uint256(s) > 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0
+        ) revert InvalidSignature();
+        signer = ecrecover(digest, v, r, s);
+        if (signer == address(0)) revert InvalidSignature();
+    }
+
+    function _bridgeOut(OutboundRequest memory request, address sender, bool validateAdapter)
+        private
+        returns (uint64 nonce)
+    {
         OutboundPlan memory plan = _planOutbound(request);
-        // Both public wrappers share this body; only the additive bounded wrapper requires
-        // the new adapter validator. Internal calls retain the original public selector.
-        if (msg.sig == this.bridgeOutBounded.selector) _checkAdapterDispatch(request, plan);
+        // The legacy wrapper retains its historical path; bounded and signed entrypoints run the
+        // adapter's local validation before any token movement.
+        if (validateAdapter) _checkAdapterDispatch(request, plan);
 
         IERC20 token = IERC20(request.token);
-        uint256 senderBefore = token.balanceOf(msg.sender);
+        uint256 senderBefore = token.balanceOf(sender);
         uint256 tokenBalBefore = token.balanceOf(address(this));
-        token.safeTransferFrom(msg.sender, address(this), plan.gross);
+        token.safeTransferFrom(sender, address(this), plan.gross);
         uint256 tokenBalAfter = token.balanceOf(address(this));
         if (tokenBalAfter < tokenBalBefore || tokenBalAfter - tokenBalBefore != plan.gross) {
             revert InvalidAmount();
         }
-        uint256 senderAfter = token.balanceOf(msg.sender);
+        uint256 senderAfter = token.balanceOf(sender);
         if (senderAfter > senderBefore || senderBefore - senderAfter != plan.gross) revert InvalidAmount();
 
         if (plan.fee != 0) {
@@ -291,7 +393,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         bytes32 railRef;
         if (request.route == RouteKind.AxelarIts) {
             railRef = IAxelarItsIntentAdapter(plan.adapterAddress).dispatchWithSender{value: msg.value}(
-                request.token, plan.net, request.destination, nonce, msg.sender
+                request.token, plan.net, request.destination, nonce, sender
             );
         } else {
             railRef = IRailAdapter(plan.adapterAddress).dispatch{value: msg.value}(
@@ -299,13 +401,13 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             );
         }
 
-        _announceOutbound(request, plan, nonce, railRef);
+        _announceOutbound(request, plan, nonce, railRef, sender);
 
         // Rails quote destination gas optimistically and refund the difference. Keeping it would
         // be a second, undeclared fee that moves with a gas market the sender never looked at.
         uint256 leftover = address(this).balance - balanceBefore;
         if (leftover != 0) {
-            (bool sent,) = payable(msg.sender).call{value: leftover}("");
+            (bool sent,) = payable(sender).call{value: leftover}("");
             if (!sent) revert RefundFailed();
         }
     }
@@ -313,13 +415,13 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @dev Everything that has to be true before any money moves, and the numbers that come out
     /// of it. Charges the flow limit, because a check that does not write is a check two
     /// transactions in the same block both pass.
-    function _planOutbound(OutboundRequest calldata request) private returns (OutboundPlan memory plan) {
+    function _planOutbound(OutboundRequest memory request) private returns (OutboundPlan memory plan) {
         FlowWindow memory flow;
         (plan, flow) = _previewOutbound(request);
         _flow[_flowKey(request.token, request.route)] = flow;
     }
 
-    function _previewOutbound(OutboundRequest calldata request)
+    function _previewOutbound(OutboundRequest memory request)
         private
         view
         returns (OutboundPlan memory plan, FlowWindow memory flow)
@@ -365,14 +467,15 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @dev The log is the only record this chain keeps of a departure, so it carries every field
     /// an indexer would otherwise have to reconstruct from three separate calls.
     function _announceOutbound(
-        OutboundRequest calldata request,
+        OutboundRequest memory request,
         OutboundPlan memory plan,
         uint64 nonce,
-        bytes32 railRef
+        bytes32 railRef,
+        address sender
     ) private {
         emit BridgeOut(
             request.route,
-            msg.sender,
+            sender,
             nonce,
             request.token,
             plan.gross,
@@ -547,7 +650,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         _checkAdapterDispatch(request, plan);
     }
 
-    function _checkAdapterDispatch(OutboundRequest calldata request, OutboundPlan memory plan) private view {
+    function _checkAdapterDispatch(OutboundRequest memory request, OutboundPlan memory plan) private view {
         try IRailAdapter(plan.adapterAddress).checkDispatch(request.token, plan.net, request.destination) {}
         catch (bytes memory failure) {
             bytes4 code = _errorSelector(failure);
