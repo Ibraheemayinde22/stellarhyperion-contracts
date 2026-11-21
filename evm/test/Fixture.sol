@@ -25,6 +25,19 @@ import {MockRailAdapter} from "./mocks/MockRailAdapter.sol";
 /// warp and the execute out longhand in forty tests would bury the one line each test is actually
 /// about.
 contract Fixture is Test {
+    uint8 internal constant PROVIDER_STAGE_DISPATCH = 0;
+    uint8 internal constant PROVIDER_STAGE_INBOUND = 1;
+
+    struct ProviderFaultSchedule {
+        uint64 seed;
+        uint64 dispatchMask;
+        uint64 inboundMask;
+        uint64 dispatchAttempts;
+        uint64 inboundAttempts;
+    }
+
+    ProviderFaultSchedule internal providerFaults;
+
     // Real addresses, checksums and all. The muxed one wraps the account one with id 2^53 + 1,
     // which is past what a double can count to, so a codec that ever round trips through a float
     // fails here rather than in production.
@@ -69,6 +82,7 @@ contract Fixture is Test {
     MockRailAdapter internal allbridgeRail;
 
     function setUp() public virtual {
+        _configureProviderFaults(156);
         router = new HyperionRouter(admin, guardian, treasury, FEE_BPS, TIMELOCK, FLOW_WINDOW);
         usdc = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
 
@@ -103,6 +117,32 @@ contract Fixture is Test {
         usdc.mint(alice, 10_000_000e6);
         vm.prank(alice);
         usdc.approve(address(router), type(uint256).max);
+    }
+
+    /// @dev A compact, seed-backed controller for local provider-failure rehearsals. The masks
+    /// are recorded with the seed so a failed run can be replayed without relying on block time.
+    function _configureProviderFaults(uint64 seed) internal {
+        providerFaults = ProviderFaultSchedule({
+            seed: seed,
+            dispatchMask: uint64(uint256(keccak256(abi.encode(seed, PROVIDER_STAGE_DISPATCH)))),
+            inboundMask: uint64(uint256(keccak256(abi.encode(seed, PROVIDER_STAGE_INBOUND)))),
+            dispatchAttempts: 0,
+            inboundAttempts: 0
+        });
+    }
+
+    function _nextProviderFault(uint8 stage) internal returns (bool) {
+        uint64 attempt;
+        uint64 mask;
+        if (stage == PROVIDER_STAGE_DISPATCH) {
+            attempt = providerFaults.dispatchAttempts++;
+            mask = providerFaults.dispatchMask;
+        } else {
+            require(stage == PROVIDER_STAGE_INBOUND, "unknown provider stage");
+            attempt = providerFaults.inboundAttempts++;
+            mask = providerFaults.inboundMask;
+        }
+        return (mask & (uint64(1) << (attempt % 64))) != 0;
     }
 
     // -------------------------------------------------------------------------------------

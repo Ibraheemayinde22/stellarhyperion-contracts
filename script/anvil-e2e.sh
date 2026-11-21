@@ -26,6 +26,8 @@ export PATH="$HOME/.foundry/bin:$PATH"
 
 RPC="${RPC:-http://127.0.0.1:8545}"
 EVM_DIR="evm"
+HYPERION_FAULT_SEED="${HYPERION_FAULT_SEED:-156}"
+export HYPERION_FAULT_SEED
 
 note() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mfailed: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -63,6 +65,7 @@ TREASURY=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 json() { node -e 'const f=require("fs");process.stdout.write(String(JSON.parse(f.readFileSync(process.argv[1],"utf8"))[process.argv[2]]))' "$1" "$2"; }
 
 note "deploying stand in rails"
+note "using deterministic provider fault schedule (seed ${HYPERION_FAULT_SEED})"
 ( cd "$EVM_DIR" && mkdir -p deployments && forge script script/LocalRails.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" >/tmp/hyperion-rails.log 2>&1 ) \
   || { tail -30 /tmp/hyperion-rails.log; die "LocalRails"; }
 

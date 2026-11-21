@@ -35,6 +35,7 @@ pub mod axelar;
 pub mod cctp;
 pub mod codec;
 pub mod error;
+pub mod fault;
 pub mod flow;
 pub mod inbound;
 pub mod maintenance;
@@ -61,6 +62,7 @@ pub use cctp::{
     HyperionHook, APPROVAL_DIAGNOSTICS_VERSION, DOCUMENTED_RESIDUAL_ALLOWANCE,
 };
 pub use error::HyperionError;
+pub use fault::{FaultStage, ProviderFaultController, ProviderFaultSchedule};
 pub use flow::FlowWindow;
 pub use inbound::{Origin, Recipient, Router, RouterClient};
 pub use maintenance::{
