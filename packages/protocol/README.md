@@ -69,6 +69,9 @@ and checks that:
 - `EVM_ERROR_NAMES` matches the declaration order in `HyperionErrors.sol`.
 - Every error selector equals `keccak256` of its signature, so no selector is ever typed by hand.
 - `RouteKind`, `AddressKind` and `QuoteBlocker` carry the same integers in all three languages.
+- `laneKey` includes network, both chain keys, exact source and destination asset identities, and
+  the canonical provider slug. `parseLaneKey` validates the network and provider before a caller
+  treats the lane as executable, so two USDC representations never share a key.
 - The CCTP offsets, the SEP-23 version bytes, the note layout and the fee and decimal ceilings
   match the constants the contracts actually use.
 - Regenerating `src/abi` produces byte for byte what is committed.
