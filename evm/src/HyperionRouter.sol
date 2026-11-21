@@ -25,6 +25,7 @@ import {
     MuxedNotSupported,
     NotRailReceiver,
     ProviderBudgetExceeded,
+    NoRefundCredit,
     RailNotConfigured,
     RecipientNotReady,
     RefundFailed,
@@ -179,6 +180,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     mapping(uint64 actionId => QueuedAction queued) private _actions;
     mapping(uint64 actionId => bool cancelled) private _cancelledActions;
 
+    /// @notice Native refunds that could not be delivered in opt-in credit mode.
+    mapping(address beneficiary => uint256 amount) public refundCredits;
+
     /// @param admin Holds every privileged power, all of them behind the timelock.
     /// @notice Wires up the router with its roles, its treasury, and its fee and timing limits.
     /// @param admin Holds every role that can widen what the bridge will do.
@@ -238,7 +242,31 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         whenNotPaused
         returns (uint64 nonce)
     {
-        return _bridgeOut(request);
+        return _bridgeOut(request, false);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    /// @dev The beneficiary is always the caller. A failed call to the caller's fallback cannot
+    /// strand or redirect the credit, and withdrawal remains protected by the router's reentrancy
+    /// guard.
+    function bridgeOutWithRefundCredit(OutboundRequest calldata request)
+        external
+        payable
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint64 nonce)
+    {
+        return _bridgeOut(request, true);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function withdrawRefundCredit() external override nonReentrant {
+        uint256 amount = refundCredits[msg.sender];
+        if (amount == 0) revert NoRefundCredit();
+        refundCredits[msg.sender] = 0;
+        (bool sent,) = payable(msg.sender).call{value: amount}("");
+        if (!sent) revert RefundFailed();
     }
 
     /// @inheritdoc IHyperionRouter
@@ -268,10 +296,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     {
         if (msg.value > maxProviderBudget) revert ProviderBudgetExceeded();
         _requireNotPaused();
-        return _bridgeOut(request);
+        return _bridgeOut(request, false);
     }
 
-    function _bridgeOut(OutboundRequest calldata request) private returns (uint64 nonce) {
+    function _bridgeOut(OutboundRequest calldata request, bool creditRefund) private returns (uint64 nonce) {
         OutboundPlan memory plan = _planOutbound(request);
         // Both public wrappers share this body; only the additive bounded wrapper requires
         // the new adapter validator. Internal calls retain the original public selector.
@@ -323,8 +351,13 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         // be a second, undeclared fee that moves with a gas market the sender never looked at.
         uint256 leftover = address(this).balance - balanceBefore;
         if (leftover != 0) {
-            (bool sent,) = payable(msg.sender).call{value: leftover}("");
-            if (!sent) revert RefundFailed();
+            if (creditRefund) {
+                refundCredits[msg.sender] += leftover;
+                emit RefundCreditRecorded(msg.sender, leftover);
+            } else {
+                (bool sent,) = payable(msg.sender).call{value: leftover}("");
+                if (!sent) revert RefundFailed();
+            }
         }
     }
 

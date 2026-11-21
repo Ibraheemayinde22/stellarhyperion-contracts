@@ -196,6 +196,19 @@ interface IHyperionRouter {
     /// @param flowWindow How long a flow window now runs, in seconds.
     event ConfigChanged(address treasury, uint16 feeBps, uint64 timelockDelay, uint64 flowWindow);
 
+    /// @notice A native refund could not be delivered and was recorded for the sender.
+    event RefundCreditRecorded(address indexed beneficiary, uint256 amount);
+
+    /// @notice Dispatch while recording an undeliverable native refund for the sender.
+    /// @dev This is opt-in. `bridgeOut` retains its legacy reverting-refund behavior.
+    function bridgeOutWithRefundCredit(OutboundRequest calldata request)
+        external
+        payable
+        returns (uint64 nonce);
+
+    /// @notice Withdraw the caller's previously recorded native refund credit.
+    function withdrawRefundCredit() external;
+
     /// @notice Send `request.amount` of a token to another chain.
     /// @dev Pull, then fee, then floor, then hand off. The fee comes off the raw amount and the
     /// remainder is floored to what the destination can actually represent, in that order, so the
