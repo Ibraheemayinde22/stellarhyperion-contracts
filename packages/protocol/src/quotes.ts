@@ -664,6 +664,7 @@ export const quoteAllRails = planQuotes;
 
 export * from "./quotes/types.js";
 export * from "./quotes/ladder.js";
+export * from "./quotes/snapshot.js";
 
 /**
  * A quote request that names the asset by identity rather than by ticker.
