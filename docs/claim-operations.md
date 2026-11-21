@@ -157,11 +157,29 @@ is valid if the cumulative cap permits it. The message/refund binding and cap ar
 the first payment, and repeated identical calls cannot spend beyond the remaining cap. A new
 dispatch has a different nonce and therefore a different intent. This remains an EVM-development
 path and does not change the active Stellar Testnet deployment gate.
+
 ## Local crash-and-upgrade rehearsal
 
-The deterministic local fixture `node script/stellar/claim-lifecycle-harness.mjs` records the
-public state before and after parking, a failed payout, an interrupted upgrade/restore, and final
-settlement. It uses a `BigInt` amount so the output cannot silently round a wire integer. The final
-replay of settlement is intentionally a no-op; its snapshot proves that one claim produces one
-payout and that its liability reaches zero only after the successful settlement. The fixture is
-local evidence for lifecycle behavior, not evidence of a signed testnet transaction.
+Run the actual contract fixture with an explicit released artifact and the candidate built from
+current source:
+
+```sh
+node script/stellar/claim-lifecycle-harness.mjs \
+  --old-wasm /path/released-hyperion-router.wasm \
+  --new-wasm soroban/target/wasm32v1-none/release/hyperion_router.wasm
+```
+
+The runner executes the ignored real-WASM upgrade regression, checks its successful result, and
+emits the artifact SHA-256 values and six public snapshots: parked, failed settlement, executable
+upgraded, archived/restored, settled, and retried. The contract holds the original recipient,
+amount and liability through payout failures and the executable upgrade. Restoration changes
+only the recorded persistent claim entry's TTL in a genuine SDK ledger snapshot; its payload
+must remain byte-for-byte identical. The reconstructed environment retains the upgraded WASM
+router executable. Only the native test token is re-registered to restore its process-local
+fixture implementation.
+
+The final retry must return `ClaimAlreadySettled` and leave the recipient balance unchanged;
+exact integer amounts are serialized as decimal strings. The fixture does not replace an upgrade
+with a schema-variable assignment or recreate an unpaid claim. These are local contract and
+restoration fixtures, with controlled provider/token behavior; public-network acceptance remains
+separate.

@@ -6,11 +6,12 @@ mod doubles;
 mod setup;
 
 mod admin;
-mod capabilities;
 mod benchmarks;
+mod capabilities;
 mod discovery;
 mod inbound;
 mod maintenance;
+mod operations;
 mod outbound;
 mod quotes;
 mod stateful_model;

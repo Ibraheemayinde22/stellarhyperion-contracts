@@ -16,6 +16,7 @@ require_tools
 require_identity
 
 JOURNAL="${HYPERION_JOURNAL:-$RECORD_DIR/stellar-$NETWORK-operations.json}"
+JOURNAL_PHASE=phase2
 
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
 [ -f "$RECORD" ] || die "no record at $RECORD; run script/stellar/deploy.sh first"
@@ -51,12 +52,23 @@ for i in $(seq 0 $((COUNT - 1))); do
   id=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(d.networks[process.argv[2]].queuedActionIds[Number(process.argv[3])]))' "$RECORD" "$CHAIN_KEY" "$i")
   what=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(d.networks[process.argv[2]].queuedActions?.[Number(process.argv[3])]??"unnamed"))' "$RECORD" "$CHAIN_KEY" "$i")
 
-  # A queued action that has already been taken is gone from storage, so a read that fails is the
-  # signal that this one is done rather than an error.
-  if ! read_only "$ROUTER" get_queued --id "$id" >/dev/null 2>&1; then
-    say "done already  $id  $what"
+  # A missing queue alone cannot distinguish execution, cancellation or a failed RPC read.
+  if confirmed_invoke "$ROUTER" execute_action --caller "$CALLER" --id "$id"; then
+    say "confirmed already  $id  $what"
     skipped=$((skipped + 1))
     continue
+  fi
+  if ! read_only "$ROUTER" get_queued --id "$id" >/dev/null 2>&1; then
+    die "action $id is unavailable without a confirmed receipt; reconcile its transaction and live configuration"
+  fi
+
+  # A view simulation checks maturity and authorization before reserving a signing attempt.
+  # Early refusal has no submitted operation to recover and can be retried after maturity.
+  if ! out=$(stellar contract invoke --id "$ROUTER" --source-account "$IDENTITY" --network "$NETWORK" --is-view -- execute_action --caller "$CALLER" --id "$id" 2>&1); then
+    case "$out" in
+      *TimelockNotReady*|*"Error(Contract, #23)"*) die "action $id ($what) has not matured yet. Wait and run this again." ;;
+      *) die "read-only execution preflight failed for action $id; no signing attempt was made" ;;
+    esac
   fi
 
   if out=$(invoke "$ROUTER" execute_action --caller "$CALLER" --id "$id" 2>&1); then

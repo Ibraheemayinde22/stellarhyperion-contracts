@@ -27,6 +27,7 @@ require_identity
 
 # Public-only operation journal. Existing uncertain intents are reused instead of resubmitted.
 JOURNAL="${HYPERION_JOURNAL:-$RECORD_DIR/stellar-$NETWORK-operations.json}"
+JOURNAL_PHASE=phase1
 
 DEPLOYER=$(deployer_address)
 
@@ -184,13 +185,25 @@ trap 'rm -f "$PENDING_FILE"' EXIT
 load_pending() {
   local count
   count=$(read_only "$ROUTER" queue_count | tr -d '"[:space:]')
-  [ -n "$count" ] || count=0
+  [[ "$count" =~ ^[0-9]+$ ]] || die "queue count is unavailable or malformed"
+  [ "$count" -le 10000 ] || die "queue history exceeds the bounded deployment scan"
   printf '[' > "$PENDING_FILE"
   local first=1 i entry
   for i in $(seq 1 "$count"); do
     # A queued action that has already been executed or cancelled is gone from storage, so a
     # failed read means there is nothing pending under that id.
-    entry=$(read_only "$ROUTER" get_queued --id "$i" 2>/dev/null) || continue
+    local errfile
+    errfile=$(mktemp)
+    if ! entry=$(read_only_diagnostic "$ROUTER" get_queued --id "$i" 2>"$errfile"); then
+      # Only a named, definitive missing-record response permits skipping an old queue slot.
+      if ! node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8");process.exit(/TimelockNotQueued|Error\(Contract, #22\)/.test(s)?0:1)' "$errfile"; then
+        rm -f "$errfile"
+        die "cannot establish pending action $i; RPC/read failure is not absence"
+      fi
+      rm -f "$errfile"
+      continue
+    fi
+    rm -f "$errfile"
     [ -n "$entry" ] || continue
     [ "$first" -eq 1 ] || printf ',' >> "$PENDING_FILE"
     printf '%s' "$entry" >> "$PENDING_FILE"

@@ -638,7 +638,7 @@ mod tests {
     use crate::address::AddressKind;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Env, String};
-    use std::vec::Vec;
+    use std::vec::Vec as StdVec;
 
     /// Real strkeys with real checksums, the same ones the strkey module is tested against.
     const G_ADDR: &str = "GA5ZYIIVYDX5GRF2BKEQD2Y47ZCPG3HX3PUUNPVQ5ZECB57MJG7RLVNR";
@@ -1244,7 +1244,7 @@ mod tests {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let fields: Vec<&str> = line.split('|').collect();
+            let fields: StdVec<&str> = line.split('|').collect();
             assert_eq!(fields.len(), 4, "malformed corpus row: {line}");
             if fields[1] != "outbound" {
                 continue;
@@ -1252,7 +1252,15 @@ mod tests {
             let payload = decode_hex(&env, fields[2]).unwrap();
             let result = OutboundNote::decode(&env, &payload);
             match fields[3] {
-                "ok" => assert!(result.is_ok(), "{}: {result:?}", fields[0]),
+                "ok" => {
+                    let decoded = result.expect(fields[0]);
+                    assert_eq!(
+                        decoded.nonce,
+                        u64::from_str_radix(&fields[2][fields[2].len() - 16..], 16).unwrap(),
+                        "{}",
+                        fields[0]
+                    );
+                }
                 expected => {
                     let error = result.expect_err(fields[0]);
                     assert_eq!(format!("{error:?}"), expected, "{}", fields[0]);
@@ -1266,7 +1274,7 @@ mod tests {
         if value.len() % 2 != 0 {
             return Err(());
         }
-        let mut bytes = Vec::with_capacity(value.len() / 2);
+        let mut bytes = StdVec::with_capacity(value.len() / 2);
         let mut chars = value.as_bytes().chunks_exact(2);
         for pair in &mut chars {
             let high = (pair[0] as char).to_digit(16).ok_or(())? as u8;

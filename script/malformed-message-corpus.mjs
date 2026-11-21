@@ -7,15 +7,26 @@
  * to an implementation and an exact case instead of only saying "parity failed".
  */
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const path = resolve(new URL("..", import.meta.url).pathname, "testdata/malformed-message-corpus.tsv");
+const path = fileURLToPath(
+  new URL("../testdata/malformed-message-corpus.tsv", import.meta.url),
+);
 const rows = readFileSync(path, "utf8")
   .split(/\r?\n/)
   .filter((line) => line.length > 0 && !line.startsWith("#"))
   .map((line) => {
-    const [id, direction, payload, expected] = line.split("|");
-    if (!id || !direction || !payload || !expected || !/^0x(?:[0-9a-f]{2})+$/i.test(payload)) {
+    const columns = line.split("|");
+    const [id, direction, payload, expected] = columns;
+    if (
+      columns.length !== 4 ||
+      !/^[a-z0-9_-]+$/.test(id) ||
+      direction !== "outbound" ||
+      !["ok", "MalformedMessage", "UnsupportedHookVersion"].includes(
+        expected,
+      ) ||
+      !/^0x(?:[0-9a-f]{2})+$/.test(payload)
+    ) {
       throw new Error(`malformed corpus row: ${line}`);
     }
     return { id, direction, payload, expected };

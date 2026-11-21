@@ -112,6 +112,27 @@ mod tests {
     use super::{FaultStage, ProviderFaultController, ProviderFaultSchedule};
 
     #[test]
+    fn shared_vectors_pin_the_same_schedule_used_by_all_local_consumers() {
+        for line in include_str!("../../../../testdata/provider-fault-vectors.tsv").lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields: std::vec::Vec<_> = line.split('|').collect();
+            assert_eq!(fields.len(), 3);
+            let seed = fields[0].parse().unwrap();
+            let schedule = ProviderFaultSchedule::from_seed(seed);
+            assert_eq!(
+                schedule.dispatch_mask,
+                u64::from_str_radix(&fields[1][2..], 16).unwrap()
+            );
+            assert_eq!(
+                schedule.inbound_mask,
+                u64::from_str_radix(&fields[2][2..], 16).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn same_seed_replays_each_stage() {
         let mut left = ProviderFaultController::from_seed(156);
         let mut right = ProviderFaultController::from_seed(156);

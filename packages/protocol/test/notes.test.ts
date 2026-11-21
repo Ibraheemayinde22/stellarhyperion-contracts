@@ -59,14 +59,28 @@ function packedOutbound(recipient: string, nonce: bigint): Uint8Array {
 }
 
 describe("outbound notes, which arrive from Stellar", () => {
-  it.each(corpus.filter((row) => row.direction === "outbound"))("classifies corpus case $id", (row) => {
-    try {
-      decodeOutboundNote(row.payload as `0x${string}`);
-      expect(row.expected, row.id).toBe("ok");
-    } catch (error) {
-      expect(String(error), row.id).toMatch(new RegExp(row.expected));
-    }
-  });
+  it.each(corpus.filter((row) => row.direction === "outbound"))(
+    "classifies corpus case $id",
+    (row) => {
+      let decoded: ReturnType<typeof decodeOutboundNote> | undefined;
+      let decodeError: unknown;
+      try {
+        decoded = decodeOutboundNote(row.payload as `0x${string}`);
+      } catch (error) {
+        decodeError = error;
+      }
+      if (row.expected === "ok") {
+        expect(decodeError, row.id).toBeUndefined();
+        expect(decoded?.nonce, row.id).toBe(BigInt(`0x${row.payload.slice(-16)}`));
+        expect(decoded?.recipient.toLowerCase(), row.id).toBe(
+          `0x${row.payload.slice(4, 44)}`.toLowerCase(),
+        );
+      } else {
+        expect(decoded, row.id).toBeUndefined();
+        expect(String(decodeError), row.id).toMatch(new RegExp(row.expected));
+      }
+    },
+  );
 
   it("is a version, an address and a counter", () => {
     const payload = packedOutbound(EVM_RECIPIENT, NONCE);

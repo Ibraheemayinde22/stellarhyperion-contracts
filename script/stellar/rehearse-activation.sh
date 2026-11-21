@@ -1,29 +1,21 @@
 #!/usr/bin/env bash
-# Local-only activation rehearsal. It never signs a testnet or mainnet transaction.
+# Native local contract execution: exact early refusal, mature activation, link and repeat.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-
 [ "${STELLAR_NETWORK:-local}" = "local" ] || die "activation rehearsal requires STELLAR_NETWORK=local"
-IDENTITY="${STELLAR_IDENTITY:-hyperion-rehearsal}"
-RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-local-phase1.json}"
-
-note "local phase one"
-STELLAR_NETWORK=local STELLAR_IDENTITY="$IDENTITY" "$CONTRACTS_ROOT/script/stellar/deploy.sh"
-
-note "early execution must be rejected by the timelock"
-if STELLAR_NETWORK=local STELLAR_IDENTITY="$IDENTITY" HYPERION_RECORD="$RECORD" \
-  "$CONTRACTS_ROOT/script/stellar/execute.sh"; then
-  die "local execute succeeded before the timelock matured"
-else
-  say "early execution rejected as expected"
-fi
-
-cat <<EOF
-
-Local phase one is complete and early execution was rejected.
-Run phase two again after the local timelock matures:
-  STELLAR_NETWORK=local STELLAR_IDENTITY=$IDENTITY HYPERION_RECORD=$RECORD \\
-    $CONTRACTS_ROOT/script/stellar/execute.sh
-
-This rehearsal is local fixture evidence only; it is not testnet acceptance evidence.
-EOF
+[ "$#" -eq 0 ] || die "activation rehearsal takes no arguments"
+REPORT=$(mktemp)
+trap 'rm -f "$REPORT"' EXIT
+note "real native router and adapters; controlled provider fixture"
+(
+  cd "$SOROBAN_DIR"
+  cargo test --locked -p hyperion-router \
+    test::operations::activation_rehearsal_executes_real_queued_actions_links_and_verifies_repeatability -- --exact --nocapture
+) | tee "$REPORT"
+node - "$REPORT" <<'NODE'
+const lines = require('fs').readFileSync(process.argv[2], 'utf8').split(/\r?\n/).filter(line => line.startsWith('ACTIVATION_REPORT '));
+if (lines.length !== 1) throw new Error('activation fixture produced no unique execution report');
+const report = JSON.parse(lines[0].slice('ACTIVATION_REPORT '.length));
+if (report.fixture !== 'native-real-router-and-adapters' || report.earlyTimelockRejected !== true || report.maturedExecuted !== 7 || report.linksVerified !== true || report.repeatedPhaseTwoNoOp !== true) throw new Error('incomplete actual activation evidence');
+NODE
+printf '\nNative activation and repeated phase two verified.\n'

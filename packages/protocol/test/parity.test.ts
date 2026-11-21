@@ -67,9 +67,12 @@ describe("the versioned malformed-message corpus", () => {
       "outbound-trailing-byte",
       "outbound-unsupported-version",
     ]);
-    expect(rows.every(([, direction, payload, expected]) =>
-      direction === "outbound" && /^0x(?:[0-9a-f]{2})+$/i.test(payload ?? "") && expected,
-    )).toBe(true);
+    expect(
+      rows.every(
+        ([, direction, payload, expected]) =>
+          direction === "outbound" && /^0x(?:[0-9a-f]{2})+$/i.test(payload ?? "") && expected,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -462,6 +465,25 @@ describe("the documented inbound trust surface", () => {
 });
 
 describe("the deterministic provider fault fixtures", () => {
+  it("matches the shared exact-width schedule vectors used by Rust and Solidity", () => {
+    const mask = (1n << 64n) - 1n;
+    const mix = (input: bigint) => {
+      let value = input ^ (input >> 30n);
+      value = (value * 0xbf58476d1ce4e5b9n) & mask;
+      value ^= value >> 27n;
+      value = (value * 0x94d049bb133111ebn) & mask;
+      return value ^ (value >> 31n);
+    };
+    const rows = read(join(repoRoot, "testdata", "provider-fault-vectors.tsv"))
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0 && !line.startsWith("#"));
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      const [seed, dispatch, inbound] = row.split("|");
+      expect(mix(BigInt(seed!) ^ 0x4453504154434848n), row).toBe(BigInt(dispatch!));
+      expect(mix(BigInt(seed!) ^ 0x494e424f554e4448n), row).toBe(BigInt(inbound!));
+    }
+  });
   it("keeps dispatch and inbound stages explicit on both local harnesses", () => {
     const rust = read(join(coreSrc, "fault.rs"));
     const routerTests = read(join(sorobanRouterSrc, "test", "mod.rs"));

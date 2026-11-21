@@ -1,103 +1,83 @@
 #!/usr/bin/env node
-
-// Deterministic local fixture for the claim lifecycle. It deliberately does not contact a
-// network or sign a transaction: deployment scripts use the same snapshots around real calls,
-// while this fixture makes interruption and retry behavior reproducible in CI and rehearsals.
-
-const claimId = 1n;
-const amount = 3000000000000000007n;
-const token = "USDC";
-const recipient = "G...RECIPIENT";
-
-const state = {
-  schemaVersion: 2,
-  nextClaimId: 1n,
-  claims: new Map(),
-  liabilities: new Map(),
-  payouts: new Map(),
+/** Run the real WASM upgrade/ledger restoration fixture and report public contract snapshots. */
+import { spawn } from "node:child_process";
+import { readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+const args = process.argv.slice(2);
+if (args.length !== 4 || args[0] !== "--old-wasm" || args[2] !== "--new-wasm")
+  throw new Error(
+    "usage: claim-lifecycle-harness.mjs --old-wasm RELEASED.wasm --new-wasm CANDIDATE.wasm",
+  );
+const oldPath = realpathSync(args[1]);
+const newPath = realpathSync(args[3]);
+const sha256 = (file) => {
+  const bytes = readFileSync(file);
+  if (
+    bytes.length < 8 ||
+    !bytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))
+  )
+    throw new Error("expected a real WASM artifact");
+  return createHash("sha256").update(bytes).digest("hex");
 };
-
-function snapshot(label, interruption = null) {
-  const claim = state.claims.get(claimId);
-  return {
-    label,
-    interruption,
-    schemaVersion: state.schemaVersion,
-    nextClaimId: state.nextClaimId.toString(),
-    liability: (state.liabilities.get(token) ?? 0n).toString(),
-    payoutCount: String(state.payouts.get(claimId) ?? 0),
-    claim: claim && {
-      id: claim.id.toString(),
-      token: claim.token,
-      amount: claim.amount.toString(),
-      recipient: claim.recipient,
-      settled: claim.settled,
-      failureReason: claim.failureReason,
+const artifacts = { oldSha256: sha256(oldPath), newSha256: sha256(newPath) };
+const child = spawn(
+  "cargo",
+  [
+    "test",
+    "--locked",
+    "-p",
+    "hyperion-router",
+    "storage_maintenance::actual_wasm_upgrade_preserves_state_and_failure_retains_executable",
+    "--",
+    "--ignored",
+    "--nocapture",
+  ],
+  {
+    cwd: fileURLToPath(new URL("../../soroban", import.meta.url)),
+    env: {
+      ...process.env,
+      HYPERION_UPGRADE_OLD_WASM: oldPath,
+      HYPERION_UPGRADE_NEW_WASM: newPath,
     },
-  };
-}
-
-function park() {
-  state.claims.set(claimId, {
-    id: claimId,
-    token,
-    amount,
-    recipient,
-    settled: false,
-    failureReason: 4, // custody short / payout deferred
-  });
-  state.nextClaimId = claimId + 1n;
-  state.liabilities.set(token, amount);
-}
-
-function failedSettlement() {
-  const claim = state.claims.get(claimId);
-  claim.failureReason = 4;
-  // A failed payout changes diagnostics only. The claim and its liability remain intact.
-}
-
-function upgradeAndRestore() {
-  state.schemaVersion = 3;
-  // Restoration keeps the original claim identity and recipient; it never recreates a claim.
-  const claim = state.claims.get(claimId);
-  state.claims.set(claimId, { ...claim });
-}
-
-function settle() {
-  const claim = state.claims.get(claimId);
-  if (!claim || claim.settled) return false;
-  claim.settled = true;
-  claim.failureReason = 0;
-  state.liabilities.set(token, 0n);
-  state.payouts.set(claimId, (state.payouts.get(claimId) ?? 0) + 1);
-  return true;
-}
-
-const snapshots = [];
-park();
-snapshots.push(snapshot("parked"));
-failedSettlement();
-snapshots.push(snapshot("settlement-failed", "payout interrupted before transfer"));
-upgradeAndRestore();
-snapshots.push(snapshot("upgrade-restored", "process interrupted after upgrade"));
-settle();
-snapshots.push(snapshot("settled"));
-settle();
-snapshots.push(snapshot("settle-retried", "replayed settlement request"));
-
-if ((state.liabilities.get(token) ?? 0n) !== 0n || state.payouts.get(claimId) !== 1) {
-  throw new Error("claim lifecycle invariant failed");
-}
-
-const result = {
-  scenario: "claim-lifecycle-crash-and-upgrade",
-  exactIntegerAmount: amount.toString(),
-  invariants: {
-    liabilitiesSurviveInterruption: snapshots[1].liability === amount.toString(),
-    restoredClaimKeepsRecipient: snapshots[2].claim.recipient === recipient,
-    repeatedSettlementPaysOnce: snapshots.at(-1).payoutCount === "1",
+    stdio: ["ignore", "pipe", "inherit"],
   },
-  snapshots,
-};
-
-console.log(JSON.stringify(result, null, 2));
+);
+let output = "";
+const timer = setTimeout(() => child.kill("SIGTERM"), 1800000);
+child.stdout.on("data", (chunk) => {
+  output += chunk.toString();
+  if (Buffer.byteLength(output) > 16777216) child.kill("SIGTERM");
+});
+try {
+  const code = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  if (code !== 0)
+    throw new Error(
+      "real contract lifecycle fixture failed; no success evidence was produced",
+    );
+  const reports = output
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("CLAIM_LIFECYCLE_REPORT "));
+  if (reports.length !== 1)
+    throw new Error("expected exactly one real WASM lifecycle report");
+  const report = JSON.parse(reports[0].slice("CLAIM_LIFECYCLE_REPORT ".length));
+  if (
+    report.fixture !== "actual-wasm-upgrade-and-ledger-restoration" ||
+    report.snapshots?.length !== 6 ||
+    Object.values(report.invariants ?? {}).length !== 3 ||
+    Object.values(report.invariants).some((value) => value !== true)
+  )
+    throw new Error("incomplete contract lifecycle evidence");
+  console.log(
+    JSON.stringify(
+      { ...report, artifacts, evidenceOrigin: "local-wasm-contract-fixture" },
+      null,
+      2,
+    ),
+  );
+} finally {
+  clearTimeout(timer);
+}
