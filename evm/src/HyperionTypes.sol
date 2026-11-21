@@ -56,12 +56,16 @@ struct OutboundRequest {
 struct TransferIntent {
     address sender;
     address token;
+    /// The ERC20 in which the relayer may be paid, or zero for no relayer fee.
+    address feeToken;
     uint256 amount;
     RouteKind route;
     Destination destination;
     uint8 destinationDecimals;
     uint256 minDestinationAmount;
     uint256 maxProviderBudget;
+    /// Absolute upper bound on the fee the relayer may take from `sender`.
+    uint256 maxRelayerCharge;
     uint256 nonce;
     uint256 deadline;
     uint256 chainId;

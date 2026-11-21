@@ -92,6 +92,8 @@ error InvalidSignature();
 error IntentExpired(uint256 deadline);
 error IntentNonceMismatch(uint256 expected, uint256 provided);
 error IntentDomainMismatch();
+error FeeTokenNotSupported();
+error InvalidRelayerFee();
 
 // Messenger rotation.
 error RotationAlreadyPending();

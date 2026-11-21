@@ -15,10 +15,12 @@ import {
     ClaimAlreadySettled,
     ClaimNotFound,
     FeeTooHigh,
+    FeeTokenNotSupported,
     InvalidAmount,
     InvalidDecimals,
     InvalidDestination,
     InvalidSignature,
+    InvalidRelayerFee,
     IntentDomainMismatch,
     IntentExpired,
     IntentNonceMismatch,
@@ -147,7 +149,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     bytes32 public constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 public constant TRANSFER_INTENT_TYPEHASH = keccak256(
-        "TransferIntent(address sender,address token,uint256 amount,uint8 route,string destinationChain,string destinationAddress,uint8 destinationDecimals,uint256 minDestinationAmount,uint256 maxProviderBudget,uint256 nonce,uint256 deadline,uint256 chainId,address router)"
+        "TransferIntent(address sender,address token,address feeToken,uint256 amount,uint8 route,string destinationChain,string destinationAddress,uint8 destinationDecimals,uint256 minDestinationAmount,uint256 maxProviderBudget,uint256 maxRelayerCharge,uint256 nonce,uint256 deadline,uint256 chainId,address router)"
     );
     bytes32 private constant _EIP712_NAME_HASH = keccak256("HyperionRouter");
     bytes32 private constant _EIP712_VERSION_HASH = keccak256("1");
@@ -284,6 +286,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (msg.value > intent.maxProviderBudget) revert ProviderBudgetExceeded();
 
         if (_recover(hashTransferIntent(intent), signature) != intent.sender) revert InvalidSignature();
+        _validateRelayerFee(intent.feeToken, intent.maxRelayerCharge);
         intentNonce[intent.sender] = expectedNonce + 1;
 
         OutboundRequest memory request = OutboundRequest({
@@ -295,7 +298,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             minDestinationAmount: intent.minDestinationAmount
         });
         nonce = _bridgeOut(request, intent.sender, true);
-        emit TransferIntentExecuted(intent.sender, intent.nonce, msg.sender);
+        _payRelayer(intent.sender, intent.feeToken, intent.maxRelayerCharge);
+        emit TransferIntentExecuted(
+            intent.sender, intent.nonce, msg.sender, intent.feeToken, intent.maxRelayerCharge
+        );
     }
 
     /// @inheritdoc IHyperionRouter
@@ -305,6 +311,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
                 TRANSFER_INTENT_TYPEHASH,
                 intent.sender,
                 intent.token,
+                intent.feeToken,
                 intent.amount,
                 intent.route,
                 keccak256(bytes(intent.destination.chain)),
@@ -312,6 +319,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
                 intent.destinationDecimals,
                 intent.minDestinationAmount,
                 intent.maxProviderBudget,
+                intent.maxRelayerCharge,
                 intent.nonce,
                 intent.deadline,
                 intent.chainId,
@@ -350,6 +358,32 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         ) revert InvalidSignature();
         signer = ecrecover(digest, v, r, s);
         if (signer == address(0)) revert InvalidSignature();
+    }
+
+    function _validateRelayerFee(address feeToken, uint256 maxRelayerCharge) private view {
+        if (maxRelayerCharge == 0) {
+            if (feeToken != address(0)) revert InvalidRelayerFee();
+            return;
+        }
+        if (feeToken == address(0)) revert FeeTokenNotSupported();
+        TokenConfig memory cfg = _tokens[feeToken];
+        if (!cfg.registered || !cfg.enabled) revert FeeTokenNotSupported();
+    }
+
+    function _payRelayer(address sender, address feeToken, uint256 relayerCharge) private {
+        if (relayerCharge == 0) return;
+        IERC20 token = IERC20(feeToken);
+        uint256 senderBefore = token.balanceOf(sender);
+        uint256 relayerBefore = token.balanceOf(msg.sender);
+        token.safeTransferFrom(sender, msg.sender, relayerCharge);
+        uint256 senderAfter = token.balanceOf(sender);
+        uint256 relayerAfter = token.balanceOf(msg.sender);
+        if (senderAfter > senderBefore || senderBefore - senderAfter != relayerCharge) {
+            revert InvalidRelayerFee();
+        }
+        if (relayerAfter < relayerBefore || relayerAfter - relayerBefore != relayerCharge) {
+            revert InvalidRelayerFee();
+        }
     }
 
     function _bridgeOut(OutboundRequest memory request, address sender, bool validateAdapter)

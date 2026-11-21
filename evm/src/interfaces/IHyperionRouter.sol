@@ -29,7 +29,11 @@ import {
 /// action that has to sit in a timelock first.
 interface IHyperionRouter {
     event TransferIntentExecuted(
-        address indexed sender, uint256 indexed intentNonce, address indexed relayer
+        address indexed sender,
+        uint256 indexed intentNonce,
+        address indexed relayer,
+        address feeToken,
+        uint256 relayerCharge
     );
 
     /// @notice A transfer left for another chain.
