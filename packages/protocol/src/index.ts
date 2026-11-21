@@ -53,6 +53,7 @@ export * from "./chains.js";
 
 // Pricing a route locally so an app can render four of them while somebody types.
 export * from "./quotes.js";
+export * from "./route-health.js";
 
 // Reading a token registration diagnostic, which both chains answer in the same shape.
 export * from "./tokenMapping.js";
