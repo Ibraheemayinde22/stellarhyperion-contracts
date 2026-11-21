@@ -47,6 +47,7 @@ contract Deploy is DeployConfig {
     Queued[] internal queued;
 
     function run() external {
+        requireCompatibleExecutionTarget();
         RouterParams memory params = routerParams();
         RailParams memory rails = railParams();
         TokenParams memory token = tokenParams();
@@ -187,6 +188,8 @@ contract Deploy is DeployConfig {
         string memory key = "hyperion";
 
         vm.serializeUint(key, "chainId", block.chainid);
+        vm.serializeString(key, "evmVersion", VERIFIED_EVM_VERSION);
+        vm.serializeString(key, "solcVersion", VERIFIED_SOLC_VERSION);
         vm.serializeAddress(key, "router", address(router));
         vm.serializeAddress(key, "deployer", deployer);
         vm.serializeAddress(key, "admin", params.admin);
