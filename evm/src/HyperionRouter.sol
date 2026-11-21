@@ -55,6 +55,7 @@ import {
     Destination,
     Origin,
     OutboundRequest,
+    OutboundRecord,
     PendingClaim,
     QueuedAction,
     QuoteBlocker,
@@ -172,6 +173,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     }
 
     mapping(uint64 claimId => PendingClaim claim) private _claims;
+    mapping(uint64 nonce => OutboundRecord record) private _outboundRecords;
     /// @notice Latest version 1 payout reason: zero cleared, 1 refusal, 2 shortage, 3 unreadable, 4 inexact.
     mapping(uint64 claimId => uint8 reason) public claimFailureReason;
     mapping(uint64 actionId => QueuedAction queued) private _actions;
@@ -290,6 +292,20 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         bytes32 railRef = IRailAdapter(plan.adapterAddress).dispatch{value: msg.value}(
             request.token, plan.net, request.destination, nonce
         );
+
+        _outboundRecords[nonce] = OutboundRecord({
+            nonce: nonce,
+            sender: msg.sender,
+            token: request.token,
+            grossAmount: plan.gross,
+            fee: plan.fee,
+            netAmount: plan.net,
+            route: request.route,
+            adapter: plan.adapterAddress,
+            destinationChain: request.destination.chain,
+            destinationAddress: request.destination.strkey,
+            railRef: railRef
+        });
 
         _announceOutbound(request, plan, nonce, railRef);
 
@@ -881,6 +897,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @inheritdoc IHyperionRouter
     function adapter(RouteKind route) external view override returns (address) {
         return _adapters[route];
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function outboundRecord(uint64 nonce) external view override returns (OutboundRecord memory record) {
+        return _outboundRecords[nonce];
     }
 
     /// @notice The contract allowed to call `bridgeIn` for a rail.

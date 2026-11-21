@@ -52,6 +52,21 @@ struct OutboundRequest {
     uint256 minDestinationAmount;
 }
 
+/// @dev The immutable provenance committed for a successful outbound dispatch.
+struct OutboundRecord {
+    uint64 nonce;
+    address sender;
+    address token;
+    uint256 grossAmount;
+    uint256 fee;
+    uint256 netAmount;
+    RouteKind route;
+    address adapter;
+    string destinationChain;
+    string destinationAddress;
+    bytes32 railRef;
+}
+
 /// @dev Everything the router knows about an asset it is willing to move.
 struct TokenConfig {
     bool registered;

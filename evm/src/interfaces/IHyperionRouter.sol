@@ -10,6 +10,7 @@ import {
     Destination,
     Origin,
     OutboundRequest,
+    OutboundRecord,
     PendingClaim,
     QueuedAction,
     RouteKind,
@@ -208,6 +209,10 @@ interface IHyperionRouter {
     /// @return nonce This router's own counter for the transfer, which is also what appears in the
     /// note the far side reads.
     function bridgeOut(OutboundRequest calldata request) external payable returns (uint64 nonce);
+
+    /// @notice Read the provenance committed for a successful outbound dispatch.
+    /// @dev A missing nonce returns a zero-valued record. Reverted dispatches never create one.
+    function outboundRecord(uint64 nonce) external view returns (OutboundRecord memory record);
 
     /// @notice Pay out a transfer that arrived over a rail.
     /// @dev Callable only by the contract registered as that rail's receiver, and only after the
