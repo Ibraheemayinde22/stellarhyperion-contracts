@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {AccessControl} from "openzeppelin/access/AccessControl.sol";
 import {IERC20} from "openzeppelin/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "openzeppelin/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {Pausable} from "openzeppelin/utils/Pausable.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
@@ -237,6 +238,23 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         whenNotPaused
         returns (uint64 nonce)
     {
+        return _bridgeOut(request);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    /// @dev Preview before signing so the permit is bound to the exact gross debit. The preview
+    /// is repeated by `_bridgeOut`, which then charges the flow window immediately before funds
+    /// move. If the permit is expired, replayed, or signed for another spender or amount, the
+    /// token reverts and the whole dispatch is rolled back.
+    function bridgeOutWithPermit(
+        OutboundRequest calldata request,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable override nonReentrant whenNotPaused returns (uint64 nonce) {
+        (OutboundPlan memory plan,) = _previewOutbound(request);
+        IERC20Permit(request.token).permit(msg.sender, address(this), plan.gross, deadline, v, r, s);
         return _bridgeOut(request);
     }
 

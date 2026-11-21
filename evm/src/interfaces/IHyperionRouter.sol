@@ -209,6 +209,24 @@ interface IHyperionRouter {
     /// note the far side reads.
     function bridgeOut(OutboundRequest calldata request) external payable returns (uint64 nonce);
 
+    /// @notice Approve exactly this transfer with EIP-2612, then dispatch it.
+    /// @dev The permit value is the router's calculated gross debit (net amount plus fee),
+    /// never an allowance chosen by the caller. Tokens without EIP-2612 keep using `bridgeOut`
+    /// after an explicit approval.
+    /// @param request The token, amount, rail, destination, and slippage floor.
+    /// @param deadline The permit deadline enforced by the token.
+    /// @param v The ECDSA recovery byte for the permit signature.
+    /// @param r The first ECDSA signature word.
+    /// @param s The second ECDSA signature word.
+    /// @return nonce The outbound nonce.
+    function bridgeOutWithPermit(
+        OutboundRequest calldata request,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable returns (uint64 nonce);
+
     /// @notice Pay out a transfer that arrived over a rail.
     /// @dev Callable only by the contract registered as that rail's receiver, and only after the
     /// rail's own verifier has accepted the message. Hyperion adds a replay guard on top of that
