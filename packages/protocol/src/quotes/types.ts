@@ -1,3 +1,4 @@
+import type { Asset, AssetIdentity } from "../registry/assets.js";
 import type { RouteKind } from "../routes.js";
 import { RouteKind as RouteKindEnum } from "../routes.js";
 import type { RouterSnapshot, RouteQuote } from "../quotes.js";
@@ -29,6 +30,16 @@ export interface QuoteParams {
   readonly snapshot: RouterSnapshot;
   /** Optional custom destination gas estimates per rail, overriding historical defaults. */
   readonly gasEstimates?: Partial<Record<RouteKind, bigint>>;
+  /**
+   * Which asset representation is being priced, by chain, representation and address or issuer.
+   *
+   * When present, rails the asset is not registered for come back `TokenNotRegistered` rather
+   * than priced against the snapshot's single token. When absent, the call behaves exactly as it
+   * did before identity existed.
+   */
+  readonly asset?: AssetIdentity;
+  /** Registry to resolve `asset` against. Defaults to the published asset list. */
+  readonly registry?: readonly Asset[];
 }
 
 /**
@@ -37,6 +48,8 @@ export interface QuoteParams {
 export interface BatchQuoteResult {
   /** The gross input tier amount evaluated. */
   readonly amount: bigint;
+  /** The asset identity the batch was scoped to, or null when it was not scoped. */
+  readonly asset: AssetIdentity | null;
   /** Whether at least one rail can carry this amount right now. */
   readonly available: boolean;
   /** The winning rail selected for this tier, or null if all rails are blocked. */

@@ -14,6 +14,7 @@
 import type { Hex } from "./bytes.js";
 import type { ChainKey } from "./chains.js";
 import { isChainKey } from "./chains.js";
+import type { AssetIdentity, AssetRepresentation } from "./registry/assets.js";
 import type { RouteKind } from "./routes.js";
 import { ROUTE_KINDS, ROUTE_SLUGS, tryRouteFromSlug } from "./routes.js";
 import { isStellarAddress } from "./addresses.js";
@@ -35,6 +36,10 @@ export interface DeployedAtStellar {
 }
 
 export interface EvmTokenDeployment {
+  /** The ticker this token represents. Defaults to the record key when the file omits it. */
+  readonly symbol: string;
+  /** Native issuance or an ITS representation of the same ticker. */
+  readonly representation: AssetRepresentation;
   readonly address: Hex;
   readonly decimals: number;
   /** The flow ceiling the router was configured with, in this asset's own units. */
@@ -44,6 +49,10 @@ export interface EvmTokenDeployment {
 }
 
 export interface StellarTokenDeployment {
+  /** The ticker this token represents. Defaults to the record key when the file omits it. */
+  readonly symbol: string;
+  /** Native issuance or an ITS representation of the same ticker. */
+  readonly representation: AssetRepresentation;
   /** The Stellar Asset Contract id, which is what Soroban calls. */
   readonly sacId: string;
   readonly code: string;
@@ -181,6 +190,28 @@ function asTimestamp(value: unknown, path: string): string {
   return text;
 }
 
+/**
+ * The representation of a token record.
+ *
+ * Absent means `native`, which is what every record written before this field existed means, so
+ * older deployment files keep loading unchanged. An unknown value is refused rather than treated
+ * as native: a typo that silently promoted an ITS representation to native USDC would be the
+ * expensive kind of compatible.
+ */
+function asRepresentation(value: unknown, path: string): AssetRepresentation {
+  if (value === undefined) return "native";
+  const text = asString(value, path);
+  if (text !== "native" && text !== "its") {
+    fail(path, 'expected "native" or "its"');
+  }
+  return text;
+}
+
+/** The ticker a record carries, defaulting to the map key for files that predate the field. */
+function asTokenSymbol(value: unknown, path: string, key: string): string {
+  return value === undefined ? key : asString(value, path);
+}
+
 function asRoutes(value: unknown, path: string): readonly RouteKind[] {
   if (!Array.isArray(value)) fail(path, "expected an array of rail slugs");
   return value.map((entry, index) => {
@@ -222,6 +253,8 @@ function readEvmDeployment(
     const tokenPath = `${path}.tokens.${symbol}`;
     const token = asRecord(entry, tokenPath);
     tokens[symbol] = {
+      symbol: asTokenSymbol(token.symbol, `${tokenPath}.symbol`, symbol),
+      representation: asRepresentation(token.representation, `${tokenPath}.representation`),
       address: asEvmAddress(token.address, `${tokenPath}.address`),
       decimals: asInteger(token.decimals, `${tokenPath}.decimals`),
       flowLimit: asUintString(token.flowLimit, `${tokenPath}.flowLimit`),
@@ -263,6 +296,8 @@ function readStellarDeployment(
     const tokenPath = `${path}.tokens.${symbol}`;
     const token = asRecord(entry, tokenPath);
     tokens[symbol] = {
+      symbol: asTokenSymbol(token.symbol, `${tokenPath}.symbol`, symbol),
+      representation: asRepresentation(token.representation, `${tokenPath}.representation`),
       sacId: asStellarContract(token.sacId, `${tokenPath}.sacId`),
       code: asString(token.code, `${tokenPath}.code`),
       issuer: asStellarAccount(token.issuer, `${tokenPath}.issuer`),
@@ -363,6 +398,14 @@ export function adapterFor(set: DeploymentSet, chain: ChainKey, route: RouteKind
   return deployment.adapters[route] ?? null;
 }
 
+/** The token entries of a deployment, with the family the record declares. */
+function deployedTokens(
+  deployment: Deployment,
+): readonly (EvmTokenDeployment | StellarTokenDeployment)[] {
+  if (isEvmDeployment(deployment)) return Object.values(deployment.tokens);
+  return Object.values(deployment.tokens);
+}
+
 export function tokenFor(
   set: DeploymentSet,
   chain: ChainKey,
@@ -370,7 +413,131 @@ export function tokenFor(
 ): EvmTokenDeployment | StellarTokenDeployment | null {
   const deployment = set.networks[chain];
   if (deployment === undefined) return null;
-  return deployment.tokens[symbol] ?? null;
+  const matches = deployedTokens(deployment).filter((token) => token.symbol === symbol);
+  // A record may list native USDC and an ITS representation of it under the same ticker. Picking
+  // the first would price the wrong decimals and register the wrong address on the next deploy,
+  // so an ambiguous symbol answers null and the caller has to name the representation.
+  const [only] = matches;
+  return only !== undefined && matches.length === 1 ? only : null;
+}
+
+/** Everything the caller knows about the token it wants, without relying on a symbol alone. */
+export interface TokenQuery {
+  /** The ticker. Matching on symbol alone may be ambiguous. */
+  readonly symbol?: string;
+  /** Native issuance or an ITS representation. Required to separate two same-symbol tokens. */
+  readonly representation?: AssetRepresentation;
+  /** EVM contract address. Case insensitive. */
+  readonly address?: string;
+  /** Stellar classic asset code. */
+  readonly code?: string;
+  /** Stellar issuing account. */
+  readonly issuer?: string;
+  /** Stellar Asset Contract id. */
+  readonly sacId?: string;
+  /** Only tokens registered for this rail. */
+  readonly route?: RouteKind;
+}
+
+export type TokenResolution =
+  | { readonly ok: true; readonly token: EvmTokenDeployment | StellarTokenDeployment }
+  | {
+      readonly ok: false;
+      readonly reason: "not-found" | "ambiguous";
+      readonly candidates: readonly (EvmTokenDeployment | StellarTokenDeployment)[];
+    };
+
+function sameHex(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function matchesTokenQuery(
+  token: EvmTokenDeployment | StellarTokenDeployment,
+  query: TokenQuery,
+): boolean {
+  if (query.symbol !== undefined && token.symbol !== query.symbol) return false;
+  if (query.representation !== undefined && token.representation !== query.representation) {
+    return false;
+  }
+  if (query.route !== undefined && !token.routes.includes(query.route)) return false;
+
+  if ("address" in token) {
+    if (query.code !== undefined || query.issuer !== undefined || query.sacId !== undefined) {
+      return false;
+    }
+    return query.address === undefined || sameHex(token.address, query.address);
+  }
+
+  if (query.address !== undefined) return false;
+  if (query.code !== undefined && token.code !== query.code) return false;
+  if (query.issuer !== undefined && token.issuer !== query.issuer) return false;
+  if (query.sacId !== undefined && token.sacId !== query.sacId) return false;
+  return true;
+}
+
+/** Resolve one deployed token, or say why the record cannot name exactly one. */
+export function resolveToken(
+  set: DeploymentSet,
+  chain: ChainKey,
+  query: TokenQuery,
+): TokenResolution {
+  const deployment = set.networks[chain];
+  if (deployment === undefined) return { ok: false, reason: "not-found", candidates: [] };
+  const candidates = deployedTokens(deployment).filter((token) => matchesTokenQuery(token, query));
+  const [only] = candidates;
+  if (only !== undefined && candidates.length === 1) return { ok: true, token: only };
+  if (candidates.length === 0) return { ok: false, reason: "not-found", candidates };
+  return { ok: false, reason: "ambiguous", candidates };
+}
+
+/** The identity a deployment record's token actually has on its chain. */
+export function tokenIdentity(
+  chain: ChainKey,
+  token: EvmTokenDeployment | StellarTokenDeployment,
+): AssetIdentity {
+  if ("address" in token) {
+    return {
+      family: "evm",
+      chain,
+      representation: token.representation,
+      address: token.address,
+    };
+  }
+  return {
+    family: "stellar",
+    chain,
+    representation: token.representation,
+    code: token.code,
+    issuer: token.issuer,
+  };
+}
+
+/** Look a token up by its full identity instead of by its ticker. */
+export function tokenByIdentity(
+  set: DeploymentSet,
+  identity: AssetIdentity,
+): EvmTokenDeployment | StellarTokenDeployment | null {
+  const deployment = set.networks[identity.chain];
+  if (deployment === undefined) return null;
+  const matches = deployedTokens(deployment).filter(
+    (token) =>
+      tokenIdentity(identity.chain, token).family === identity.family &&
+      matchesTokenQuery(
+        token,
+        identity.family === "evm"
+          ? {
+              representation: identity.representation,
+              address: identity.address,
+            }
+          : {
+              representation: identity.representation,
+              code: identity.code,
+              issuer: identity.issuer,
+            },
+      ),
+  );
+  const [only] = matches;
+  return only !== undefined && matches.length === 1 ? only : null;
 }
 
 /** Every chain in a set that has a router, which is the list a chain picker should offer. */
