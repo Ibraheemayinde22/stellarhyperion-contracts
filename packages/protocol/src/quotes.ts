@@ -294,6 +294,92 @@ export function planQuoteWithProviderAddresses(
   };
 }
 
+export interface MaximumSendRequest {
+  readonly route: RouteKind;
+  readonly balance: bigint;
+  readonly strkey: string;
+  readonly destinationDecimals: number;
+  readonly snapshot: RouterSnapshot;
+}
+
+export interface MaximumSendResult {
+  readonly executable: boolean;
+  /** Largest gross request that remains within balance, flow, and precision constraints. */
+  readonly requestAmount: bigint;
+  readonly quote: RouteQuote | null;
+  /** Source units retained because the destination cannot represent them exactly. */
+  readonly precisionDust: bigint;
+  /** Source units left after the suggested request. */
+  readonly balanceDust: bigint;
+  /** A blocker suitable for diagnostics when no executable request exists. */
+  readonly reason: QuoteBlocker;
+}
+
+/**
+ * Find the largest executable request with integer-only arithmetic.
+ *
+ * The search is monotonic: once the route exceeds its balance or virtual flow allowance, larger
+ * requests cannot become executable. Dust is returned explicitly rather than silently added to a
+ * request that would round differently on the destination.
+ */
+export function maximumSend(request: MaximumSendRequest): MaximumSendResult {
+  if (request.balance <= 0n) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance > 0n ? request.balance : 0n,
+      reason: QuoteBlocker.AmountTooSmall,
+    };
+  }
+
+  const evaluate = (amount: bigint): RouteQuote =>
+    planQuote(
+      { route: request.route, amount, strkey: request.strkey, destinationDecimals: request.destinationDecimals },
+      request.snapshot,
+    );
+  const first = evaluate(1n);
+  if (!first.available && first.reason !== QuoteBlocker.FlowLimitExceeded) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance,
+      reason: first.reason,
+    };
+  }
+
+  let low = 0n;
+  let high = request.balance < MAX_QUOTE_AMOUNT ? request.balance : MAX_QUOTE_AMOUNT;
+  while (low < high) {
+    const candidate = low + (high - low + 1n) / 2n;
+    if (evaluate(candidate).available) low = candidate;
+    else high = candidate - 1n;
+  }
+  if (low === 0n) {
+    const diagnostic = evaluate(request.balance < MAX_QUOTE_AMOUNT ? request.balance : MAX_QUOTE_AMOUNT);
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance,
+      reason: diagnostic.reason,
+    };
+  }
+  const quote = evaluate(low);
+  return {
+    executable: true,
+    requestAmount: low,
+    quote,
+    precisionDust: low - quote.grossAmount,
+    balanceDust: request.balance - low,
+    reason: QuoteBlocker.None,
+  };
+}
+
 function blocked(base: RouteQuote, reason: QuoteBlocker): RouteQuote {
   return { ...base, available: false, reason };
 }
