@@ -108,3 +108,8 @@ error TopUpIntentNotFound();
 
 /// @notice A top-up changed an intent's bound message, destination, or refund recipient.
 error TopUpBindingMismatch();
+
+/// @notice A relayer fee names an unregistered or disabled fee asset.
+error FeeTokenNotSupported();
+/// @notice Fee fields or observed token balance changes violate the signed charge.
+error InvalidRelayerFee();

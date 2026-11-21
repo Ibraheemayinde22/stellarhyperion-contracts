@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {InvalidAmount, InvalidSignature, Unauthorized} from "./HyperionErrors.sol";
+import {InvalidAmount, InvalidSignature, Unauthorized, IntentDomainMismatch, IntentExpired, IntentNonceMismatch, ProviderBudgetExceeded, FeeTokenNotSupported, InvalidRelayerFee} from "./HyperionErrors.sol";
 import {
     AddressKind,
     Destination,
@@ -33,6 +33,8 @@ interface IRouterQuoteState is IRouterActionState {
     function feeBps() external view returns (uint16);
     /// @notice Unconsumed cross-chain flow allowance.
     function flowAvailable(address token, RouteKind route) external view returns (uint256);
+    /// @notice Current shared signed execution nonce.
+    function intentNonce(address sender) external view returns (uint256);
     /// @notice Decode and validate the destination using the router's unchanged pure ABI.
     function checkDestination(string calldata strkey) external pure returns (AddressKind, bytes32, uint64);
 }
@@ -97,6 +99,38 @@ contract OutboundProvenance is RouterActionValidator {
             )
         );
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
+    }
+
+    /// @notice Hash an additive fee authorization without changing legacy typed intent identities.
+    function hashTransferIntentWithRelayerFee(TransferIntent calldata intent, address feeToken, uint256 charge)
+        public view returns (bytes32)
+    {
+        bytes32 structHash = keccak256(abi.encode(
+            keccak256("RelayerFeeIntent(bytes32 transferIntentHash,address feeToken,uint256 maxRelayerCharge)"),
+            hashTransferIntent(intent), feeToken, charge
+        ));
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
+    }
+
+    /// @notice Read-only admission for both signed entrypoints; the router consumes the shared nonce.
+    function validateTransferIntent(
+        TransferIntent calldata intent, bytes calldata signature, uint256 providerPayment,
+        address feeToken, uint256 charge, bool feeSigned, address relayer
+    ) external view returns (uint256 expectedNonce) {
+        if (intent.router != ROUTER || intent.chainId != block.chainid) revert IntentDomainMismatch();
+        if (intent.deadline < block.timestamp) revert IntentExpired(intent.deadline);
+        expectedNonce = IRouterQuoteState(ROUTER).intentNonce(intent.sender);
+        if (intent.nonce != expectedNonce) revert IntentNonceMismatch(expectedNonce, intent.nonce);
+        if (providerPayment > intent.maxProviderBudget) revert ProviderBudgetExceeded();
+        bytes32 digest = feeSigned ? hashTransferIntentWithRelayerFee(intent, feeToken, charge) : hashTransferIntent(intent);
+        if (_recover(digest, signature) != intent.sender) revert InvalidSignature();
+        if (charge == 0) {
+            if (feeToken != address(0)) revert InvalidRelayerFee();
+        } else {
+            if (!feeSigned || relayer == intent.sender) revert InvalidRelayerFee();
+            TokenConfig memory config = IRouterQuoteState(ROUTER).tokenConfig(feeToken);
+            if (feeToken == address(0) || !config.registered || !config.enabled) revert FeeTokenNotSupported();
+        }
     }
 
     function _domainSeparator() private view returns (bytes32) {

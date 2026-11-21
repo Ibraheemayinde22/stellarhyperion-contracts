@@ -343,6 +343,20 @@ interface IHyperionRouter {
     /// @return The chain/router-bound digest.
     function hashTransferIntent(TransferIntent calldata intent) external view returns (bytes32);
 
+    /// @notice Execute an intent with a separately signed exact relayer fee cap.
+    /// @dev The signature covers the legacy intent digest, fee token and charge.
+    function bridgeOutWithRelayerFee(
+        TransferIntent calldata intent, bytes calldata signature, address feeToken, uint256 maxRelayerCharge
+    ) external payable returns (uint64 nonce);
+
+    /// @notice Hash a fee-bearing intent in this router's EIP-712 domain.
+    function hashTransferIntentWithRelayerFee(
+        TransferIntent calldata intent, address feeToken, uint256 maxRelayerCharge
+    ) external view returns (bytes32);
+
+    /// @notice The signed fee was paid after successful dispatch, in the same atomic transaction.
+    event RelayerFeePaid(address indexed sender, address indexed feeToken, address indexed relayer, uint256 amount);
+
     /// @notice Return zero for passing local bounded checks, otherwise the earliest error selector.
     /// @param request The legacy outbound request.
     /// @param providerPayment Prospective native payment in wei.

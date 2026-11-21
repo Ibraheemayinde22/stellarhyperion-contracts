@@ -36,3 +36,18 @@ This feature is development infrastructure and does not activate a live EVM rail
 deployment still requires an independently reviewed activation and signed acceptance evidence.
 The immutable helper and adapter review boundaries are described in
 [EVM deployment and provenance](EVM_DEPLOYMENT_PROVENANCE.md).
+
+## Additive signed relayer fees
+
+`bridgeOutWithRelayerFee(intent, signature, feeToken, maxRelayerCharge)` retains the legacy
+`TransferIntent` layout and `bridgeOutWithIntent` selector. Its signature instead signs the typed
+`RelayerFeeIntent(bytes32 transferIntentHash,address feeToken,uint256 maxRelayerCharge)` in the
+same HyperionRouter version-1 EIP-712 domain. `transferIntentHash` is the complete legacy-domain
+intent digest returned by `hashTransferIntent`; the new hash helper binds that digest and both
+fee fields. A legacy signature cannot authorize a fee, and both methods consume the same sender
+nonce. The fee is paid exactly at the signed cap after successful dispatch, separately from its
+bridged amount and minimum. The sender approves the router for the fee asset as well as the
+transfer asset. Fee assets must be registered and enabled; zero charges require the zero address.
+Self-paid nonzero fees, fee-on-transfer assets and unexpected sender/relayer balance changes are
+refused atomically. Failed fee payment reverts the dispatch, provider effects and shared nonce.
+Existing signatures, legacy calldata and zero-fee legacy behavior remain unchanged.

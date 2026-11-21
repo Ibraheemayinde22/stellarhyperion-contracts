@@ -23,6 +23,7 @@ import {
     InvalidDestination,
     InvalidLimit,
     InvalidSignature,
+    InvalidRelayerFee,
     InvalidWindow,
     LimitNotRaised,
     MuxedNotSupported,
@@ -344,35 +345,53 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         nonReentrant
         returns (uint64 nonce)
     {
+        return _executeSignedIntent(intent, signature, address(0), 0, false);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function bridgeOutWithRelayerFee(
+        TransferIntent calldata intent, bytes calldata signature, address feeToken, uint256 maxRelayerCharge
+    ) external payable override nonReentrant returns (uint64 nonce) {
+        return _executeSignedIntent(intent, signature, feeToken, maxRelayerCharge, true);
+    }
+
+    function _executeSignedIntent(
+        TransferIntent calldata intent, bytes calldata signature, address feeToken, uint256 charge, bool feeSigned
+    ) private returns (uint64 nonce) {
         _requireNotPaused();
-        if (intent.router != address(this) || intent.chainId != block.chainid) {
-            revert IntentDomainMismatch();
-        }
-        if (intent.deadline < block.timestamp) revert IntentExpired(intent.deadline);
-        uint256 expectedNonce = intentNonce[intent.sender];
-        if (intent.nonce != expectedNonce) revert IntentNonceMismatch(expectedNonce, intent.nonce);
-        if (msg.value > intent.maxProviderBudget) revert ProviderBudgetExceeded();
-
-        if (OUTBOUND_PROVENANCE.recoverTransferIntent(intent, signature) != intent.sender) {
-            revert InvalidSignature();
-        }
+        uint256 expectedNonce = OUTBOUND_PROVENANCE.validateTransferIntent(
+            intent, signature, msg.value, feeToken, charge, feeSigned, msg.sender
+        );
         intentNonce[intent.sender] = expectedNonce + 1;
-
         OutboundRequest memory request = OutboundRequest({
-            token: intent.token,
-            amount: intent.amount,
-            route: intent.route,
-            destination: intent.destination,
-            destinationDecimals: intent.destinationDecimals,
-            minDestinationAmount: intent.minDestinationAmount
+            token: intent.token, amount: intent.amount, route: intent.route, destination: intent.destination,
+            destinationDecimals: intent.destinationDecimals, minDestinationAmount: intent.minDestinationAmount
         });
         nonce = _bridgeOut(request, intent.sender);
+        if (charge != 0) {
+            IERC20 token = IERC20(feeToken);
+            uint256 senderBefore = token.balanceOf(intent.sender);
+            uint256 relayerBefore = token.balanceOf(msg.sender);
+            token.safeTransferFrom(intent.sender, msg.sender, charge);
+            uint256 senderAfter = token.balanceOf(intent.sender);
+            uint256 relayerAfter = token.balanceOf(msg.sender);
+            if (senderAfter > senderBefore || senderBefore - senderAfter != charge
+                || relayerAfter < relayerBefore || relayerAfter - relayerBefore != charge) revert InvalidRelayerFee();
+            emit RelayerFeePaid(intent.sender, feeToken, msg.sender, charge);
+        }
         emit TransferIntentExecuted(intent.sender, intent.nonce, msg.sender);
     }
 
     /// @inheritdoc IHyperionRouter
     function hashTransferIntent(TransferIntent calldata intent) public view override returns (bytes32) {
         return OUTBOUND_PROVENANCE.hashTransferIntent(intent);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function hashTransferIntentWithRelayerFee(
+        TransferIntent calldata intent, address feeToken, uint256 maxRelayerCharge
+    ) external view override returns (bytes32) {
+        return OUTBOUND_PROVENANCE.hashTransferIntentWithRelayerFee(intent, feeToken, maxRelayerCharge);
     }
 
     function _bridgeOut(OutboundRequest memory request, address sender) private returns (uint64 nonce) {
