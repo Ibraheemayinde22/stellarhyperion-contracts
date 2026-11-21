@@ -12,7 +12,7 @@ import {
 import {Fixture} from "../Fixture.sol";
 
 contract RouterGasBudgetTest is Fixture {
-    uint256 private constant GAS_TOLERANCE_BPS = 2_500;
+    uint256 private constant GAS_TOLERANCE_BPS = 2500;
     uint256 private constant GOVERNANCE_ACTIONS = 16;
     uint256 private constant CLAIM_GROWTH = 32;
     uint256 private constant SETTLEMENT_BATCH = 10;
@@ -139,14 +139,18 @@ contract RouterGasBudgetTest is Fixture {
 
     function _claimRange(uint64 first, uint256 count) private pure returns (uint64[] memory claimIds) {
         claimIds = new uint64[](count);
-        for (uint256 i; i < count; ++i) claimIds[i] = first + uint64(i);
+        for (uint256 i; i < count; ++i) {
+            claimIds[i] = first + uint64(i);
+        }
     }
 
-    function _assertSettled(
-        ClaimSettlementResult[] memory results,
-        ClaimSettlementStatus expected
-    ) private pure {
-        for (uint256 i; i < results.length; ++i) assertEq(uint8(results[i].status), uint8(expected));
+    function _assertSettled(ClaimSettlementResult[] memory results, ClaimSettlementStatus expected)
+        private
+        pure
+    {
+        for (uint256 i; i < results.length; ++i) {
+            assertEq(uint8(results[i].status), uint8(expected));
+        }
     }
 
     function _report(string memory caseName, uint256 gasUsed, uint256 baseline) private {

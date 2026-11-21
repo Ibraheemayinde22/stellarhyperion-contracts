@@ -27,14 +27,14 @@ contract TokenRecoveryManager is ITokenRecoveryManager, ReentrancyGuard {
     bytes32 private constant DEFAULT_ADMIN_ROLE = bytes32(0);
     bytes32 private constant GUARDIAN_ROLE = keccak256("hyperion.guardian");
 
-    IHyperionRouter public immutable override ROUTER;
+    address public immutable override ROUTER;
     mapping(address token => uint256 amount) public override claimLiability;
     mapping(uint64 recoveryId => QueuedTokenRecovery recovery) private _recoveries;
     uint64 private _recoveryCount;
 
     constructor(address router) {
         if (router == address(0)) revert ZeroAddress();
-        ROUTER = IHyperionRouter(router);
+        ROUTER = router;
     }
 
     function recordClaim(address token, uint256 amount) external override onlyRouter {
@@ -54,13 +54,14 @@ contract TokenRecoveryManager is ITokenRecoveryManager, ReentrancyGuard {
         returns (uint64 id)
     {
         _requireAdmin();
-        if (recipient == address(0) || recipient == address(ROUTER)) revert ZeroAddress();
+        if (recipient == address(0) || recipient == ROUTER) revert ZeroAddress();
         if (amount == 0) revert InvalidAmount();
         if (amount > _surplus(token)) revert RecoveryExceedsSurplus();
 
         id = ++_recoveryCount;
-        uint64 eta = uint64(block.timestamp) + ROUTER.timelockDelay();
-        uint64 expiresAt = eta + ROUTER.GRACE_PERIOD();
+        IHyperionRouter router = IHyperionRouter(ROUTER);
+        uint64 eta = uint64(block.timestamp) + router.timelockDelay();
+        uint64 expiresAt = eta + router.GRACE_PERIOD();
         _recoveries[id] = QueuedTokenRecovery({
             id: id,
             token: token,
@@ -96,7 +97,7 @@ contract TokenRecoveryManager is ITokenRecoveryManager, ReentrancyGuard {
         if (recovery.amount > _surplus(recovery.token)) revert RecoveryExceedsSurplus();
 
         IERC20 token = IERC20(recovery.token);
-        uint256 routerBefore = token.balanceOf(address(ROUTER));
+        uint256 routerBefore = token.balanceOf(ROUTER);
         uint256 liability = claimLiability[recovery.token];
         if (routerBefore < liability || recovery.amount > routerBefore - liability) {
             revert RecoveryExceedsSurplus();
@@ -104,8 +105,10 @@ contract TokenRecoveryManager is ITokenRecoveryManager, ReentrancyGuard {
         uint256 recipientBefore = token.balanceOf(recovery.recipient);
 
         recovery.executed = true;
-        ROUTER.completeTokenRecovery(recovery.token, recovery.recipient, recovery.amount);
-        _requireExactDelta(token.balanceOf(address(ROUTER)), routerBefore, recovery.amount);
+        IHyperionRouter(ROUTER).completeTokenRecovery(
+            recovery.token, recovery.recipient, recovery.amount
+        );
+        _requireExactDelta(token.balanceOf(ROUTER), routerBefore, recovery.amount);
         _requireExactDelta(recipientBefore, token.balanceOf(recovery.recipient), recovery.amount);
         emit TokenRecovered(id, recovery.token, recovery.recipient, recovery.amount);
     }
@@ -125,10 +128,10 @@ contract TokenRecoveryManager is ITokenRecoveryManager, ReentrancyGuard {
 
     function _surplus(address token) private view returns (uint256) {
         if (token.code.length == 0) revert TokenRecoveryForbidden();
-        TokenConfig memory config = ROUTER.tokenConfig(token);
+        TokenConfig memory config = IHyperionRouter(ROUTER).tokenConfig(token);
         if (config.registered) revert TokenRecoveryForbidden();
 
-        uint256 balance = IERC20(token).balanceOf(address(ROUTER));
+        uint256 balance = IERC20(token).balanceOf(ROUTER);
         uint256 liability = claimLiability[token];
         if (balance < liability) revert RecoveryExceedsSurplus();
         return balance - liability;

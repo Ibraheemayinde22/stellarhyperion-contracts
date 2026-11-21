@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {RecoveryExceedsSurplus, TimelockNotQueued, TimelockNotReady, TokenRecoveryForbidden, Unauthorized} from "../../src/HyperionErrors.sol";
 import {
-    Origin,
-    OutboundRequest,
-    QueuedTokenRecovery,
-    RouteKind
-} from "../../src/HyperionTypes.sol";
+    RecoveryExceedsSurplus,
+    TimelockNotQueued,
+    TimelockNotReady,
+    TokenRecoveryForbidden,
+    Unauthorized
+} from "../../src/HyperionErrors.sol";
+import {Origin, OutboundRequest, QueuedTokenRecovery, RouteKind} from "../../src/HyperionTypes.sol";
 import {IHyperionRouter} from "../../src/interfaces/IHyperionRouter.sol";
 import {ITokenRecoveryManager} from "../../src/interfaces/ITokenRecoveryManager.sol";
 import {Fixture} from "../Fixture.sol";
@@ -33,15 +34,12 @@ contract RecoveryCallbackToken is ERC20 {
 
     function transfer(address to, uint256 amount) public override returns (bool) {
         OutboundRequest memory request;
-        (dispatchReentrySucceeded,) = address(target).call(
-            abi.encodeCall(IHyperionRouter.bridgeOut, (request))
-        );
+        (dispatchReentrySucceeded,) =
+            address(target).call(abi.encodeCall(IHyperionRouter.bridgeOut, (request)));
         (settlementReentrySucceeded,) =
             address(target).call(abi.encodeCall(IHyperionRouter.settleClaim, (uint64(1))));
-        (recoveryReentrySucceeded,) =
-            address(target).call(
-                abi.encodeCall(IHyperionRouter.completeTokenRecovery, (address(this), to, amount))
-            );
+        (recoveryReentrySucceeded,) = address(target)
+            .call(abi.encodeCall(IHyperionRouter.completeTokenRecovery, (address(this), to, amount)));
         return super.transfer(to, amount);
     }
 }
@@ -70,7 +68,11 @@ contract RouterRecoveryTest is Fixture {
 
         vm.expectEmit(true, true, true, true, address(recoveryManager));
         emit ITokenRecoveryManager.TokenRecoveryQueued(
-            1, address(extra), bob, 50, uint64(block.timestamp) + TIMELOCK,
+            1,
+            address(extra),
+            bob,
+            50,
+            uint64(block.timestamp) + TIMELOCK,
             uint64(block.timestamp) + TIMELOCK + 7 days
         );
         vm.prank(admin);
@@ -153,9 +155,9 @@ contract RouterRecoveryTest is Fixture {
         vm.prank(admin);
         recoveryManager.executeTokenRecovery(id);
 
-        assertFalse(token.dispatchReentrySucceeded);
-        assertFalse(token.settlementReentrySucceeded);
-        assertFalse(token.recoveryReentrySucceeded);
+        assertFalse(token.dispatchReentrySucceeded());
+        assertFalse(token.settlementReentrySucceeded());
+        assertFalse(token.recoveryReentrySucceeded());
         assertEq(token.balanceOf(address(router)), 60);
         assertEq(token.balanceOf(bob), 40);
         assertTrue(recoveryManager.queuedTokenRecovery(id).executed);
