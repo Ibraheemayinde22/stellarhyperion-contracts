@@ -21,7 +21,7 @@ import {
 } from "./amounts.js";
 import { tryParseStellarAddress, AddressKind } from "./addresses.js";
 import type { Asset, AssetIdentity } from "./registry/assets.js";
-import { ASSETS, assetByIdentity } from "./registry/assets.js";
+import { ASSETS, assetByIdentity, sameAssetIdentity } from "./registry/assets.js";
 import type { RouteKind } from "./routes.js";
 import {
   ROUTE_KINDS,
@@ -199,6 +199,8 @@ export interface RouterSnapshot {
   readonly tokenRegistered: boolean;
   readonly tokenEnabled: boolean;
   readonly tokenDecimals: number;
+  /** Identity of the token whose registration, decimals and flow limits were read. */
+  readonly tokenIdentity?: AssetIdentity;
   /** Per rail, in this chain's units for this asset. */
   readonly flowAvailable: Partial<Record<RouteKind, bigint>>;
   /** Per rail, whether the adapter says it can reach the destination chain. */
@@ -700,7 +702,13 @@ export function planQuoteForAsset(
     waitsOnAttestation: waitsOnAttestation(request.route),
     isCanonical: isCanonical(request.route),
   };
-  if (!asset?.routes.includes(request.route)) return base;
+  if (
+    !asset?.routes.includes(request.route) ||
+    snapshot.tokenIdentity === undefined ||
+    !sameAssetIdentity(snapshot.tokenIdentity, request.asset) ||
+    snapshot.tokenDecimals !== asset.decimals
+  )
+    return base;
   return planQuote(request, snapshot);
 }
 

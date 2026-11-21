@@ -9,3 +9,5 @@ paid-method evm/router bridgeOut
 paid-method evm/router bridgeOutBounded
 paid-method evm/cctp-adapter dispatch
 paid-method evm/axelar-adapter dispatch
+paid-method evm/router bridgeOutWithPermit
+paid-method evm/router bridgeOutWithRefundCredit

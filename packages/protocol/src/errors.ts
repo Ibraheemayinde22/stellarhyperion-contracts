@@ -129,6 +129,7 @@ export const EVM_ERROR_NAMES = [
   "ProtectedAsset",
   "ZeroAddress",
   "RefundFailed",
+  "NoRefundCredit",
   "ProviderBudgetExceeded",
   "AdapterMethodUnavailable",
   "RotationAlreadyPending",
@@ -160,10 +161,7 @@ export type ErrorFault =
 
 /** Stable recovery guidance for callers; unknown future errors are never retryable by default. */
 export type RecoveryClass =
-  | "transient"
-  | "user_correctable"
-  | "operator_action"
-  | "unknown_outcome";
+  "transient" | "user_correctable" | "operator_action" | "unknown_outcome";
 
 export interface ErrorHelp {
   /** One sentence, written for the person who hit it rather than the person who wrote it. */
@@ -455,7 +453,12 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
   },
   RefundFailed: {
     summary:
-      "Change was owed and the sender would not accept it. A contract that rejects a plain transfer cannot send through Hyperion.",
+      "The native refund or credit payment was rejected. Use the opt-in credit mode or an accepting recipient for credit withdrawal.",
+    fault: "input",
+    retryable: false,
+  },
+  NoRefundCredit: {
+    summary: "This account has no native refund credit to withdraw.",
     fault: "input",
     retryable: false,
   },

@@ -29,6 +29,7 @@ method pool_for
 method quote_gas
 method rail_open
 method receive
+method revalidate_asset
 method route
 method set_admin
 method set_validator

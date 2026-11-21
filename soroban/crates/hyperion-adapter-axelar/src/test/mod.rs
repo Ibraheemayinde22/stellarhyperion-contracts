@@ -10,6 +10,6 @@ mod outbound;
 mod paid;
 mod setup;
 
-mod diagnostics;
 mod capabilities;
+mod diagnostics;
 mod maintenance;

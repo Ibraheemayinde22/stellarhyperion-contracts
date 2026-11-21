@@ -108,6 +108,12 @@ null; they never approximate. `planQuoteForAsset` and `planQuotesForAsset` price
 and an identity the registry does not carry, or a rail the representation is not registered for,
 comes back `TokenNotRegistered` rather than priced against whatever token the snapshot held.
 
+Identity-scoped quotes require `snapshot.tokenIdentity` to name the token whose registration,
+decimals and flow limits were read, and require its decimals to match the resolved registry asset.
+An unqualified or mismatched snapshot is blocked. Legacy quotes without a requested identity
+remain available. Supply the token identity when migrating to the new quote APIs; registry
+membership alone cannot establish which token an arbitrary snapshot describes.
+
 ### Legacy symbol lookup
 
 `assetOn(chain, symbol)` and `tokenFor(set, chain, symbol)` remain, because plenty of code only

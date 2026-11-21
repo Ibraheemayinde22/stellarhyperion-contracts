@@ -10,6 +10,8 @@ status gated
 method EXECUTE_SUCCESS
 method GAS_SERVICE
 method ITS
+method MAX_DESTINATION_CHAIN_LENGTH
+method MAX_DESTINATION_STRKEY_LENGTH
 method MIN_ROTATION_DELAY
 method ROUTER
 method acceptOwnership
@@ -17,11 +19,17 @@ method applyPeerRotation
 method cancelPeerRotation
 method chainForAxelarName
 method checkDispatch
+method checkTokenMapping
+method developmentGateOpen
+method developmentValidationEvidence
 method dispatch
+method dispatchWithSender
 method executeWithInterchainToken
 method inspectInboundNote
 method inspectOutboundNote
+method inspectPaidDispatchTargets
 method linkToken
+method managerTypeOfId
 method owner
 method peerOf
 method pendingOwner
@@ -32,12 +40,16 @@ method removePeer
 method renounceOwnership
 method requiredNoteVersion
 method route
+method setDestinationCapability
+method setDevelopmentGate
 method setPeer
 method setPeerEnabled
 method setRequiredNoteVersion
 method supportsChain
 method tokenIdOf
+method tokenOfId
 method topUpGas
+method topUpIntent
 method transferOwnership
 
 # Routes this surface can carry, as protocol slugs.

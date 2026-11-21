@@ -440,6 +440,7 @@ function snapshot(overrides: Partial<RouterSnapshot> = {}): RouterSnapshot {
     tokenRegistered: true,
     tokenEnabled: true,
     tokenDecimals: 6,
+    tokenIdentity: assetIdentity(NATIVE_BASE),
     flowAvailable: all(1_000_000_000n),
     chainSupported: all(true),
     ...overrides,
@@ -453,6 +454,30 @@ describe("quoting a named asset representation", () => {
     strkey: G_ADDR,
     destinationDecimals: 6,
   } as const;
+
+  it("blocks missing or mismatched token observations before quoting any rail", () => {
+    const unqualified = { ...snapshot() };
+    delete unqualified.tokenIdentity;
+    for (const observed of [
+      unqualified,
+      snapshot({ tokenIdentity: assetIdentity(ITS_BASE) }),
+      snapshot({ tokenDecimals: 18 }),
+    ]) {
+      const quote = planQuoteForAsset(
+        { ...baseRequest, route: RouteKind.Cctp, asset: assetIdentity(NATIVE_BASE) },
+        observed,
+        registry,
+      );
+      expect(quote.reason).toBe(QuoteBlocker.TokenNotRegistered);
+      const batch = quoteBatch([baseRequest.amount], {
+        ...baseRequest,
+        snapshot: observed,
+        asset: assetIdentity(NATIVE_BASE),
+        registry,
+      });
+      expect(batch[0]!.available).toBe(false);
+    }
+  });
 
   it("prices the native representation on CCTP", () => {
     const quote = planQuoteForAsset(
@@ -500,7 +525,7 @@ describe("quoting a named asset representation", () => {
   it("plans every rail while leaving the unregistered ones blocked", () => {
     const quotes = planQuotesForAsset(
       { ...baseRequest, asset: assetIdentity(ITS_BASE) },
-      snapshot(),
+      snapshot({ tokenIdentity: assetIdentity(ITS_BASE) }),
       registry,
     );
     expect(quotes.length).toBe(4);
@@ -531,7 +556,7 @@ describe("quoting a named asset representation", () => {
     const results = quoteBatch([1_000_000n], {
       strkey: G_ADDR,
       destinationDecimals: 6,
-      snapshot: snapshot(),
+      snapshot: snapshot({ tokenIdentity: assetIdentity(ITS_BASE) }),
       asset: assetIdentity(ITS_BASE),
       registry,
     });

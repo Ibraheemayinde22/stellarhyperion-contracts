@@ -13,11 +13,13 @@ method apply_peer_rotation
 method cancel_peer_rotation
 method chain_for
 method check_dispatch
+method check_token_mapping
 method dispatch
 method dispatch_from
 method execute_with_interchain_token
 method gas_token
 method get_config
+method get_destination_capability
 method get_link
 method get_pending_rotation
 method get_required_note_version
@@ -31,10 +33,12 @@ method link_chain
 method maintain_storage
 method manager_type_for
 method map_token
+method paid_dispatch_auth_spec
 method propose_peer_rotation
 method rail_flow_limit
 method set_admin
 method set_chain_enabled
+method set_destination_capability
 method set_required_note_version
 method sweep
 method token_for

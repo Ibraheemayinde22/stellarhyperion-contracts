@@ -26,6 +26,8 @@ method adapter
 method bridgeIn
 method bridgeOut
 method bridgeOutBounded
+method bridgeOutWithPermit
+method bridgeOutWithRefundCredit
 method cancelAction
 method cancelActionWithReason
 method checkDestination
@@ -53,6 +55,7 @@ method quote
 method quoteAll
 method quoteV2
 method railReceiver
+method refundCredits
 method renounceRole
 method revokeRole
 method routeEnabled
@@ -66,6 +69,7 @@ method tokenConfig
 method treasury
 method unpause
 method unpauseRoute
+method withdrawRefundCredit
 
 # Routes this surface can carry, as protocol slugs.
 route cctp
@@ -74,3 +78,6 @@ route axelar-its
 # Entry points that attach a provider payment.
 paid-method bridgeOut
 paid-method bridgeOutBounded
+
+paid-method bridgeOutWithPermit
+paid-method bridgeOutWithRefundCredit

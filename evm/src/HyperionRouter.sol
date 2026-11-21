@@ -23,9 +23,9 @@ import {
     InvalidWindow,
     LimitNotRaised,
     MuxedNotSupported,
+    NoRefundCredit,
     NotRailReceiver,
     ProviderBudgetExceeded,
-    NoRefundCredit,
     RailNotConfigured,
     RecipientNotReady,
     RefundFailed,
@@ -96,6 +96,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     uint256 public constant MAX_CLAIMS_PER_BATCH = 50;
     /// @notice Maximum inbound amount representable at the router/provider boundary.
     uint256 public constant MAX_SUPPORTED_INBOUND_AMOUNT = type(uint128).max;
+    // Opt-in refunds must leave enough gas to record credit when a receiver consumes its stipend.
+    uint256 private constant REFUND_CALL_GAS = 30_000;
     using SafeERC20 for IERC20;
     using FlowGuard for FlowWindow;
 
@@ -242,13 +244,12 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         whenNotPaused
         returns (uint64 nonce)
     {
-        return _bridgeOut(request, false);
+        return _bridgeOut(request);
     }
 
     /// @inheritdoc IHyperionRouter
-    /// @dev The beneficiary is always the caller. A failed call to the caller's fallback cannot
-    /// strand or redirect the credit, and withdrawal remains protected by the router's reentrancy
-    /// guard.
+    /// @dev Try the same native refund as the legacy entrypoint, with bounded callback gas.
+    /// Only a failed refund becomes credit, always owned by the caller.
     function bridgeOutWithRefundCredit(OutboundRequest calldata request)
         external
         payable
@@ -257,16 +258,27 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         whenNotPaused
         returns (uint64 nonce)
     {
-        return _bridgeOut(request, true);
+        return _bridgeOut(request);
     }
 
     /// @inheritdoc IHyperionRouter
     function withdrawRefundCredit() external override nonReentrant {
+        _withdrawRefundCredit(payable(msg.sender));
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function withdrawRefundCredit(address payable recipient) external override nonReentrant {
+        _withdrawRefundCredit(recipient);
+    }
+
+    function _withdrawRefundCredit(address payable recipient) private {
+        if (recipient == address(0)) revert ZeroAddress();
         uint256 amount = refundCredits[msg.sender];
         if (amount == 0) revert NoRefundCredit();
         refundCredits[msg.sender] = 0;
-        (bool sent,) = payable(msg.sender).call{value: amount}("");
+        (bool sent,) = recipient.call{value: amount}("");
         if (!sent) revert RefundFailed();
+        emit RefundCreditWithdrawn(msg.sender, recipient, amount);
     }
 
     /// @inheritdoc IHyperionRouter
@@ -296,10 +308,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     {
         if (msg.value > maxProviderBudget) revert ProviderBudgetExceeded();
         _requireNotPaused();
-        return _bridgeOut(request, false);
+        return _bridgeOut(request);
     }
 
-    function _bridgeOut(OutboundRequest calldata request, bool creditRefund) private returns (uint64 nonce) {
+    function _bridgeOut(OutboundRequest calldata request) private returns (uint64 nonce) {
         OutboundPlan memory plan = _planOutbound(request);
         // Both public wrappers share this body; only the additive bounded wrapper requires
         // the new adapter validator. Internal calls retain the original public selector.
@@ -349,15 +361,20 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
         // Rails quote destination gas optimistically and refund the difference. Keeping it would
         // be a second, undeclared fee that moves with a gas market the sender never looked at.
-        uint256 leftover = address(this).balance - balanceBefore;
-        if (leftover != 0) {
-            if (creditRefund) {
-                refundCredits[msg.sender] += leftover;
-                emit RefundCreditRecorded(msg.sender, leftover);
-            } else {
-                (bool sent,) = payable(msg.sender).call{value: leftover}("");
-                if (!sent) revert RefundFailed();
+        _refundNative(address(this).balance - balanceBefore);
+    }
+
+    function _refundNative(uint256 amount) private {
+        if (amount == 0) return;
+        if (msg.sig == this.bridgeOutWithRefundCredit.selector) {
+            (bool sent,) = payable(msg.sender).call{value: amount, gas: REFUND_CALL_GAS}("");
+            if (!sent) {
+                refundCredits[msg.sender] += amount;
+                emit RefundCreditRecorded(msg.sender, amount);
             }
+        } else {
+            (bool sent,) = payable(msg.sender).call{value: amount}("");
+            if (!sent) revert RefundFailed();
         }
     }
 

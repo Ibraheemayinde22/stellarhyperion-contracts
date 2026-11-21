@@ -5,7 +5,7 @@ import {
   floorToRepresentable,
 } from "../amounts.js";
 import { tryParseStellarAddress, AddressKind } from "../addresses.js";
-import { ASSETS, assetByIdentity } from "../registry/assets.js";
+import { ASSETS, assetByIdentity, sameAssetIdentity } from "../registry/assets.js";
 import type { RouteKind } from "../routes.js";
 import { ROUTE_KINDS, carriesPayload, isCanonical, waitsOnAttestation } from "../routes.js";
 import { MAX_QUOTE_AMOUNT, QuoteBlocker, bestQuote, planInverseQuote } from "../quotes.js";
@@ -88,7 +88,13 @@ export function quoteBatch(
       staticBlocker = QuoteBlocker.TokenNotRegistered;
     } else if (!snapshot.tokenEnabled) {
       staticBlocker = QuoteBlocker.TokenDisabled;
-    } else if (requestedAsset !== null && !resolvedAsset?.routes.includes(route)) {
+    } else if (
+      requestedAsset !== null &&
+      (!resolvedAsset?.routes.includes(route) ||
+        snapshot.tokenIdentity === undefined ||
+        !sameAssetIdentity(snapshot.tokenIdentity, requestedAsset) ||
+        snapshot.tokenDecimals !== resolvedAsset.decimals)
+    ) {
       staticBlocker = QuoteBlocker.TokenNotRegistered;
     } else if (tokenDecimalsInvalid) {
       staticBlocker = QuoteBlocker.NotRepresentable;

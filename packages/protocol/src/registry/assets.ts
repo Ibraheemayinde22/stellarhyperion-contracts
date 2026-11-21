@@ -409,9 +409,20 @@ export function assetIdentity(asset: Asset): AssetIdentity {
 /** A stable key for maps, logs and cache entries. EVM addresses compare case insensitively. */
 export function assetIdentityKey(identity: AssetIdentity): string {
   if (identity.family === "evm") {
-    return `evm:${identity.chain}:${identity.representation}:${identity.address.toLowerCase()}`;
+    return JSON.stringify([
+      identity.family,
+      identity.chain,
+      identity.representation,
+      identity.address.toLowerCase(),
+    ]);
   }
-  return `stellar:${identity.chain}:${identity.representation}:${identity.code}:${identity.issuer}`;
+  return JSON.stringify([
+    identity.family,
+    identity.chain,
+    identity.representation,
+    identity.code,
+    identity.issuer,
+  ]);
 }
 
 export function sameAssetIdentity(left: AssetIdentity, right: AssetIdentity): boolean {

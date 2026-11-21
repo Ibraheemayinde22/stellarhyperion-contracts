@@ -197,10 +197,20 @@ interface IHyperionRouter {
     event ConfigChanged(address treasury, uint16 feeBps, uint64 timelockDelay, uint64 flowWindow);
 
     /// @notice A native refund could not be delivered and was recorded for the sender.
+    /// @param beneficiary The caller whose direct native refund failed.
+    /// @param amount The retained native remainder.
     event RefundCreditRecorded(address indexed beneficiary, uint256 amount);
+
+    /// @notice The beneficiary withdrew their native refund credit to their selected recipient.
+    /// @param beneficiary The original credit owner authorizing withdrawal.
+    /// @param recipient The native-currency recipient selected by that owner.
+    /// @param amount The credit paid out.
+    event RefundCreditWithdrawn(address indexed beneficiary, address indexed recipient, uint256 amount);
 
     /// @notice Dispatch while recording an undeliverable native refund for the sender.
     /// @dev This is opt-in. `bridgeOut` retains its legacy reverting-refund behavior.
+    /// @param request The unchanged token, amount, rail, destination, and slippage intent.
+    /// @return nonce The outbound nonce.
     function bridgeOutWithRefundCredit(OutboundRequest calldata request)
         external
         payable
@@ -208,6 +218,12 @@ interface IHyperionRouter {
 
     /// @notice Withdraw the caller's previously recorded native refund credit.
     function withdrawRefundCredit() external;
+
+    /// @notice Withdraw the caller's credit to a recipient they authorize.
+    /// @dev Enables recovery for beneficiaries whose own receive function always rejects native currency.
+    /// A failed delivery reverts and preserves the caller's credit.
+    /// @param recipient A nonzero native-currency recipient selected by the original beneficiary.
+    function withdrawRefundCredit(address payable recipient) external;
 
     /// @notice Send `request.amount` of a token to another chain.
     /// @dev Pull, then fee, then floor, then hand off. The fee comes off the raw amount and the
