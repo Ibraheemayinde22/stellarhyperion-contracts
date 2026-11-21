@@ -128,6 +128,11 @@ note "verifying the chain against the record"
 ( cd "$EVM_DIR" && forge script script/Verify.s.sol --rpc-url "$RPC" --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (Everything|BAD|WARN|Mismatches)' || die "Verify"
 
+note "checking the versioned malformed-message corpus"
+node script/malformed-message-corpus.mjs >/tmp/hyperion-malformed-corpus.json \
+  || die "malformed-message corpus"
+echo "  corpus: $(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync("/tmp/hyperion-malformed-corpus.json")); console.log(x.cases.length+" cases")')"
+
 note "sending one real transfer"
 ( cd "$EVM_DIR" && forge script script/Smoke.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (quote available|sent|fee to treasury|What the rail|The hook)|^    (amount burned|destination domain|mint recipient|hook)' || die "Smoke"

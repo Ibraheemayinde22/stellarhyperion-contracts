@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AddressKind, STRKEY_LEN_MUXED, STRKEY_LEN_PLAIN } from "../src/addresses.js";
 import { asciiToBytes, concatBytes, fromHex, toHex } from "../src/bytes.js";
@@ -20,6 +21,17 @@ import {
 import { C_ADDR, EVM_RECIPIENT, G_ADDR, G_KEY, MUXED_ID, M_ADDR } from "./fixtures.js";
 
 const NONCE = 0x0102030405060708n;
+
+const corpus = readFileSync(
+  new URL("../../../testdata/malformed-message-corpus.tsv", import.meta.url),
+  "utf8",
+)
+  .split(/\r?\n/)
+  .filter((line) => line.length > 0 && !line.startsWith("#"))
+  .map((line) => {
+    const [id, direction, payload, expected] = line.split("|");
+    return { id: id!, direction: direction!, payload: payload!, expected: expected! };
+  });
 
 describe("note version negotiation", () => {
   it("uses the highest supported common version at or above the requirement", () => {
@@ -47,6 +59,15 @@ function packedOutbound(recipient: string, nonce: bigint): Uint8Array {
 }
 
 describe("outbound notes, which arrive from Stellar", () => {
+  it.each(corpus.filter((row) => row.direction === "outbound"))("classifies corpus case $id", (row) => {
+    try {
+      decodeOutboundNote(row.payload as `0x${string}`);
+      expect(row.expected, row.id).toBe("ok");
+    } catch (error) {
+      expect(String(error), row.id).toMatch(new RegExp(row.expected));
+    }
+  });
+
   it("is a version, an address and a counter", () => {
     const payload = packedOutbound(EVM_RECIPIENT, NONCE);
     expect(payload.length).toBe(OUTBOUND_NOTE_LEN);

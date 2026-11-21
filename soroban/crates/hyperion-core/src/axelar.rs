@@ -638,6 +638,7 @@ mod tests {
     use crate::address::AddressKind;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Env, String};
+    use std::vec::Vec;
 
     /// Real strkeys with real checksums, the same ones the strkey module is tested against.
     const G_ADDR: &str = "GA5ZYIIVYDX5GRF2BKEQD2Y47ZCPG3HX3PUUNPVQ5ZECB57MJG7RLVNR";
@@ -1234,5 +1235,47 @@ mod tests {
             inspect_auth_tree_snapshot(&baseline, &candidate),
             Err(PrivilegeExpansion::GasAmountMismatch)
         );
+    }
+
+    #[test]
+    fn malformed_message_corpus_matches_the_wire_decoder() {
+        let env = Env::default();
+        for line in include_str!("../../../../testdata/malformed-message-corpus.tsv").lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('|').collect();
+            assert_eq!(fields.len(), 4, "malformed corpus row: {line}");
+            if fields[1] != "outbound" {
+                continue;
+            }
+            let payload = decode_hex(&env, fields[2]).unwrap();
+            let result = OutboundNote::decode(&env, &payload);
+            match fields[3] {
+                "ok" => assert!(result.is_ok(), "{}: {result:?}", fields[0]),
+                expected => {
+                    let error = result.expect_err(fields[0]);
+                    assert_eq!(format!("{error:?}"), expected, "{}", fields[0]);
+                }
+            }
+        }
+    }
+
+    fn decode_hex(env: &Env, value: &str) -> Result<Bytes, ()> {
+        let value = value.strip_prefix("0x").ok_or(())?;
+        if value.len() % 2 != 0 {
+            return Err(());
+        }
+        let mut bytes = Vec::with_capacity(value.len() / 2);
+        let mut chars = value.as_bytes().chunks_exact(2);
+        for pair in &mut chars {
+            let high = (pair[0] as char).to_digit(16).ok_or(())? as u8;
+            let low = (pair[1] as char).to_digit(16).ok_or(())? as u8;
+            bytes.push((high << 4) | low);
+        }
+        if !chars.remainder().is_empty() {
+            return Err(());
+        }
+        Ok(Bytes::from_slice(env, &bytes))
     }
 }
