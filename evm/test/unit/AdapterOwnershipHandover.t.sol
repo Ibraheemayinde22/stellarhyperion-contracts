@@ -25,7 +25,7 @@ contract AdapterOwnershipHandoverTest is Fixture {
         MockIts its = new MockIts();
         its.setRegistered(TOKEN_ID, address(usdc));
         messenger = new MockTokenMessenger();
-        cctp = new CctpAdapter(address(router), address(messenger), address(usdc), admin);
+        cctp = new CctpAdapter(address(router), address(messenger), address(1), address(usdc), admin);
         axelar = new AxelarItsAdapter(address(router), address(its), address(new MockGasService()), admin);
         vm.startPrank(admin);
         cctp.setLane(STELLAR, STELLAR_DOMAIN, C_KEY);

@@ -15,14 +15,15 @@ import {
     NothingMinted,
     RailNotConfigured,
     RefundFailed,
+    ReplayedMessage,
     TimelockDelayOutOfRange,
     TimelockNotQueued,
     TimelockNotReady,
     TokenNotMapped,
     Unauthorized,
-    UnsupportedMessageVersion,
-    UnknownChain,
     UnexpectedRailContract,
+    UnknownChain,
+    UnsupportedMessageVersion,
     WrongDomain,
     ZeroAddress
 } from "../HyperionErrors.sol";
@@ -32,7 +33,6 @@ import {IHyperionRouter} from "../interfaces/IHyperionRouter.sol";
 import {IRailAdapter} from "../interfaces/IRailAdapter.sol";
 import {HyperionNotes} from "../libraries/HyperionNotes.sol";
 import {StellarAddress} from "../libraries/StellarAddress.sol";
-import {Origin, RouteKind} from "../HyperionTypes.sol";
 
 /// @title Hyperion over Circle's CCTP V2
 /// @author dotmantissa
@@ -205,27 +205,26 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         bool isClean
     );
 
+    /// @notice Emitted when the configured CCTP message transmitter changes.
+    event MessageTransmitterSet(address indexed transmitter);
+
     constructor(
         address router,
         address tokenMessenger,
-        address messageTransmitter,
+        address messageTransmitter_,
         address usdc,
         address owner_
     ) Ownable(owner_) {
         if (
-            router == address(0) || tokenMessenger == address(0)
-                || messageTransmitter == address(0) || usdc == address(0)
+            router == address(0) || tokenMessenger == address(0) || messageTransmitter_ == address(0)
+                || usdc == address(0)
         ) {
-    /// @notice Emitted when the configured CCTP message transmitter changes.
-    event MessageTransmitterSet(address indexed transmitter);
-
-    constructor(address router, address tokenMessenger, address usdc, address owner_) Ownable(owner_) {
-        if (router == address(0) || tokenMessenger == address(0) || usdc == address(0)) {
             revert ZeroAddress();
         }
         ROUTER = router;
         TOKEN_MESSENGER = ITokenMessengerV2(tokenMessenger);
-        MESSAGE_TRANSMITTER = IMessageTransmitterV2(messageTransmitter);
+        MESSAGE_TRANSMITTER = IMessageTransmitterV2(messageTransmitter_);
+        messageTransmitter = messageTransmitter_;
         USDC = usdc;
     }
 
@@ -332,7 +331,7 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
     /// @notice Receive an attested CCTP burn and deliver it through the Hyperion router.
     /// @dev All message-boundary checks happen before minting. Circle owns attestation verification;
     /// Hyperion owns domain, peer, recipient, token, hook and replay identity checks.
-    function receive(bytes calldata message, bytes calldata attestation)
+    function receiveMessage(bytes calldata message, bytes calldata attestation)
         external
         returns (uint64 claimId)
     {
@@ -376,15 +375,14 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
 
         bytes32 burnMessageSender = _readBytes32(message, 248);
         bytes32 remoteSender = _remoteSender[sourceDomain];
-        if (remoteSender == bytes32(0)) remoteSender = sourceLane.mintRecipient;
         if (
-            headerSender == bytes32(0) || burnMessageSender == bytes32(0)
-                || headerSender != remoteSender || burnMessageSender != remoteSender
+            headerSender == bytes32(0) || burnMessageSender == bytes32(0) || headerSender != remoteSender
+                || burnMessageSender != remoteSender
         ) {
             revert UnexpectedRailContract();
         }
 
-        bytes memory hook = abi.encodePacked(message[376:]);
+        bytes calldata hook = message[376:];
         (address payoutRecipient, uint64 sourceNonce) = HyperionNotes.decodeOutboundNote(hook);
 
         uint256 before = IERC20(USDC).balanceOf(address(this));
@@ -396,13 +394,16 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
 
         IERC20(USDC).forceApprove(ROUTER, minted);
         _processed[replayKey] = true;
-        claimId = IHyperionRouter(ROUTER).bridgeIn(
-            RouteKind.Cctp,
-            USDC,
-            minted,
-            payoutRecipient,
-            Origin({chain: sourceChain, nonce: sourceNonce, messageId: replayId, sender: burnMessageSender})
-        );
+        claimId = IHyperionRouter(ROUTER)
+            .bridgeIn(
+                RouteKind.Cctp,
+                USDC,
+                minted,
+                payoutRecipient,
+                Origin({
+                    chain: sourceChain, nonce: sourceNonce, messageId: replayId, sender: burnMessageSender
+                })
+            );
         IERC20(USDC).forceApprove(ROUTER, 0);
     }
 
@@ -439,7 +440,6 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         lane.enabled = true;
         _sourceChain[domain] = chain;
         _sourceLanes[domain] = lane;
-        _remoteSender[domain] = mintRecipient;
         emit LaneConfigured(chain, domain, mintRecipient);
         emit LaneEnabled(chain, true);
     }

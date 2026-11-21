@@ -59,8 +59,9 @@ contract CapabilitySnapshotTest is Fixture {
     }
 
     function testCctpAdapterAdvertisesItsRecordedRoute() public {
-        CctpAdapter cctp =
-            new CctpAdapter(address(router), address(new MockTokenMessenger()), address(usdc), admin);
+        CctpAdapter cctp = new CctpAdapter(
+            address(router), address(new MockTokenMessenger()), address(1), address(usdc), admin
+        );
         string[] memory routes = _values(CCTP_SNAPSHOT, "route");
         assertEq(routes.length, 1, "the CCTP adapter serves exactly one route");
         assertEq(uint8(cctp.route()), uint8(_routeKind(routes[0])), "CCTP adapter route drifted");
