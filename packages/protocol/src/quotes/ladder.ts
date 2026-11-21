@@ -16,6 +16,7 @@ import {
   type ProviderAddressPair,
 } from "../registry/assets.js";
 import type { ChainKey } from "../chains.js";
+import { boundedNumber, validatePlanningSnapshot } from "./validation.js";
 import {
   RAIL_DESTINATION_GAS_ESTIMATES,
   type BatchQuoteResult,
@@ -266,6 +267,10 @@ export function quoteBatchWithSharedFlow(
   tiers: readonly bigint[],
   params: QuoteParams,
 ): SharedFlowBatchResult {
+  validatePlanningSnapshot(params.snapshot);
+  boundedNumber(params.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  if (tiers.some((tier) => typeof tier !== "bigint"))
+    throw new TypeError("tiers must contain bigint amounts");
   const remaining: Partial<Record<RouteKind, bigint>> = { ...params.snapshot.flowAvailable };
   const consumed: Partial<Record<RouteKind, bigint>> = {};
   const results: BatchQuoteResult[] = [];
@@ -273,6 +278,7 @@ export function quoteBatchWithSharedFlow(
   for (const tier of tiers) {
     const snapshot: typeof params.snapshot = { ...params.snapshot, flowAvailable: remaining };
     const result = quoteBatch([tier], { ...params, snapshot })[0];
+    if (result === undefined) throw new Error("single-tier quote did not return a result");
     results.push(result);
     if (result.bestQuote === null || result.winningRail === null) continue;
     const route = result.winningRail;

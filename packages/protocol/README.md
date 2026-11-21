@@ -64,6 +64,40 @@ Existing `QuoteRequest` and quote results remain compatible; consumers opting in
 must provide the explicit reserve unit and migrate UI copy to distinguish a destination-token
 reserve from gas units.
 
+## Snapshot persistence and bounded planning
+
+`serializeQuoteSnapshot` and `parseQuoteSnapshot` preserve bigint amounts as canonical decimal
+strings with schema version 1, explicit source and destination units, and capture time in Unix
+seconds. The source label is always `router-snapshot`. Parsing validates booleans, route keys,
+fee and precision bounds, integer widths and optional token identity before returning typed data.
+Consumers should treat these values as historical observations and refresh chain state before
+signing. Unsupported versions and malformed fields fail with a field path.
+
+`maximumSend` finds the largest source request within the supplied balance, rounded net flow
+allowance and protocol amount bound. Its search takes at most 128 integer steps, even for balances
+wider than a machine word. `requestAmount` is the input to dispatch; `quote.grossAmount` is the
+actual debit after precision flooring. `precisionDust` stays with the sender and `balanceDust`
+reports the balance beyond the request. A blocked result has `executable: false`, with no quote.
+`searchBoundedQuotes` adds a source maximum, destination minimum and explicit allowed routes,
+returning a reason for every excluded rail in enum order.
+
+`quoteBatchWithSharedFlow` plans transfers in input order against one virtual budget. Only a
+successful winning rail consumes its net amount; excluded items consume nothing. The result
+includes consumed and remaining amounts per rail, and does not mutate the caller's snapshot.
+`quoteBatch` continues to price independent tiers against the original headroom.
+
+`parseRouteHealthSnapshot` accepts external measurement records with explicit scope, provider
+and Unix-second timestamps. `applyRouteHealth` can only restrict existing chain support; healthy
+records cannot activate an unsupported route. Missing, unknown, degraded or unavailable records
+block a rail. Supply `{ scope, provider, now, maxAge }` to require a matching, fresh measurement.
+Without that context, every supplied provider for a route must be healthy. These measurements
+describe provider observations, not live prices, transfer authorization or deployment readiness.
+
+These additions preserve existing quote APIs and carry no runtime dependencies. Snapshot and
+health schemas are newly versioned; consumers adopting them must supply units and time explicitly.
+The active deployment remains Stellar Testnet outbound ITS/CCTP. EVM-source and other rail use
+still require separately validated activation evidence.
+
 ## Asset identity, and why a symbol is not one
 
 A ticker names an asset the way a surname names a person. `USDC` on Base can be Circle's native
