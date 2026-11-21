@@ -13,6 +13,26 @@
 # Usage: script/stellar/execute.sh
 source "$(dirname "$0")/lib.sh"
 require_tools
+if is_dry_run; then
+  RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
+  [ -f "$RECORD" ] || die "no record at $RECORD"
+  node -e '
+const fs=require("fs");
+const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+const key=Object.keys(d.networks??{})[0];
+const n=d.networks?.[key];
+if(!key||!n?.router||!Array.isArray(n.queuedActionIds)||n.queuedActionIds.length===0)process.exit(1);
+const operations=n.queuedActionIds.map((id,i)=>({
+  phase:"execute",
+  actionId:String(id),
+  description:n.queuedActions?.[i]??"unnamed",
+  requiresTimelockMaturity:true,
+  signed:false
+}));
+process.stdout.write(JSON.stringify({mode:"dry-run",signed:false,submitted:false,record:process.argv[1],operations},null,2)+"\n");
+' "$RECORD" || die "record cannot produce an execution plan"
+  exit 0
+fi
 require_identity
 
 JOURNAL="${HYPERION_JOURNAL:-$RECORD_DIR/stellar-$NETWORK-operations.json}"

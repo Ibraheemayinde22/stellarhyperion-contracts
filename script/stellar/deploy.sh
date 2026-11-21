@@ -23,6 +23,34 @@
 #   HYPERION_PEER_CHAIN=arc-testnet script/stellar/deploy.sh
 source "$(dirname "$0")/lib.sh"
 require_tools
+if is_dry_run; then
+  for wasm in \
+    "$WASM_DIR/hyperion_router.wasm" \
+    "$WASM_DIR/hyperion_adapter_cctp.wasm" \
+    "$WASM_DIR/hyperion_adapter_axelar.wasm"; do
+    [ -f "$wasm" ] || die "missing deployment artifact: $wasm"
+  done
+  for hash_name in ROUTER_HASH CCTP_HASH AXELAR_HASH; do
+    if [ -n "${!hash_name:-}" ] && ! [[ "${!hash_name}" =~ ^[0-9a-f]{64}$ ]]; then
+      die "unknown code identity in $hash_name"
+    fi
+  done
+  node -e '
+const operations=[
+  {phase:"upload",artifact:"hyperion_router.wasm",signed:false},
+  {phase:"upload",artifact:"hyperion_adapter_cctp.wasm",signed:false},
+  {phase:"upload",artifact:"hyperion_adapter_axelar.wasm",signed:false},
+  {phase:"deploy",contract:"router",signed:false},
+  {phase:"initialize",contract:"router",signed:false},
+  {phase:"deploy",contract:"adapters",signed:false},
+  {phase:"link",contract:"adapters",signed:false},
+  {phase:"queue",contract:"router",timelock:true,signed:false},
+  {phase:"execute",contract:"router",requiresTimelockMaturity:true,signed:false}
+];
+process.stdout.write(JSON.stringify({mode:"dry-run",signed:false,submitted:false,operations},null,2)+"\n");
+'
+  exit 0
+fi
 require_identity
 
 # Public-only operation journal. Existing uncertain intents are reused instead of resubmitted.

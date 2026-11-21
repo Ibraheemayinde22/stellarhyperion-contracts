@@ -77,6 +77,26 @@ Actionable warnings for consumers:
 
 Compatibility and migration: existing consumers that read only the active record are unaffected. Consumers that enumerate archive files must parse `status` and `successor` before use. Tools that previously accepted the archived router without checking status must be updated to refuse it; this is a breaking change for those tools and is listed here so it can be planned.
 
+## Dry-run deployment and activation plans
+
+Deployment and activation scripts expose `HYPERION_DRY_RUN=1` for a durable, unsigned plan:
+
+```bash
+HYPERION_DRY_RUN=1 script/stellar/deploy.sh
+HYPERION_DRY_RUN=1 script/stellar/link.sh
+HYPERION_DRY_RUN=1 script/stellar/execute.sh
+HYPERION_DRY_RUN=1 script/stellar/verify.sh
+HYPERION_DRY_RUN=1 HYPERION_RECORD=/tmp/phase1.json \
+  node script/stellar/write-record.mjs /tmp/phase1.plan.json
+```
+
+Dry-run mode validates required WASM files or deployment records, refuses unknown code identities,
+and emits ordered operations with `signed: false` and `submitted: false`. It never calls
+`stellar keys address`, reads secret material, signs, uploads, deploys, queues or executes.
+Execution plans preserve provider linking before router execution and mark every action as requiring
+the existing timelock maturity. The EVM verification script is development-only and can also use
+`HYPERION_DRY_RUN=1`; no live EVM activation is enabled by this plan.
+
 ## Verified acceptance transfer
 
 A real CLI wallet signature through the frontend application helpers sent 0.1 USDC. Stellar confirmed source transaction `b95ca748421ea4774dea6a08edebc3ad3a301244034cd10f1209f3cea234862d`. The protocol fee was 0.0003 USDC; 0.0997 USDC arrived on Sepolia in transaction `0x1fdb81fcdec18071adbdf47e359f0b9e4adc6be685c1e3bfcfb39689485037b6`. Independent RPC reads confirmed the recipient token balance and successful receipt; the backend verified matching ITS/payment events and persisted delivered status. The live acceptance test passed.

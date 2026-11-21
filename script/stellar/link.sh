@@ -19,6 +19,28 @@
 #   script/stellar/link.sh
 source "$(dirname "$0")/lib.sh"
 require_tools
+if is_dry_run; then
+  RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
+  [ -f "$RECORD" ] || die "no record at $RECORD"
+  node -e '
+const fs=require("fs");
+const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+const key=Object.keys(d.networks??{})[0];
+const n=d.networks?.[key];
+if(!key||!n?.adapters)process.exit(1);
+const ops=[];
+if(n.adapters.cctp){
+  if(!process.env.CCTP_PEER_DOMAIN||!process.env.CCTP_DESTINATION_CALLER||!process.env.CCTP_PEER_BURN_TOKEN)process.exit(2);
+  ops.push({phase:"link",adapter:"cctp",operation:"link_domain",signed:false},{phase:"link",adapter:"cctp",operation:"map_asset",signed:false});
+}
+if(n.adapters["axelar-its"]){
+  if(!process.env.AXELAR_PEER_CHAIN||!process.env.AXELAR_PEER_ADDRESS||!process.env.AXELAR_TOKEN_ID)process.exit(3);
+  ops.push({phase:"link",adapter:"axelar-its",operation:"link_chain",signed:false},{phase:"link",adapter:"axelar-its",operation:"map_token",signed:false});
+}
+process.stdout.write(JSON.stringify({mode:"dry-run",signed:false,submitted:false,operations:ops},null,2)+"\n");
+' "$RECORD" || die "link inputs are incomplete; dry-run plan refused"
+  exit 0
+fi
 require_identity
 
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"

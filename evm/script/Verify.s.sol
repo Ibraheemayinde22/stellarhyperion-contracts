@@ -30,6 +30,14 @@ contract Verify is DeployConfig {
     uint256 internal problems;
 
     function run() external {
+        if (vm.envOr("HYPERION_DRY_RUN", false)) {
+            console.log("mode                 dry-run");
+            console.log("signed               false");
+            console.log("submitted            false");
+            console.log("operation            verify live record");
+            console.log("signer access        none");
+            return;
+        }
         problems = 0;
         string memory path = vm.envOr(
             "HYPERION_RECORD", string.concat("deployments/evm-", vm.toString(block.chainid), "-phase1.json")

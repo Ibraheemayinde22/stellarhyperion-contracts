@@ -277,6 +277,22 @@ export async function runCli(args = process.argv.slice(2)) {
   if (!out || out.length > 4096 || extra.length)
     throw new Error("usage: write-record.mjs <path>");
   const record = await buildRecord();
+  if (process.env.HYPERION_DRY_RUN === "1") {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          mode: "dry-run",
+          signed: false,
+          submitted: false,
+          operations: [{ phase: "write-record", path: resolve(out), signed: false }],
+          record,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return record;
+  }
   mkdirSync(dirname(resolve(out)), { recursive: true });
   writeFileSync(resolve(out), `${JSON.stringify(record, null, 2)}\n`);
   process.stdout.write(`validated and written: ${out}\n`);

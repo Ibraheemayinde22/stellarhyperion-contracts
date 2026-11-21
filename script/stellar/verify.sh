@@ -17,6 +17,22 @@
 # Usage: script/stellar/verify.sh
 source "$(dirname "$0")/lib.sh"
 require_tools
+if is_dry_run; then
+  RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
+  [ -f "$RECORD" ] || die "no record at $RECORD"
+  node -e '
+const fs=require("fs");
+const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+if(!d.networks||Object.keys(d.networks).length!==1)process.exit(1);
+const operations=[
+  {phase:"verify",target:"record-schema",signed:false},
+  {phase:"verify",target:"live-router",signed:false},
+  {phase:"verify",target:"rails-and-assets",signed:false}
+];
+process.stdout.write(JSON.stringify({mode:"dry-run",signed:false,submitted:false,operations},null,2)+"\n");
+' "$RECORD" || die "record cannot produce a verification plan"
+  exit 0
+fi
 
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
 [ -f "$RECORD" ] || die "no record at $RECORD"
