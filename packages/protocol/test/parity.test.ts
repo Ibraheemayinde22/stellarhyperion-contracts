@@ -41,6 +41,8 @@ const packageRoot = resolve(here, "..");
 const evmRoot = resolve(packageRoot, "..", "..", "evm");
 const sorobanRoot = resolve(packageRoot, "..", "..", "soroban");
 const coreSrc = join(sorobanRoot, "crates", "hyperion-core", "src");
+const repoRoot = resolve(evmRoot, "..");
+const malformedCorpus = join(repoRoot, "testdata", "malformed-message-corpus.tsv");
 const sorobanRouterSrc = join(sorobanRoot, "crates", "hyperion-router", "src");
 const sorobanCctpSrc = join(sorobanRoot, "crates", "hyperion-adapter-cctp", "src");
 const sorobanAxelarSrc = join(sorobanRoot, "crates", "hyperion-adapter-axelar", "src");
@@ -49,6 +51,30 @@ const evmTest = join(evmRoot, "test");
 function read(path: string): string {
   return readFileSync(path, "utf8");
 }
+
+describe("the versioned malformed-message corpus", () => {
+  it("has unique cases for truncation, trailing bytes, versions and wide values", () => {
+    const rows = read(malformedCorpus)
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => line.split("|"));
+    const ids = rows.map(([id]) => id);
+    expect(new Set(ids).size).toBe(rows.length);
+    expect(rows.map(([id]) => id)).toEqual([
+      "outbound-valid",
+      "outbound-wide-nonce",
+      "outbound-truncated",
+      "outbound-trailing-byte",
+      "outbound-unsupported-version",
+    ]);
+    expect(
+      rows.every(
+        ([, direction, payload, expected]) =>
+          direction === "outbound" && /^0x(?:[0-9a-f]{2})+$/i.test(payload ?? "") && expected,
+      ),
+    ).toBe(true);
+  });
+});
 
 function bracedBlock(source: string, anchor: RegExp, label: string): string {
   const match = anchor.exec(source);
@@ -435,6 +461,45 @@ describe("the documented inbound trust surface", () => {
     expect(() => {
       requireEvidence("function setLane() external", /onlyOwner/, "fixture authority setter");
     }).toThrow("fixture authority setter trust-surface evidence changed");
+  });
+});
+
+describe("the deterministic provider fault fixtures", () => {
+  it("matches the shared exact-width schedule vectors used by Rust and Solidity", () => {
+    const mask = (1n << 64n) - 1n;
+    const mix = (input: bigint) => {
+      let value = input ^ (input >> 30n);
+      value = (value * 0xbf58476d1ce4e5b9n) & mask;
+      value ^= value >> 27n;
+      value = (value * 0x94d049bb133111ebn) & mask;
+      return value ^ (value >> 31n);
+    };
+    const rows = read(join(repoRoot, "testdata", "provider-fault-vectors.tsv"))
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0 && !line.startsWith("#"));
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      const [seed, dispatch, inbound] = row.split("|");
+      expect(mix(BigInt(seed!) ^ 0x4453504154434848n), row).toBe(BigInt(dispatch!));
+      expect(mix(BigInt(seed!) ^ 0x494e424f554e4448n), row).toBe(BigInt(inbound!));
+    }
+  });
+  it("keeps dispatch and inbound stages explicit on both local harnesses", () => {
+    const rust = read(join(coreSrc, "fault.rs"));
+    const routerTests = read(join(sorobanRouterSrc, "test", "mod.rs"));
+    const solidity = read(join(evmTest, "Fixture.sol"));
+    const rehearsal = read(resolve(packageRoot, "..", "..", "script", "anvil-e2e.sh"));
+
+    expect(rust).toMatch(/pub enum FaultStage\s*\{\s*Dispatch\s*=\s*0,\s*Inbound\s*=\s*1/s);
+    expect(rust).toMatch(/pub const fn from_seed\(seed: u64\)/);
+    expect(rust).toMatch(/pub fn next\(&mut self, stage: FaultStage\)/);
+    expect(routerTests).toMatch(/before_dispatch\(&mut self\)/);
+    expect(routerTests).toMatch(/before_inbound\(&mut self\)/);
+    expect(solidity).toMatch(/PROVIDER_STAGE_DISPATCH\s*=\s*0/);
+    expect(solidity).toMatch(/PROVIDER_STAGE_INBOUND\s*=\s*1/);
+    expect(solidity).toMatch(/function _nextProviderFault\(uint8 stage\)/);
+    expect(rehearsal).toMatch(/HYPERION_FAULT_SEED=\"\$\{HYPERION_FAULT_SEED:-156\}\"/);
+    expect(rehearsal).toMatch(/deterministic provider fault schedule/);
   });
 });
 

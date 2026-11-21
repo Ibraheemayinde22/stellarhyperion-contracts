@@ -38,19 +38,22 @@ contract CapabilitySnapshotTest is Fixture {
 
     function testPaidEntryPointsNamedInTheSnapshotAreCallable() public view {
         string[] memory paid = _values(ROUTER_SNAPSHOT, "paid-method");
-        assertEq(paid.length, 4, "unexpected number of paid entry points");
+        assertEq(paid.length, 5, "unexpected number of paid entry points");
         assertTrue(_contains(paid, "bridgeOut"), "bridgeOut is not declared");
         assertTrue(_contains(paid, "bridgeOutBounded"), "bridgeOutBounded is not declared");
         assertTrue(_contains(paid, "bridgeOutWithPermit"), "bridgeOutWithPermit is not declared");
         assertTrue(_contains(paid, "bridgeOutWithRefundCredit"), "bridgeOutWithRefundCredit is not declared");
+        assertTrue(_contains(paid, "bridgeOutWithIntent"), "bridgeOutWithIntent is not declared");
         // A selector reference stops compiling if the entry point is removed, which is the whole
         // point of naming them here as well as in the snapshot.
         bytes4 legacy = HyperionRouter.bridgeOut.selector;
         bytes4 bounded = HyperionRouter.bridgeOutBounded.selector;
         bytes4 permit = HyperionRouter.bridgeOutWithPermit.selector;
         bytes4 credit = HyperionRouter.bridgeOutWithRefundCredit.selector;
+        bytes4 intent = HyperionRouter.bridgeOutWithIntent.selector;
         assertTrue(
-            legacy != bytes4(0) && bounded != bytes4(0) && permit != bytes4(0) && credit != bytes4(0),
+            legacy != bytes4(0) && bounded != bytes4(0) && permit != bytes4(0) && credit != bytes4(0)
+                && intent != bytes4(0),
             "paid selectors are empty"
         );
     }

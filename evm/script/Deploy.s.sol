@@ -5,6 +5,7 @@ import {console} from "forge-std/console.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {ActionKind, AdminAction, RouteKind} from "../src/HyperionTypes.sol";
+import {OutboundProvenance} from "../src/OutboundProvenance.sol";
 import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
 import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
 
@@ -47,6 +48,7 @@ contract Deploy is DeployConfig {
     Queued[] internal queued;
 
     function run() external {
+        requireCompatibleExecutionTarget();
         RouterParams memory params = routerParams();
         RailParams memory rails = railParams();
         TokenParams memory token = tokenParams();
@@ -187,7 +189,23 @@ contract Deploy is DeployConfig {
         string memory key = "hyperion";
 
         vm.serializeUint(key, "chainId", block.chainid);
+        CompatibilityProfile memory profile =
+            _verifiedArtifactProfile(vm.getArtifactPathByCode(type(HyperionRouter).creationCode));
+        vm.serializeString(key, "evmVersion", profile.evmVersion);
+        vm.serializeString(key, "solcVersion", profile.compilerVersion);
+        vm.serializeUint(key, "optimizerRuns", profile.optimizerRuns);
+        vm.serializeBool(key, "viaIR", profile.viaIR);
         vm.serializeAddress(key, "router", address(router));
+        // The router constructor creates exactly one support child at its first CREATE nonce.
+        address provenanceStore =
+            address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"01")))));
+        require(
+            provenanceStore.code.length != 0
+                && OutboundProvenance(provenanceStore).ROUTER() == address(router),
+            "router provenance child identity differs"
+        );
+        vm.serializeAddress(key, "provenanceStore", provenanceStore);
+        vm.serializeBytes32(key, "provenanceStoreCodeHash", provenanceStore.codehash);
         vm.serializeAddress(key, "deployer", deployer);
         vm.serializeAddress(key, "admin", params.admin);
         vm.serializeAddress(key, "guardian", params.guardian);

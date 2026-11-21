@@ -17,3 +17,5 @@ hyperion-core = { workspace = true }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 proptest = "1"
+hyperion-adapter-cctp = { path = "../hyperion-adapter-cctp" }
+hyperion-adapter-axelar = { path = "../hyperion-adapter-axelar" }

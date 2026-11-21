@@ -27,6 +27,20 @@ AUTH_SNAPSHOT_FIXTURE_PATHS = (
     "script/stellar/test/inspect-axelar-auth.test.mjs",
 )
 
+# Exact SHA-256 digests independently recomputed from the pinned host source and
+# verified by verify_vendor_provenance.py. These are public content identifiers,
+# not a general exemption for hexadecimal values or provenance files.
+VENDOR_PROVENANCE_PATH = "soroban/vendor/provenance.json"
+PINNED_VENDOR_SOURCE_HASHES = (
+    "f4ebe6be192c96de1f9668767239b5dd8f3a272ca3cecebfee1fc67268f4354a",
+    "8307d3aeaf9c1a7c8199d2107714aff9c298ae299475ec4470ad28ead446e91b",
+    "f3ae7c92ba3f2e9b80cfee73b1b6eba1b3edffbf2c7d92ee1ec649f618617690",
+    "21256191032a43cd2584275eebae7e034db553ee6c90c16d6ba5e5e2392eb69a",
+    "9a4f2d3589e16a163155ba0c1fd0eeee1263867084d904c3ed623ce499eebcde",
+    "7cbdd4ebe2d9e1bcb6aff43af6ae682b3bf7d92e33b1695ec825ea7c418f9790",
+    "6bdb8121687af7f413d0766d27f058ff77523a8e2666f5e99ab5261e46a84447",
+)
+
 
 def verify_public_account(value):
     """Version 48 denotes a public Ed25519 account; signing seeds use version 144."""
@@ -67,6 +81,8 @@ def configuration():
     path = re.escape(FIXTURE_PATH)
     contract_values = "|".join(PUBLIC_CONTRACT_FIXTURES + SYNTHETIC_CONTRACT_FIXTURES)
     contract_paths = "|".join(re.escape(path) for path in AUTH_SNAPSHOT_FIXTURE_PATHS)
+    vendor_hashes = "|".join(PINNED_VENDOR_SOURCE_HASHES)
+    vendor_path = re.escape(VENDOR_PROVENANCE_PATH)
     return f"""[extend]
 useDefault = true
 
@@ -85,6 +101,13 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^({contract_values})$''']
 paths = ['''^({contract_paths})$''']
+
+[[rules.allowlists]]
+description = "Seven exact independently verified public vendored-source SHA-256 digests"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^({vendor_hashes})$''']
+paths = ['''^{vendor_path}$''']
 """
 
 

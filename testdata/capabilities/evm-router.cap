@@ -11,6 +11,7 @@ contract HyperionRouter
 status gated
 # Public callable methods, sorted.
 method DEFAULT_ADMIN_ROLE
+method EIP712_DOMAIN_TYPEHASH
 method GRACE_PERIOD
 method GUARDIAN_ROLE
 method MAX_CLAIMS_PER_BATCH
@@ -20,12 +21,15 @@ method MAX_SUPPORTED_INBOUND_AMOUNT
 method MAX_TIMELOCK_DELAY
 method MIN_FLOW_WINDOW
 method MIN_TIMELOCK_DELAY
+method TRANSFER_INTENT_TYPEHASH
 method actionCancelled
 method actionCount
 method adapter
+method adapterCodeHash
 method bridgeIn
 method bridgeOut
 method bridgeOutBounded
+method bridgeOutWithIntent
 method bridgeOutWithPermit
 method bridgeOutWithRefundCredit
 method cancelAction
@@ -42,8 +46,11 @@ method flowWindow
 method getRoleAdmin
 method grantRole
 method hasRole
+method hashTransferIntent
+method intentNonce
 method lowerTokenFlowLimit
 method outboundNonce
+method outboundRecord
 method pause
 method pauseRoute
 method paused
@@ -78,6 +85,6 @@ route axelar-its
 # Entry points that attach a provider payment.
 paid-method bridgeOut
 paid-method bridgeOutBounded
-
+paid-method bridgeOutWithIntent
 paid-method bridgeOutWithPermit
 paid-method bridgeOutWithRefundCredit

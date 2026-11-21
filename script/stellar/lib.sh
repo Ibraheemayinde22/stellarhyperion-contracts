@@ -44,18 +44,36 @@ require_identity() {
 
 deployer_address() { stellar keys address "$IDENTITY"; }
 
+# Every signing command in phase one/two reserves its public intent before launching the CLI.
+# A successful receipt replays only the original public output; uncertainty requires reconciliation.
+journal_stellar() {
+  local mode="$1"; shift
+  node "$CONTRACTS_ROOT/script/stellar/operation-journal.mjs" "$mode" "$JOURNAL" \
+    "${JOURNAL_PHASE:?journal phase is required}" "$NETWORK" "$(deployer_address)" -- "$@"
+}
+
+send_stellar() {
+  if [ -n "${JOURNAL:-}" ]; then journal_stellar run "$@"; else stellar "$@"; fi
+}
+
+confirmed_invoke() {
+  local id="$1"; shift
+  [ -n "${JOURNAL:-}" ] && \
+    [ "$(journal_stellar lookup contract invoke --id "$id" --source-account "$IDENTITY" --network "$NETWORK" --send yes -- "$@")" = "confirmed" ]
+}
+
 # Upload a wasm and echo its hash. Idempotent on chain: uploading the same bytes twice costs a fee
 # and yields the same hash, which is why the hash is what gets written down rather than a receipt.
 upload() {
   local wasm="$1"
   [ -f "$wasm" ] || die "missing $wasm; run script/stellar/build.sh first"
-  stellar contract upload --wasm "$wasm" --source-account "$IDENTITY" --network "$NETWORK" 2>/dev/null \
+  send_stellar contract upload --wasm "$wasm" --source-account "$IDENTITY" --network "$NETWORK" \
     | tr -d '[:space:]'
 }
 
 deploy_from_hash() {
   local hash="$1"
-  stellar contract deploy --wasm-hash "$hash" --source-account "$IDENTITY" --network "$NETWORK" 2>/dev/null \
+  send_stellar contract deploy --wasm-hash "$hash" --source-account "$IDENTITY" --network "$NETWORK" \
     | tr -d '[:space:]'
 }
 
@@ -63,13 +81,19 @@ deploy_from_hash() {
 # the only thing worth reading when a deployment stops.
 invoke() {
   local id="$1"; shift
-  stellar contract invoke --id "$id" --source-account "$IDENTITY" --network "$NETWORK" --send yes -- "$@"
+  send_stellar contract invoke --id "$id" --source-account "$IDENTITY" --network "$NETWORK" --send yes -- "$@"
 }
 
 # Invoke read only. No fee, no signature, no state change.
 read_only() {
   local id="$1"; shift
   stellar contract invoke --id "$id" --source-account "$IDENTITY" --network "$NETWORK" --is-view -- "$@" 2>/dev/null
+}
+
+# Only callers that classify the error capture diagnostics; they never print endpoint details.
+read_only_diagnostic() {
+  local id="$1"; shift
+  stellar contract invoke --id "$id" --source-account "$IDENTITY" --network "$NETWORK" --is-view -- "$@"
 }
 
 # Read one top level key out of a JSON file. node rather than jq, because jq is not installed
@@ -107,7 +131,18 @@ ROUTE_ALLBRIDGE=3
 # deploy another one, so every step here asks the chain what it already did.
 is_initialized() {
   local id="$1"
-  read_only "$id" get_config >/dev/null 2>&1
+  local errfile
+  errfile=$(mktemp)
+  if read_only_diagnostic "$id" get_config >/dev/null 2>"$errfile"; then
+    rm -f "$errfile"
+    return 0
+  fi
+  if node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8");process.exit(/NotInitialized|Error\(Contract, #2\)/.test(s)?0:1)' "$errfile"; then
+    rm -f "$errfile"
+    return 1
+  fi
+  rm -f "$errfile"
+  die "initialization state for $id is unavailable; no initialization will be submitted"
 }
 
 # Reuse a contract id if one was handed in, otherwise deploy from a hash.

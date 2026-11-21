@@ -11,3 +11,4 @@ paid-method evm/cctp-adapter dispatch
 paid-method evm/axelar-adapter dispatch
 paid-method evm/router bridgeOutWithPermit
 paid-method evm/router bridgeOutWithRefundCredit
+paid-method evm/router bridgeOutWithIntent

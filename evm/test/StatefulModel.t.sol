@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {

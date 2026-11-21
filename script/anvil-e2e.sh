@@ -22,10 +22,15 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-export PATH="$HOME/.foundry/bin:$PATH"
+# Respect a caller's reviewed toolchain; the default install is a fallback.
+export PATH="$PATH:$HOME/.foundry/bin"
 
 RPC="${RPC:-http://127.0.0.1:8545}"
 EVM_DIR="evm"
+HYPERION_FAULT_SEED="${HYPERION_FAULT_SEED:-156}"
+export HYPERION_FAULT_SEED
+node -e 'const seed=process.env.HYPERION_FAULT_SEED;if(!/^[0-9]+$/.test(seed)||BigInt(seed)>((1n<<64n)-1n))process.exit(1)' \
+  || { printf 'HYPERION_FAULT_SEED must be an unsigned 64-bit integer\n' >&2; exit 1; }
 
 note() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mfailed: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -63,6 +68,10 @@ TREASURY=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 json() { node -e 'const f=require("fs");process.stdout.write(String(JSON.parse(f.readFileSync(process.argv[1],"utf8"))[process.argv[2]]))' "$1" "$2"; }
 
 note "deploying stand in rails"
+note "using deterministic provider fault schedule (seed ${HYPERION_FAULT_SEED})"
+( cd "$EVM_DIR" && forge test --match-contract RouterProviderFaultTest --fuzz-seed "$HYPERION_FAULT_SEED" ) \
+  > /tmp/hyperion-provider-faults.log 2>&1 \
+  || { tail -30 /tmp/hyperion-provider-faults.log; die "seeded provider rollback/retry rehearsal"; }
 ( cd "$EVM_DIR" && mkdir -p deployments && forge script script/LocalRails.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" >/tmp/hyperion-rails.log 2>&1 ) \
   || { tail -30 /tmp/hyperion-rails.log; die "LocalRails"; }
 
@@ -158,6 +167,11 @@ AXELAR_SLUG=$(awk '$1 == "route" { print $2; exit }' testdata/capabilities/evm-a
 [ "$(cast call "$AXELAR" 'route()(uint8)' --rpc-url "$RPC")" = "$(route_kind "$AXELAR_SLUG")" ] \
   || die "the deployed Axelar adapter does not report its recorded route"
 echo "  adapters report the routes the snapshots record"
+
+note "checking the versioned malformed-message corpus"
+node script/malformed-message-corpus.mjs >/tmp/hyperion-malformed-corpus.json \
+  || die "malformed-message corpus"
+echo "  corpus: $(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync("/tmp/hyperion-malformed-corpus.json")); console.log(x.cases.length+" cases")')"
 
 note "sending one real transfer"
 ( cd "$EVM_DIR" && forge script script/Smoke.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \
