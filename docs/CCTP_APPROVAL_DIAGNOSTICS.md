@@ -17,3 +17,11 @@ For `Unavailable`, allowance zero is a placeholder and `is_clean` / `isClean` is
 All existing dispatch signatures, burn parameters, destination and fee/finality validation rules, storage keys, event schemas and error numbers remain unchanged. Diagnostics and their event are additive to the released adapter interfaces. Existing finality policy still permits thresholds 1 through 2000 on Soroban. EVM still uses finalized threshold 2000, fee zero and its pre-burn `BurnSubmitted` event.
 
 These checks do not authorize deployment or replace Circle's attestation verification. Activation and upgrade rehearsal remain subject to the existing testnet gates. The hostile fixtures test messenger failure after token movement and record mutation, inconsistent approvals, failed/nonzero cleanup, unchanged source balances and router fees/flow/nonce, and retry after the fault is removed. They do not claim production Circle integration.
+
+## Inbound compatibility and migration
+
+Inbound CCTP is a separately commissioned boundary, not activation of the active Stellar Testnet outbound route. A receiving adapter must verify CCTP wire version, destination domain, source-domain lane, remote peer sender, TokenMessenger recipient, burn version, burn token, mint recipient, exact minted amount and hook shape before router delivery. The full 32-byte CCTP nonce remains the replay identity; a u64 display nonce is informational only.
+
+The EVM receiver expects an explicit message-transmitter and a configured source lane. Remote sender words are set independently of outbound lane configuration and must be rotated through owner-controlled configuration plus independent validation. Existing CCTP lane storage and outbound dispatch signatures are not proof that an inbound peer is valid. Failed recipient payouts are not returned as attestation failures: the router parks a fixed-recipient claim and the attested delivery remains replay-protected.
+
+Provider upgrades must preserve the CCTP v2 offsets and exact uint256/int128 amount conversion documented in `hyperion-core::cctp`. Any provider change that alters those offsets, recipient semantics, replay nonce identity or transmitter interface requires a wire-format fixture, parity test and deployment migration. It must not silently reuse the active outbound lane as authorization for inbound receipt.
