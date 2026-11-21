@@ -92,7 +92,9 @@ function set(networks: Record<string, unknown>): Record<string, unknown> {
 describe("reading a record that holds together", () => {
   it("models route activation independently from registry and deployment presence", () => {
     const parsed = parseDeploymentSet(set({ "stellar-testnet": stellarRecord() }));
-    expect(hasActivatedRouteCapability(parsed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(false);
+    expect(hasActivatedRouteCapability(parsed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+      false,
+    );
 
     const capabilities = parseRouteCapabilitySet({
       revision: 1,
@@ -108,9 +110,9 @@ describe("reading a record that holds together", () => {
         },
       ],
     });
-    expect(routeCapabilityFor(capabilities, "stellar-testnet", "USDC", RouteKind.Cctp)?.status).toBe(
-      "active",
-    );
+    expect(
+      routeCapabilityFor(capabilities, "stellar-testnet", "USDC", RouteKind.Cctp)?.status,
+    ).toBe("active");
 
     const activated = { ...parsed, routeCapabilities: capabilities };
     expect(hasActivatedRouteCapability(activated, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
@@ -118,13 +120,7 @@ describe("reading a record that holds together", () => {
     );
     expect(supportsPaidDispatch(activated, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(true);
     expect(
-      supportsRecipientKind(
-        activated,
-        "stellar-testnet",
-        "USDC",
-        RouteKind.Cctp,
-        "muxed-account",
-      ),
+      supportsRecipientKind(activated, "stellar-testnet", "USDC", RouteKind.Cctp, "muxed-account"),
     ).toBe(true);
   });
   it("reads an EVM deployment", () => {

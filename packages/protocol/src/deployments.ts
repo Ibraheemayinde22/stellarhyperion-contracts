@@ -576,8 +576,7 @@ export function routeCapabilityFor(
   if (capabilitySet === undefined) return null;
   return (
     capabilitySet.records.find(
-      (record) =>
-        record.chain === chain && record.symbol === symbol && record.route === route,
+      (record) => record.chain === chain && record.symbol === symbol && record.route === route,
     ) ?? null
   );
 }
@@ -620,7 +619,9 @@ export function supportsRecipientKind(
   recipientKind: RouteRecipientKind,
 ): boolean {
   if (!hasActivatedRouteCapability(set, chain, symbol, route)) return false;
-  return routeCapabilityFor(set, chain, symbol, route)?.recipientKinds.includes(recipientKind) === true;
+  return (
+    routeCapabilityFor(set, chain, symbol, route)?.recipientKinds.includes(recipientKind) === true
+  );
 }
 
 /**

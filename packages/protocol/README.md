@@ -199,15 +199,17 @@ alone means that a route is activated. Deployment sets can carry a separate
 ```json
 {
   "revision": 1,
-  "records": [{
-    "revision": 1,
-    "chain": "stellar-testnet",
-    "symbol": "USDC",
-    "route": "cctp",
-    "status": "active",
-    "paidDispatch": true,
-    "recipientKinds": ["account", "contract", "muxed-account"]
-  }]
+  "records": [
+    {
+      "revision": 1,
+      "chain": "stellar-testnet",
+      "symbol": "USDC",
+      "route": "cctp",
+      "status": "active",
+      "paidDispatch": true,
+      "recipientKinds": ["account", "contract", "muxed-account"]
+    }
+  ]
 }
 ```
 
