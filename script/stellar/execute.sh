@@ -15,6 +15,8 @@ source "$(dirname "$0")/lib.sh"
 require_tools
 require_identity
 
+JOURNAL="${HYPERION_JOURNAL:-$RECORD_DIR/stellar-$NETWORK-operations.json}"
+
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
 [ -f "$RECORD" ] || die "no record at $RECORD; run script/stellar/deploy.sh first"
 
