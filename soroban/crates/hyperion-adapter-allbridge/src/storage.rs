@@ -3,7 +3,9 @@
 use hyperion_core::HyperionError;
 use soroban_sdk::{contracttype, Address, BytesN, Env, String};
 
-use crate::types::{AssetLink, ChainLane, Config, OutboundRecord, PendingValidator, ValidatorEpoch};
+use crate::types::{
+    AssetLink, ChainLane, Config, OutboundRecord, PendingValidator, ValidatorEpoch,
+};
 
 /// Extend when there is less than a day of life left, and extend to thirty days.
 pub const BUMP_THRESHOLD: u32 = 17_280;
@@ -196,7 +198,9 @@ pub fn validator_epoch(env: &Env) -> Option<ValidatorEpoch> {
 }
 
 pub fn set_validator_epoch(env: &Env, value: &ValidatorEpoch) {
-    env.storage().instance().set(&DataKey::ValidatorEpoch, value);
+    env.storage()
+        .instance()
+        .set(&DataKey::ValidatorEpoch, value);
     env.storage().instance().extend_ttl(BUMP_THRESHOLD, BUMP_TO);
 }
 
@@ -205,7 +209,9 @@ pub fn pending_validator(env: &Env) -> Option<PendingValidator> {
 }
 
 pub fn set_pending_validator(env: &Env, value: &PendingValidator) {
-    env.storage().instance().set(&DataKey::PendingValidator, value);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingValidator, value);
     env.storage().instance().extend_ttl(BUMP_THRESHOLD, BUMP_TO);
 }
 
@@ -214,11 +220,16 @@ pub fn clear_pending_validator(env: &Env) {
 }
 
 pub fn emergency_disabled(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::EmergencyDisabled).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyDisabled)
+        .unwrap_or(false)
 }
 
 pub fn set_emergency_disabled(env: &Env, value: bool) {
-    env.storage().instance().set(&DataKey::EmergencyDisabled, &value);
+    env.storage()
+        .instance()
+        .set(&DataKey::EmergencyDisabled, &value);
     env.storage().instance().extend_ttl(BUMP_THRESHOLD, BUMP_TO);
 }
 
@@ -229,7 +240,9 @@ pub fn outbound(env: &Env, nonce: u64) -> Option<OutboundRecord> {
 pub fn set_outbound(env: &Env, record: &OutboundRecord) {
     let key = DataKey::Outbound(record.nonce);
     env.storage().persistent().set(&key, record);
-    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TO);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TO);
 }
 
 pub fn is_processed(env: &Env, message_id: &BytesN<32>) -> bool {

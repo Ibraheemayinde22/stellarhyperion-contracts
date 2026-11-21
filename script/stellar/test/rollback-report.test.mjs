@@ -1,231 +1,373 @@
 import { test } from "node:test";
+import { createServer } from "node:http";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import {
+  buildReport,
+  fetchLiveEvidence,
+  parseArgs,
+  validateRecord,
+  validateRpcUrl,
+} from "../rollback-report.mjs";
+import { cliCodec } from "../restore-plan.mjs";
+import { validateStorageMigration } from "../record-evidence.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(HERE, "../../..");
-const SCRIPT = path.join(REPO_ROOT, "script/stellar/rollback-report.mjs");
-const ACTIVE_RECORD = path.join(REPO_ROOT, "deployments/stellar-testnet-phase1.json");
-const ARCHIVED_RECORD = path.join(
-  REPO_ROOT,
-  "deployments/archive/stellar-testnet-2026-10-01.json",
-);
+const ACTIVE = resolve("deployments/stellar-testnet-phase1.json");
+const ARCHIVED = resolve("deployments/archive/stellar-testnet-2026-10-01.json");
+const SCRIPT = resolve("script/stellar/rollback-report.mjs");
+const original = JSON.parse(readFileSync(ACTIVE, "utf8"));
+const record = () => structuredClone(original);
+const data = (value) => value.networks["stellar-testnet"];
+const cli = (args) =>
+  spawnSync(process.execPath, [SCRIPT, ...args], {
+    encoding: "utf8",
+    timeout: 15000,
+    maxBuffer: 1048576,
+  });
+const status = {
+  current_version: 3,
+  target_version: 3,
+  migration_pending: false,
+  migrated_transfers: "0",
+  migrated_claims: "0",
+  total_transfers: "0",
+  total_claims: "0",
+};
 
-// ---------------------------------------------------------------------------
-// Import the core functions directly for unit testing (no CLI subprocess).
-// ---------------------------------------------------------------------------
-
-// We re-implement the two pure functions here so the test file has no dynamic
-// import side-effects from the CLI argument parsing block in the script.
-
-/** Mirror of storageMigrationVerdict from rollback-report.mjs */
-function storageMigrationVerdict(schemaVersion) {
-  const MIGRATION_VERSION_FLOOR = 3;
-  if (typeof schemaVersion !== "number") {
-    return {
-      rollbackSupported: null,
-      reason: "schema version is not available; RPC read required to determine migration state",
-    };
-  }
-  if (schemaVersion >= MIGRATION_VERSION_FLOOR) {
-    return {
-      rollbackSupported: false,
-      reason:
-        `storage schema is v${schemaVersion}. ` +
-        `The v${schemaVersion} migration rewrites per-token outstanding liabilities into a layout ` +
-        `that pre-migration WASM cannot decode. Reverting the router WASM would yield incorrect ` +
-        `liability totals and must not be attempted. ` +
-        `To recover from a faulty upgrade, deploy a corrected WASM forward through the normal ` +
-        `admin timelock (queue_action → execute_action after the delay) rather than reverting to ` +
-        `the previous hash.`,
-    };
-  }
-  if (schemaVersion === 2) {
-    return {
-      rollbackSupported: false,
-      reason:
-        "storage schema is v2. The v2 migration adds a fixed migration-state cursor " +
-        "that pre-v2 WASM does not recognise. Reverting the router WASM would leave " +
-        "that cursor in storage and prevent correct initialization of the migration state " +
-        "on a future upgrade attempt.",
-    };
-  }
+function liveFixture(options = {}) {
+  let reads = 0;
+  let invocations = 0;
+  const calls = [];
+  const router = data(original).router;
+  const wasm = data(original).wasmHashes.router;
+  const encoded = cliCodec.encode("LedgerEntryData", {
+    contract_data: {
+      ext: "v0",
+      contract: router,
+      key: "ledger_key_contract_instance",
+      durability: "persistent",
+      val: { contract_instance: { executable: { wasm }, storage: null } },
+    },
+  });
   return {
-    rollbackSupported: true,
-    reason:
-      `storage schema is v${schemaVersion}. No irreversible migration has completed; ` +
-      `the WASM can be reverted through the normal admin timelock.`,
+    get invocations() {
+      return invocations;
+    },
+    calls,
+    rpc: async (method, params) => {
+      if (method === "getNetwork")
+        return {
+          passphrase: options.wrongNetwork
+            ? "wrong"
+            : data(original).networkPassphrase,
+        };
+      assert.equal(method, "getLedgerEntries");
+      reads++;
+      return {
+        latestLedger: options.changedLedger && reads > 1 ? 101 : 100,
+        entries: options.missing
+          ? []
+          : [
+              {
+                key: options.wrongKey ? "wrong" : params.keys[0],
+                xdr: encoded,
+              },
+            ],
+      };
+    },
+    codec: {
+      encode: cliCodec.encode,
+      decode: (type, text) => {
+        const result = cliCodec.decode(type, text);
+        if (options.wrongHash)
+          result.contract_data.val.contract_instance.executable.wasm =
+            "f".repeat(64);
+        if (options.wrongContract) result.contract_data.contract = "wrong";
+        return result;
+      },
+    },
+    invoke: async (args) => {
+      invocations++;
+      calls.push(args);
+      return JSON.stringify(options.status ?? status);
+    },
   };
 }
 
-// ---------------------------------------------------------------------------
-// Pure function tests
-// ---------------------------------------------------------------------------
-
-test("v0 schema reports rollback supported", () => {
-  const v = storageMigrationVerdict(0);
-  assert.equal(v.rollbackSupported, true);
-  assert.match(v.reason, /v0/);
-  assert.match(v.reason, /No irreversible migration/);
+test("schema versions 0, 1, 2, 3 and future versions never certify compatibility", async () => {
+  for (const schemaVersion of [0, 1, 2, 3, 99]) {
+    const current = record();
+    data(current).storageMigration = { schemaVersion, rollbackSupported: true };
+    const report = await buildReport({ toRecord: current });
+    assert.equal(report.storageMigration.rollbackSupported, null);
+    assert.equal(report.storageMigration.recorded.rollbackSupported, true);
+    assert.equal(report.deployment.schemaVersion, schemaVersion);
+    assert.equal(report.deployment.schemaVersionSource, "recorded-claim");
+    assert.ok(report.steps.every((step) => step.feasible === null));
+    assert.equal(report.autoExecutes, false);
+  }
 });
-
-test("v1 schema reports rollback supported", () => {
-  const v = storageMigrationVerdict(1);
-  assert.equal(v.rollbackSupported, true);
-  assert.match(v.reason, /v1/);
+test("explicit unsupported migration reason takes precedence over recorded/live schema", async () => {
+  const current = record();
+  data(current).storageMigration = {
+    schemaVersion: 1,
+    rollbackSupported: false,
+    reason: "One-way liability migration reviewed in incident 134",
+  };
+  const live = await fetchLiveEvidence(
+    current,
+    "https://example.com/rpc",
+    data(current).admin,
+    liveFixture(),
+  );
+  const report = await buildReport({ toRecord: current, liveEvidence: live });
+  assert.equal(report.deployment.schemaVersion, 3);
+  assert.equal(report.storageMigration.rollbackSupported, false);
+  assert.equal(
+    report.storageMigration.reason,
+    data(current).storageMigration.reason,
+  );
+  assert.equal(
+    report.steps.find((step) => step.component === "router").feasible,
+    false,
+  );
+  assert.equal(
+    report.steps.find((step) => step.component === "adapter-cctp").feasible,
+    null,
+  );
 });
-
-test("v2 schema marks rollback unsupported with a reason", () => {
-  const v = storageMigrationVerdict(2);
-  assert.equal(v.rollbackSupported, false);
-  assert.match(v.reason, /v2/);
-  assert.match(v.reason, /migration-state cursor/);
-});
-
-test("v3 schema marks rollback unsupported with reason mentioning liability rewrite", () => {
-  const v = storageMigrationVerdict(3);
-  assert.equal(v.rollbackSupported, false);
-  assert.match(v.reason, /v3/);
-  assert.match(v.reason, /liability/);
-});
-
-test("future schema version also marks rollback unsupported", () => {
-  const v = storageMigrationVerdict(5);
-  assert.equal(v.rollbackSupported, false);
-  assert.match(v.reason, /v5/);
-});
-
-test("unknown schema version returns null feasibility with RPC hint", () => {
-  const v = storageMigrationVerdict(undefined);
-  assert.equal(v.rollbackSupported, null);
-  assert.match(v.reason, /RPC/);
-});
-
-// ---------------------------------------------------------------------------
-// CLI smoke tests (subprocess)
-// ---------------------------------------------------------------------------
-
-function run(args) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
-    encoding: "utf8",
-    timeout: 15000,
-    env: { ...process.env },
-  });
-}
-
-test("produces human-readable output for the active record", () => {
-  const r = run([ACTIVE_RECORD]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  assert.match(r.stdout, /Rollback Feasibility Report/);
-  assert.match(r.stdout, /router/i);
-  assert.match(r.stdout, /281d946e/); // known router WASM hash prefix
-  assert.match(r.stdout, /Read-only: true/);
-  assert.match(r.stdout, /Auto-executes: false/);
-});
-
-test("produces valid JSON output with --json flag", () => {
-  const r = run([ACTIVE_RECORD, "--json"]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  let parsed;
-  assert.doesNotThrow(() => { parsed = JSON.parse(r.stdout); }, "output must be valid JSON");
-  assert.equal(parsed.reportKind, "upgrade-rollback-feasibility");
-  assert.equal(parsed.readOnly, true);
-  assert.equal(parsed.autoExecutes, false);
-  assert.ok(Array.isArray(parsed.steps), "steps must be an array");
-  assert.ok(Array.isArray(parsed.codeHashes), "codeHashes must be an array");
-  assert.ok(Array.isArray(parsed.activeProtections), "activeProtections must be an array");
-});
-
-test("JSON report names old and new code hashes", () => {
-  const r = run([
-    "--from", ARCHIVED_RECORD,
-    "--to", ACTIVE_RECORD,
-    "--json",
-  ]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  const report = JSON.parse(r.stdout);
-  const router = report.codeHashes.find((h) => h.component === "router");
-  assert.ok(router, "router entry missing from codeHashes");
-  // Current (active) router hash
-  assert.equal(router.currentHash, "281d946ea78b194c0ef44ad9488ed02b2aa6912fb4f6fbab523ad38f1e0803f1");
-  // Previous (archived) router hash
-  assert.equal(router.previousHash, "e2698a44680a74731c7fa5a9946ce8fd04499e159aa00bd20e98b63de958d10f");
+test("missing evidence stays unknown; comparisons preserve old/new hashes and router identity", async () => {
+  const from = JSON.parse(readFileSync(ARCHIVED, "utf8"));
+  const current = record();
+  const report = await buildReport({ fromRecord: from, toRecord: current });
+  assert.equal(report.deployment.lifecycle, "unknown");
+  assert.equal(report.deployment.schemaVersion, null);
+  assert.equal(report.previousDeployment.sameContract, false);
+  const router = report.codeHashes.find(
+    (entry) => entry.component === "router",
+  );
+  assert.equal(router.currentHash, data(current).wasmHashes.router);
+  assert.equal(router.previousHash, data(from).wasmHashes.router);
   assert.equal(router.changed, true);
+  delete data(current).wasmHashes.router;
+  const missing = await buildReport({ toRecord: current });
+  assert.equal(
+    missing.codeHashes.find((entry) => entry.component === "router")
+      .currentHash,
+    null,
+  );
+  assert.equal(
+    missing.codeHashes.find((entry) => entry.component === "router").changed,
+    null,
+  );
+  assert.ok(
+    missing.steps.every(
+      (step) =>
+        step.authority.role &&
+        step.authority.mechanism &&
+        !step.authority.verifiedLive,
+    ),
+  );
+  assert.ok(missing.requiredReview.some((text) => /Replay/.test(text)));
 });
-
-test("JSON report includes authority for each step", () => {
-  const r = run([ACTIVE_RECORD, "--json"]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  const report = JSON.parse(r.stdout);
-  for (const step of report.steps) {
-    assert.ok(step.authority, `step ${step.component} missing authority`);
-    assert.ok(step.authority.role, `step ${step.component} authority missing role`);
-    assert.ok(step.authority.mechanism, `step ${step.component} authority missing mechanism`);
+test("validator rejects invalid schemas, StrKey checksums, hashes, lifecycle and network mismatch", async () => {
+  for (const alter of [
+    (r) => (r.schemaVersion = 99),
+    (r) => (data(r).router = "C".repeat(56)),
+    (r) => (data(r).wasmHashes.router = "xyz"),
+    (r) => (data(r).networkPassphrase = "wrong"),
+    (r) => (data(r).status = "typo"),
+    (r) => (data(r).feeBps = 101),
+    (r) => (data(r).storageMigration = { schemaVersion: 2 ** 53 }),
+    (r) => (data(r).storageMigration = { rollbackSupported: false }),
+  ]) {
+    const current = record();
+    alter(current);
+    await assert.rejects(validateRecord(current));
+  }
+  const archived = record();
+  data(archived).status = "archived";
+  data(archived).archivedAt = "2026-11-20T00:00:00.000Z";
+  await assert.rejects(buildReport({ toRecord: archived }), /archived/);
+  const wrongNetwork = record();
+  wrongNetwork.networks.stellar = wrongNetwork.networks["stellar-testnet"];
+  delete wrongNetwork.networks["stellar-testnet"];
+  wrongNetwork.networks.stellar.networkPassphrase =
+    "Public Global Stellar Network ; September 2015";
+  await assert.rejects(
+    buildReport({ toRecord: original, fromRecord: wrongNetwork }),
+    /different networks/,
+  );
+});
+test("migration extension validation refuses malformed, unbounded or unsupported-without-reason claims", () => {
+  for (const value of [
+    [],
+    "3",
+    { schemaVersion: -1 },
+    { schemaVersion: 0x100000000 },
+    { schemaVersion: 1.5 },
+    { rollbackSupported: "false" },
+    { rollbackSupported: false },
+    { rollbackSupported: false, reason: " " },
+    { reason: "x".repeat(2049) },
+    { reason: "line\nbreak" },
+    { typo: true },
+  ])
+    assert.throws(() => validateStorageMigration(value));
+});
+test("live evidence uses exact requested endpoint/passphrase/public source and read-only invocation", async () => {
+  const fixture = liveFixture();
+  const evidence = await fetchLiveEvidence(
+    original,
+    "https://example.com/custom-rpc",
+    data(original).admin,
+    fixture,
+  );
+  assert.equal(evidence.status, "observed");
+  assert.equal(evidence.executableHash, data(original).wasmHashes.router);
+  assert.equal(evidence.ledger, 100);
+  const args = fixture.calls[0];
+  assert.equal(
+    args[args.indexOf("--rpc-url") + 1],
+    "https://example.com/custom-rpc",
+  );
+  assert.equal(
+    args[args.indexOf("--network-passphrase") + 1],
+    data(original).networkPassphrase,
+  );
+  assert.equal(
+    args[args.indexOf("--source-account") + 1],
+    data(original).admin,
+  );
+  assert.ok(args.includes("--is-view"));
+  assert.ok(!args.includes("--network"));
+  const report = await buildReport({
+    toRecord: original,
+    liveEvidence: evidence,
+  });
+  assert.equal(report.storageMigration.rollbackSupported, null);
+  await assert.rejects(
+    buildReport({
+      toRecord: original,
+      liveEvidence: { ...evidence, executableHash: "e".repeat(64) },
+    }),
+    /bound/,
+  );
+});
+test("wrong network/identity/hash, absent state, malformed counts and concurrent ledger changes remain unavailable", async () => {
+  for (const options of [
+    { wrongNetwork: true },
+    { wrongHash: true },
+    { wrongContract: true },
+    { wrongKey: true },
+    { missing: true },
+    { changedLedger: true },
+    { status: { ...status, current_version: 2 ** 53 } },
+    { status: { ...status, migration_pending: "false" } },
+    { status: { ...status, total_transfers: 2 ** 60 } },
+    { status: { ...status, total_transfers: "18446744073709551616" } },
+    { status: { ...status, migrated_claims: "1" } },
+  ]) {
+    const fixture = liveFixture(options);
+    const evidence = await fetchLiveEvidence(
+      original,
+      "https://example.com/rpc",
+      data(original).admin,
+      fixture,
+    );
+    assert.equal(evidence.status, "unavailable");
+    assert.equal(evidence.schemaVersion, null);
+    if (options.wrongNetwork || options.wrongHash || options.missing)
+      assert.equal(fixture.invocations, 0);
+  }
+  await assert.rejects(
+    fetchLiveEvidence(original, "https://example.com", "S".repeat(56)),
+    /public/,
+  );
+});
+test("CLI paths/options and RPC URLs reject ambiguity and credentials", () => {
+  for (const args of [
+    [],
+    ["--to"],
+    [ACTIVE, "--to", ACTIVE],
+    ["--from", ACTIVE],
+    [ACTIVE, "--rpc", "https://example.com"],
+    [ACTIVE, "--rpc", "--json"],
+    [ACTIVE, "--source-account", data(original).admin],
+    [ACTIVE, "--wat"],
+  ])
+    assert.throws(() => parseArgs(args));
+  for (const url of [
+    "http://localhost.evil/rpc",
+    "http://example.com",
+    "https://user:pass@example.com",
+    "https://example.com/?token=private",
+    "https://example.com/#a",
+  ])
+    assert.throws(() => validateRpcUrl(url));
+  assert.equal(
+    validateRpcUrl("http://127.0.0.1:8000"),
+    "http://127.0.0.1:8000/",
+  );
+});
+test("CLI emits real report JSON/human text and refuses invalid/oversized files", () => {
+  const result = cli([ACTIVE, "--json"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    JSON.parse(result.stdout).storageMigration.rollbackSupported,
+    null,
+  );
+  const text = cli([ACTIVE]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /Read-only: true/);
+  const directory = mkdtempSync(resolve(tmpdir(), "hyperion-rollback-test-"));
+  try {
+    const file = resolve(directory, "record.json");
+    const current = record();
+    data(current).status = "archived";
+    data(current).archivedAt = "2026-11-20T00:00:00.000Z";
+    writeFileSync(file, JSON.stringify(current));
+    assert.match(cli([file]).stderr, /archived/);
+    writeFileSync(file, " ".repeat(1048577));
+    assert.match(cli([file]).stderr, /exceeds/);
+    writeFileSync(file, "{bad}");
+    assert.notEqual(cli([file]).status, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("storage migration step is blocked for a record with router WASM at known v3 state", () => {
-  // The active record has schemaVersion embedded via the deployment; we test the logic
-  // by passing a synthesized record that carries a schemaVersion field.
-  const r = run([ACTIVE_RECORD, "--json"]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  const report = JSON.parse(r.stdout);
-  // The active record does not carry a schemaVersion field — feasibility will be null
-  // (requires live RPC). That is the correct cautious answer.
-  const routerStep = report.steps.find((s) => s.component === "router WASM");
-  assert.ok(routerStep, "router WASM step must be present");
-  // feasible is null (unknown) because no schemaVersion is in the record and no --rpc was given
-  assert.equal(routerStep.feasible, null);
-  assert.match(routerStep.notes.join(" "), /--rpc/);
-});
-
-test("report does not automatically execute anything", () => {
-  const r = run([ACTIVE_RECORD, "--json"]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  const report = JSON.parse(r.stdout);
-  assert.equal(report.autoExecutes, false);
-  // No step should have an action of "execute"
-  for (const step of report.steps) {
-    assert.notEqual(step.action, "execute", `step ${step.component} must not be an execute action`);
+test("real RPC transport rejects oversized bodies, redirects and malformed responses", async () => {
+  const server = createServer((request, response) => {
+    if (request.url === "/redirect") {
+      response.writeHead(302, { location: "/malformed" });
+      response.end();
+    } else if (request.url === "/oversized") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(" ".repeat(1048577));
+    } else {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{malformed}");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const endpoint = `http://127.0.0.1:${server.address().port}`;
+    for (const path of ["/oversized", "/redirect", "/malformed"]) {
+      const evidence = await fetchLiveEvidence(
+        original,
+        endpoint + path,
+        data(original).admin,
+      );
+      assert.equal(evidence.status, "unavailable");
+      assert.equal(evidence.schemaVersion, null);
+      if (path === "/oversized") assert.match(evidence.reason, /exceeds 1MiB/);
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
   }
-});
-
-test("refuses an archived record as the target", () => {
-  const r = run([ARCHIVED_RECORD]);
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /archived/i);
-});
-
-test("EVM gating note is present in JSON output", () => {
-  const r = run([ACTIVE_RECORD, "--json"]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  const report = JSON.parse(r.stdout);
-  assert.ok(report.evmGatingNote, "evmGatingNote must be present");
-  assert.match(report.evmGatingNote, /gated/i);
-  assert.match(report.evmGatingNote, /EVM/);
-});
-
-test("active protections cover exact integers, replay protection and recipient binding", () => {
-  const r = run([ACTIVE_RECORD, "--json"]);
-  assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-  const report = JSON.parse(r.stdout);
-  const all = report.activeProtections.join(" ");
-  assert.match(all, /integer/i);
-  assert.match(all, /replay/i);
-  assert.match(all, /recipient/i);
-});
-
-test("unknown --from path exits with an error", () => {
-  const r = run(["--from", "/does/not/exist.json", "--to", ACTIVE_RECORD]);
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /cannot read/);
-});
-
-test("unknown --to path exits with an error", () => {
-  const r = run(["/does/not/exist.json"]);
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /cannot read/);
 });

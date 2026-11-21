@@ -8,9 +8,12 @@
  * without narrowing either value.
  */
 
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readBoundedText } from "./record-evidence.mjs";
+
+export const MAX_MESSAGE_BYTES = 65536;
+export const MAX_HEX_TEXT_BYTES = 262144;
 
 export const CCTP_LAYOUT = Object.freeze({
   header: 148,
@@ -22,7 +25,11 @@ export const CCTP_LAYOUT = Object.freeze({
   hookVersion: 1,
 });
 
-const HOOK_KINDS = Object.freeze({ 0: "account", 1: "contract", 2: "muxed_account" });
+const HOOK_KINDS = Object.freeze({
+  0: "account",
+  1: "contract",
+  2: "muxed_account",
+});
 
 function hex(bytes) {
   return Buffer.from(bytes).toString("hex");
@@ -55,7 +62,11 @@ function field(report, name, offset, reader, width, label) {
       "TRUNCATED_FIELD",
       offset,
       `${label} is truncated at byte offset ${offset}`,
-      { field: name, expectedBytes: width, availableBytes: Math.max(0, report.raw.length - offset) },
+      {
+        field: name,
+        expectedBytes: width,
+        availableBytes: Math.max(0, report.raw.length - offset),
+      },
     );
   }
   report.fields[name] = value;
@@ -108,7 +119,10 @@ function inspectHook(report) {
   report.hook.kindTag = hook[1];
   report.hook.kind = HOOK_KINDS[hook[1]] ?? "unknown";
   report.hook.key = hex(hook.subarray(2, 34));
-  report.hook.muxedId = hook.length >= 42 ? BigInt(`0x${hex(hook.subarray(34, 42))}`).toString(10) : null;
+  report.hook.muxedId =
+    hook.length >= 42
+      ? BigInt(`0x${hex(hook.subarray(34, 42))}`).toString(10)
+      : null;
 
   if (hook[0] !== CCTP_LAYOUT.hookVersion) {
     addDiagnostic(
@@ -147,15 +161,35 @@ function inspectHook(report) {
     );
   }
   if (/^0+$/.test(report.hook.key)) {
-    addDiagnostic(report.diagnostics, "ZERO_HOOK_KEY", CCTP_LAYOUT.hook + 2, "hook destination key is all zero");
+    addDiagnostic(
+      report.diagnostics,
+      "ZERO_HOOK_KEY",
+      CCTP_LAYOUT.hook + 2,
+      "hook destination key is all zero",
+    );
   }
 }
 
 export function inspectCctpMessage(input) {
-  const raw = Buffer.isBuffer(input) ? input : parseHex(input);
+  if (Buffer.isBuffer(input) && input.length > MAX_MESSAGE_BYTES)
+    throw new Error("Message exceeds 65536 bytes");
+  const raw = Buffer.isBuffer(input) ? Buffer.from(input) : parseHex(input);
   const report = {
     format: "hyperion.cctp-message-inspection.v1",
-    executable: true,
+    executable: false,
+    structurallyCompatible: false,
+    fieldInterpretation:
+      "observations of the supported version-1 layout; unknown versions may use different offsets",
+    unverifiedExecutionChecks: [
+      "attestation",
+      "authorization",
+      "domains",
+      "trusted senders",
+      "token and recipient",
+      "finality",
+      "fees and expiration",
+      "replay",
+    ],
     rawBytes: hex(raw),
     byteLength: raw.length,
     fields: {},
@@ -178,8 +212,22 @@ export function inspectCctpMessage(input) {
   field(report, "sender", 44, readWord, 32, "message sender");
   field(report, "recipient", 76, readWord, 32, "message recipient");
   field(report, "destinationCaller", 108, readWord, 32, "destination caller");
-  field(report, "minFinalityThreshold", 140, readU32, 4, "minimum finality threshold");
-  field(report, "finalityThresholdExecuted", 144, readU32, 4, "executed finality threshold");
+  field(
+    report,
+    "minFinalityThreshold",
+    140,
+    readU32,
+    4,
+    "minimum finality threshold",
+  );
+  field(
+    report,
+    "finalityThresholdExecuted",
+    144,
+    readU32,
+    4,
+    "executed finality threshold",
+  );
 
   field(report, "burnVersion", 148, readU32, 4, "burn message version");
   field(report, "burnToken", 152, readWord, 32, "burn token");
@@ -192,40 +240,81 @@ export function inspectCctpMessage(input) {
   inspectHook(report);
 
   if (report.fields.version !== CCTP_LAYOUT.messageVersion) {
-    addDiagnostic(report.diagnostics, "UNSUPPORTED_MESSAGE_VERSION", 0, "message version is inspectable but not executable", {
-      supported: CCTP_LAYOUT.messageVersion,
-      actual: report.fields.version,
-    });
+    addDiagnostic(
+      report.diagnostics,
+      "UNSUPPORTED_MESSAGE_VERSION",
+      0,
+      "message version is inspectable but not executable",
+      {
+        supported: CCTP_LAYOUT.messageVersion,
+        actual: report.fields.version,
+      },
+    );
   }
   if (report.fields.burnVersion !== CCTP_LAYOUT.burnVersion) {
-    addDiagnostic(report.diagnostics, "UNSUPPORTED_BURN_VERSION", 148, "burn version is inspectable but not executable", {
-      supported: CCTP_LAYOUT.burnVersion,
-      actual: report.fields.burnVersion,
-    });
+    addDiagnostic(
+      report.diagnostics,
+      "UNSUPPORTED_BURN_VERSION",
+      148,
+      "burn version is inspectable but not executable",
+      {
+        supported: CCTP_LAYOUT.burnVersion,
+        actual: report.fields.burnVersion,
+      },
+    );
   }
-  if (report.fields.minFinalityThreshold !== null && ![1000, 2000].includes(report.fields.minFinalityThreshold)) {
-    addDiagnostic(report.diagnostics, "UNSUPPORTED_MIN_FINALITY", 140, "minimum finality threshold is not supported", {
-      supported: [1000, 2000],
-      actual: report.fields.minFinalityThreshold,
-    });
+  if (
+    report.fields.minFinalityThreshold !== null &&
+    ![1000, 2000].includes(report.fields.minFinalityThreshold)
+  ) {
+    addDiagnostic(
+      report.diagnostics,
+      "UNSUPPORTED_MIN_FINALITY",
+      140,
+      "minimum finality threshold is not supported",
+      {
+        supported: [1000, 2000],
+        actual: report.fields.minFinalityThreshold,
+      },
+    );
   }
-  if (report.fields.finalityThresholdExecuted !== null && ![1000, 2000].includes(report.fields.finalityThresholdExecuted)) {
-    addDiagnostic(report.diagnostics, "UNSUPPORTED_EXECUTED_FINALITY", 144, "executed finality threshold is not supported", {
-      supported: [1000, 2000],
-      actual: report.fields.finalityThresholdExecuted,
-    });
+  if (
+    report.fields.finalityThresholdExecuted !== null &&
+    ![1000, 2000].includes(report.fields.finalityThresholdExecuted)
+  ) {
+    addDiagnostic(
+      report.diagnostics,
+      "UNSUPPORTED_EXECUTED_FINALITY",
+      144,
+      "executed finality threshold is not supported",
+      {
+        supported: [1000, 2000],
+        actual: report.fields.finalityThresholdExecuted,
+      },
+    );
   }
 
-  report.executable = report.diagnostics.length === 0;
+  report.structurallyCompatible = report.diagnostics.length === 0;
   delete report.raw;
   return report;
 }
 
 export function parseHex(value) {
-  const text = String(value ?? "").trim().replace(/^0x/i, "").replace(/\s+/g, "");
+  if (
+    typeof value !== "string" ||
+    Buffer.byteLength(value) > MAX_HEX_TEXT_BYTES
+  )
+    throw new Error(
+      "Message must be bounded hexadecimal text (262144 bytes maximum)",
+    );
+  const text = value.trim().replace(/^0x/i, "").replace(/\s+/g, "");
   if (!text || !/^[0-9a-f]+$/i.test(text) || text.length % 2 !== 0) {
-    throw new Error("message must be a non-empty even-length hexadecimal string");
+    throw new Error(
+      "message must be a non-empty even-length hexadecimal string",
+    );
   }
+  if (text.length > MAX_MESSAGE_BYTES * 2)
+    throw new Error("Message exceeds 65536 bytes");
   return Buffer.from(text, "hex");
 }
 
@@ -251,20 +340,61 @@ export function runCli(argv = process.argv) {
   let compact = false;
   for (let i = 2; i < argv.length; i += 1) {
     switch (argv[i]) {
-      case "--message": message = argv[++i]; break;
-      case "--file": file = argv[++i]; break;
-      case "--compact": compact = true; break;
-      case "--help": case "-h": usage(); return null;
-      default: throw new Error(`unknown option: ${argv[i]}`);
+      case "--message":
+        if (
+          message !== null ||
+          file !== null ||
+          !argv[i + 1] ||
+          argv[i + 1].startsWith("--")
+        )
+          throw new Error("--message requires one non-conflicting value");
+        message = argv[++i];
+        break;
+      case "--file":
+        if (
+          message !== null ||
+          file !== null ||
+          !argv[i + 1] ||
+          argv[i + 1].startsWith("--") ||
+          argv[i + 1].length > 4096
+        )
+          throw new Error("--file requires one non-conflicting path");
+        file = argv[++i];
+        break;
+      case "--compact":
+        compact = true;
+        break;
+      case "--help":
+      case "-h":
+        usage();
+        return null;
+      default:
+        throw new Error(`unknown option: ${argv[i]}`);
     }
   }
-  if (message === null && file !== null) message = readFileSync(resolve(file), "utf8");
-  if (message === null && !process.stdin.isTTY) message = readFileSync(0, "utf8");
-  if (message === null) { usage(); process.exitCode = 1; return null; }
+  if (message === null && file !== null)
+    message = readBoundedText(resolve(file), MAX_HEX_TEXT_BYTES);
+  if (message === null && !process.stdin.isTTY)
+    message = readBoundedText(0, MAX_HEX_TEXT_BYTES);
+  if (message === null) {
+    usage();
+    process.exitCode = 1;
+    return null;
+  }
   const report = inspectCctpMessage(message);
   console.log(JSON.stringify(report, null, compact ? 0 : 2));
-  if (!report.executable) process.exitCode = 1;
+  if (!report.structurallyCompatible) process.exitCode = 1;
   return report;
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) runCli();
+if (
+  process.argv[1] &&
+  pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+) {
+  try {
+    runCli();
+  } catch (error) {
+    process.stderr.write(`failed: ${error.message}\n`);
+    process.exitCode = 1;
+  }
+}

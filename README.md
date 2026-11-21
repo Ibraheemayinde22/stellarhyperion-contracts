@@ -108,8 +108,10 @@ node script/stellar/inspect-cctp-message.mjs --message 0x...
 The JSON report preserves the full 32-byte message nonce and complete hook bytes. It reports the
 message, burn, and Hyperion hook versions, domains, burn fields, destination kind, finality
 requirements, and byte offsets for truncated, oversized, or shape-incompatible fields. Unknown
-versions remain inspectable, but always set `executable` to `false`; the report is not an
-attestation verifier and does not replace Circle's transmitter.
+versions retain their raw bytes, with decoded fields labeled as observations of the known layout.
+`structurallyCompatible` describes supported shape only; `executable` is always `false`. Execution
+requires separate attestation, domain, token, finality, expiry, authorization, and replay checks.
+Hex input is bounded to 64 KiB of decoded bytes (256 KiB of text).
 
 ## The test suites
 

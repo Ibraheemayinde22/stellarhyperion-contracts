@@ -16,7 +16,7 @@ including provider calls, both nonces, flow allowance, token movement and proven
 transfers use this direct-refund behavior; refund credits are available through the separate
 `bridgeOutWithRefundCredit` entrypoint.
 
-The normal configured protocol fee applies. The router adds no relayer fee and imposes no
+The normal configured protocol fee applies. The legacy `bridgeOutWithIntent` method adds no relayer fee and imposes no
 relayer allowlist: anyone holding a valid intent can submit it before its deadline. The signed
 provider budget is a ceiling, so submission with a smaller value may fail the adapter's funding
 checks. A relayer may charge separately under an application-level agreement.

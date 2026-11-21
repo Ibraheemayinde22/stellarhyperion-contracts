@@ -404,6 +404,8 @@ contract AxelarItsAdapter is IRailAdapter, IInterchainTokenExecutable, Ownable2S
         // after accepting this call's value so a late, unattributed refund already held by the
         // adapter cannot be redirected to this dispatch's sender.
         uint256 providerRefund = address(this).balance - balanceBeforeProvider;
+        // Excess provider funds have no proven sender attribution beyond this call's payment.
+        if (providerRefund > msg.value) providerRefund = msg.value;
         _refund(providerRefund);
 
         // ITS does not hand back a message id. The delivery is identified by the log Axelar's

@@ -253,15 +253,13 @@ pub struct HyperionHook {
     pub destination: StellarDestination,
 }
 
-/// Verify both CCTP sender fields against one explicitly configured remote peer.
-/// Both fields must match: the header sender identifies the source contract boundary,
-/// while the burn sender is carried in the transfer body and may not be substituted independently.
+/// Verify the separately commissioned Hyperion burn sender after header messenger authentication.
+/// The header sender is Circle's TokenMessenger and is authenticated by its current/overlap policy.
 pub fn verify_remote_sender(
-    expected: &BytesN<32>,
-    header_sender: &BytesN<32>,
+    expected_burn_sender: &BytesN<32>,
     burn_sender: &BytesN<32>,
 ) -> Result<(), HyperionError> {
-    if header_sender != expected || burn_sender != expected {
+    if burn_sender != expected_burn_sender {
         return Err(HyperionError::UnexpectedRailContract);
     }
     Ok(())

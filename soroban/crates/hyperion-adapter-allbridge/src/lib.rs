@@ -87,7 +87,10 @@ use soroban_sdk::{
 };
 
 use rail::{AllbridgeBridgeClient, AllbridgeMessengerClient, STELLAR_CHAIN_ID};
-use types::{AssetLink, ChainLane, Config, OutboundRecord, PendingValidator, ProviderStatus, RecoveryDecision, ValidatorEpoch};
+use types::{
+    AssetLink, ChainLane, Config, OutboundRecord, PendingValidator, ProviderStatus,
+    RecoveryDecision, ValidatorEpoch,
+};
 
 #[contract]
 pub struct AllbridgeAdapter;
@@ -150,6 +153,9 @@ impl AllbridgeAdapter {
         }
         if amount <= 0 {
             return Err(HyperionError::InvalidAmount);
+        }
+        if nonce == 0 || storage::outbound(&env, nonce).is_some() {
+            return Err(HyperionError::ReplayedMessage);
         }
         let lane = storage::lane(&env, &destination_chain).ok_or(HyperionError::UnknownChain)?;
         let link = storage::asset(&env, &token, lane.allbridge_chain_id)
@@ -298,10 +304,7 @@ impl AllbridgeAdapter {
         if amount <= 0 {
             return Err(HyperionError::InvalidAmount);
         }
-        let validator = storage::validator_epoch(&env)
-            .map(|v| v.validator)
-            .or_else(|| storage::validator(&env))
-            .ok_or(HyperionError::RailNotConfigured)?;
+        let validator = active_validator(&env)?;
         let source_chain =
             storage::chain_of(&env, source_chain_id).ok_or(HyperionError::UnknownChain)?;
         let _link =
@@ -339,8 +342,14 @@ impl AllbridgeAdapter {
             return Err(HyperionError::Unauthorized);
         }
 
+        let digest = rail::validator_attestation_digest(
+            &env,
+            &env.current_contract_address(),
+            &validator,
+            &message_id,
+        )?;
         env.crypto()
-            .ed25519_verify(&validator, &message_id.clone().into(), &signature);
+            .ed25519_verify(&validator.validator, &digest.into(), &signature);
 
         storage::mark_processed(&env, &message_id);
 
@@ -711,46 +720,94 @@ impl AllbridgeAdapter {
         Ok(())
     }
 
-    /// Register the Allbridge validator public key used to verify incoming messages. Admin only.
+    /// Bootstrap a signed validator; existing keys require delayed rotation.
     pub fn set_validator(env: Env, validator: BytesN<32>) -> Result<(), HyperionError> {
-        let _ = require_admin(&env)?;
-        storage::set_validator(&env, &validator);
-        if storage::validator_epoch(&env).is_none() {
-            storage::set_validator_epoch(&env, &ValidatorEpoch { epoch: 0, validator: validator.clone() });
+        require_admin(&env)?;
+        if validator == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(HyperionError::ZeroAddressKey);
         }
+        let epoch = match active_validator(&env) {
+            Ok(current) if current.validator == validator => current,
+            Ok(_) => return Err(HyperionError::AlreadyConfigured),
+            Err(HyperionError::RailNotConfigured) => ValidatorEpoch {
+                epoch: 1,
+                validator: validator.clone(),
+            },
+            Err(error) => return Err(error),
+        };
+        storage::set_validator(&env, &validator);
+        storage::set_validator_epoch(&env, &epoch);
         events::ValidatorSet { validator }.publish(&env);
         Ok(())
     }
 
+    /// Queue the next signed epoch and key after a fixed review delay.
     pub fn queue_validator_rotation(env: Env, validator: BytesN<32>) -> Result<u64, HyperionError> {
-        let _ = require_admin(&env)?;
-        let current = storage::validator_epoch(&env).ok_or(HyperionError::RailNotConfigured)?;
+        require_admin(&env)?;
+        let current = active_validator(&env)?;
+        if validator == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(HyperionError::ZeroAddressKey);
+        }
         if validator == current.validator || storage::pending_validator(&env).is_some() {
             return Err(HyperionError::AlreadyConfigured);
         }
         let pending = PendingValidator {
-            epoch: current.epoch.saturating_add(1),
+            epoch: current
+                .epoch
+                .checked_add(1)
+                .ok_or(HyperionError::DecimalOverflow)?,
             validator,
-            activate_after: env.ledger().timestamp().saturating_add(storage::VALIDATOR_ROTATION_DELAY),
+            activate_after: env
+                .ledger()
+                .timestamp()
+                .checked_add(storage::VALIDATOR_ROTATION_DELAY)
+                .ok_or(HyperionError::DecimalOverflow)?,
         };
         let at = pending.activate_after;
-        events::ValidatorRotationQueued { epoch: pending.epoch, activate_after: at, validator: pending.validator.clone() }.publish(&env);
+        events::ValidatorRotationQueued {
+            epoch: pending.epoch,
+            activate_after: at,
+            validator: pending.validator.clone(),
+        }
+        .publish(&env);
         storage::set_pending_validator(&env, &pending);
         Ok(at)
     }
 
+    /// Activate a mature key; legacy epoch zero migrates to signed epoch one.
     pub fn activate_validator_rotation(env: Env) -> Result<u32, HyperionError> {
-        let _ = require_admin(&env)?;
-        let pending = storage::pending_validator(&env).ok_or(HyperionError::RailNotConfigured)?;
+        require_admin(&env)?;
+        let pending = storage::pending_validator(&env).ok_or(HyperionError::RotationNotPending)?;
         if env.ledger().timestamp() < pending.activate_after {
             return Err(HyperionError::TimelockNotReady);
         }
-        let epoch = ValidatorEpoch { epoch: pending.epoch, validator: pending.validator.clone() };
+        let current = active_validator(&env)?;
+        if current.epoch.checked_add(1) != Some(pending.epoch)
+            || current.validator == pending.validator
+        {
+            return Err(HyperionError::AlreadyConfigured);
+        }
+        let epoch = ValidatorEpoch {
+            epoch: pending.epoch,
+            validator: pending.validator.clone(),
+        };
         storage::set_validator(&env, &pending.validator);
         storage::set_validator_epoch(&env, &epoch);
         storage::clear_pending_validator(&env);
-        events::ValidatorRotationActivated { epoch: epoch.epoch, validator: epoch.validator }.publish(&env);
+        events::ValidatorRotationActivated {
+            epoch: epoch.epoch,
+            validator: epoch.validator,
+        }
+        .publish(&env);
         Ok(epoch.epoch)
+    }
+
+    /// Cancel a queued key without changing the active signer.
+    pub fn cancel_validator_rotation(env: Env) -> Result<(), HyperionError> {
+        require_admin(&env)?;
+        storage::pending_validator(&env).ok_or(HyperionError::RotationNotPending)?;
+        storage::clear_pending_validator(&env);
+        Ok(())
     }
 
     pub fn set_emergency_disabled(env: Env, disabled: bool) -> Result<(), HyperionError> {
@@ -855,29 +912,42 @@ impl AllbridgeAdapter {
     /// would keep offering a rail that reverts on every attempt.
     pub fn rail_open(env: Env) -> Result<bool, HyperionError> {
         let cfg = storage::config(&env)?;
-        Ok(!storage::emergency_disabled(&env) && AllbridgeBridgeClient::new(&env, &cfg.bridge)
-            .get_config()
-            .can_swap)
+        Ok(!storage::emergency_disabled(&env)
+            && AllbridgeBridgeClient::new(&env, &cfg.bridge)
+                .get_config()
+                .can_swap)
     }
 
     /// Read the registered Allbridge validator public key.
     pub fn get_validator(env: Env) -> Result<BytesN<32>, HyperionError> {
-        storage::validator_epoch(&env).map(|v| v.validator).or_else(|| storage::validator(&env)).ok_or(HyperionError::RailNotConfigured)
+        active_validator(&env).map(|v| v.validator)
     }
 
     pub fn validator_epoch(env: Env) -> Result<ValidatorEpoch, HyperionError> {
-        storage::validator_epoch(&env).ok_or(HyperionError::RailNotConfigured)
+        active_validator(&env)
     }
 
-    pub fn reconcile_outbound(env: Env, nonce: u64, status: ProviderStatus) -> Result<RecoveryDecision, HyperionError> {
-        let record = storage::outbound(&env, nonce).ok_or(HyperionError::UnknownChain)?;
+    /// Return source evidence; caller-asserted status never authorizes a second debit.
+    pub fn reconcile_outbound(
+        env: Env,
+        nonce: u64,
+        status: ProviderStatus,
+    ) -> Result<RecoveryDecision, HyperionError> {
+        let record = storage::outbound(&env, nonce).ok_or(HyperionError::UnknownNonce)?;
         let (retry_allowed, reason) = match status {
-            ProviderStatus::Failed => (true, 1),
+            ProviderStatus::Failed => (false, 1),
             ProviderStatus::Unknown => (false, 2),
             ProviderStatus::Submitted => (false, 3),
             ProviderStatus::Unsupported => (false, 4),
         };
-        Ok(RecoveryDecision { nonce, retry_allowed, reason, record })
+        Ok(RecoveryDecision {
+            nonce,
+            retry_allowed,
+            recovery_supported: false,
+            provider_identity_available: false,
+            reason,
+            record,
+        })
     }
 
     /// Check if an inbound message has already been processed.
@@ -892,4 +962,16 @@ fn require_admin(env: &Env) -> Result<Config, HyperionError> {
     let cfg = storage::config(env)?;
     cfg.admin.require_auth();
     Ok(cfg)
+}
+
+/// Retain epoch-zero signatures for legacy Validator-only storage until delayed migration.
+fn active_validator(env: &Env) -> Result<ValidatorEpoch, HyperionError> {
+    storage::validator_epoch(env)
+        .or_else(|| {
+            storage::validator(env).map(|validator| ValidatorEpoch {
+                epoch: 0,
+                validator,
+            })
+        })
+        .ok_or(HyperionError::RailNotConfigured)
 }

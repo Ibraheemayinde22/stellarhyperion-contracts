@@ -77,6 +77,10 @@ pub enum ProviderStatus {
 pub struct RecoveryDecision {
     pub nonce: u64,
     pub retry_allowed: bool,
+    /// Provider-backed refund or retry is not implemented.
+    pub recovery_supported: bool,
+    /// The post-pool provider wire digest cannot be derived from source amounts alone.
+    pub provider_identity_available: bool,
     pub reason: u32,
     pub record: OutboundRecord,
 }

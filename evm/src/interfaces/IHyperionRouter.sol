@@ -345,17 +345,36 @@ interface IHyperionRouter {
 
     /// @notice Execute an intent with a separately signed exact relayer fee cap.
     /// @dev The signature covers the legacy intent digest, fee token and charge.
+    /// @param intent The outbound intent sharing the sender's legacy nonce.
+    /// @param signature The sender's signature over the transfer digest, fee asset and charge.
+    /// @param feeToken The signed enabled ERC-20 fee asset, or zero for no charge.
+    /// @param maxRelayerCharge The signed exact charge paid on successful dispatch.
+    /// @return nonce The successful outbound dispatch nonce.
     function bridgeOutWithRelayerFee(
-        TransferIntent calldata intent, bytes calldata signature, address feeToken, uint256 maxRelayerCharge
+        TransferIntent calldata intent,
+        bytes calldata signature,
+        address feeToken,
+        uint256 maxRelayerCharge
     ) external payable returns (uint64 nonce);
 
     /// @notice Hash a fee-bearing intent in this router's EIP-712 domain.
+    /// @param intent The immutable outbound transfer authorization.
+    /// @param feeToken The signed fee asset.
+    /// @param maxRelayerCharge The signed exact relayer charge.
     function hashTransferIntentWithRelayerFee(
-        TransferIntent calldata intent, address feeToken, uint256 maxRelayerCharge
+        TransferIntent calldata intent,
+        address feeToken,
+        uint256 maxRelayerCharge
     ) external view returns (bytes32);
 
     /// @notice The signed fee was paid after successful dispatch, in the same atomic transaction.
-    event RelayerFeePaid(address indexed sender, address indexed feeToken, address indexed relayer, uint256 amount);
+    /// @param sender The sender who authorized and paid the charge.
+    /// @param feeToken The ERC-20 asset used for the charge.
+    /// @param relayer The executing relayer receiving the charge.
+    /// @param amount The exact signed charge.
+    event RelayerFeePaid(
+        address indexed sender, address indexed feeToken, address indexed relayer, uint256 amount
+    );
 
     /// @notice Return zero for passing local bounded checks, otherwise the earliest error selector.
     /// @param request The legacy outbound request.
