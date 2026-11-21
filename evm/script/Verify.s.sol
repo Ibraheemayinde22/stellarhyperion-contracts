@@ -6,6 +6,7 @@ import {console} from "forge-std/console.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {RouteKind} from "../src/HyperionTypes.sol";
+import {OutboundProvenance} from "../src/OutboundProvenance.sol";
 import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
 import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
 
@@ -29,6 +30,7 @@ contract Verify is DeployConfig {
     uint256 internal problems;
 
     function run() external {
+        problems = 0;
         string memory path = vm.envOr(
             "HYPERION_RECORD", string.concat("deployments/evm-", vm.toString(block.chainid), "-phase1.json")
         );
@@ -42,8 +44,17 @@ contract Verify is DeployConfig {
         console.log("");
 
         _expectUint("chain id", block.chainid, record.readUint(".chainId"));
-        _expectString("EVM revision", record.readString(".evmVersion"), VERIFIED_EVM_VERSION);
-        _expectString("compiler revision", record.readString(".solcVersion"), VERIFIED_SOLC_VERSION);
+        _verifyProvenance(record, router);
+        CompatibilityProfile memory profile =
+            _verifiedArtifactProfile(vm.getArtifactPathByCode(type(HyperionRouter).creationCode));
+        _verifiedArtifactProfile(vm.getArtifactPathByCode(type(CctpAdapter).creationCode));
+        if (vm.keyExistsJson(record, ".axelarAdapter")) {
+            _verifiedArtifactProfile(vm.getArtifactPathByCode(type(AxelarItsAdapter).creationCode));
+        }
+        _expectString("EVM revision", record.readString(".evmVersion"), profile.evmVersion);
+        _expectString("compiler revision", record.readString(".solcVersion"), profile.compilerVersion);
+        _expectUint("optimizer runs", record.readUint(".optimizerRuns"), profile.optimizerRuns);
+        _expectTrue("via IR matches artifact", record.readBool(".viaIR") == profile.viaIR);
         _expectAddress("treasury", router.treasury(), record.readAddress(".treasury"));
         _expectUint("fee bps", router.feeBps(), record.readUint(".feeBps"));
         _expectUint("timelock delay", router.timelockDelay(), record.readUint(".timelockDelay"));
@@ -62,7 +73,8 @@ contract Verify is DeployConfig {
         _expectTrue("cctp lane configured", lane.configured);
         _expectTrue("cctp lane enabled", lane.enabled);
         _expectUint("cctp lane domain", lane.domain, STELLAR_CCTP_DOMAIN);
-        _expectBytes32("cctp mint recipient", lane.mintRecipient, record.readBytes32(".stellarRailRecipient"));
+        bytes32 recordedRecipient = record.readBytes32(".stellarRailRecipient");
+        _expectBytes32("cctp mint recipient", lane.mintRecipient, recordedRecipient);
 
         address token = record.readAddress(".token");
         _expectTrue("token registered", router.tokenConfig(token).registered);
@@ -74,6 +86,37 @@ contract Verify is DeployConfig {
 
         _expectFalse("router paused", router.paused());
 
+        _verifyAxelar(record, router, token);
+        _verifyAuthority(record, router);
+
+        console.log("");
+        if (problems == 0) {
+            console.log("Everything on chain matches the record.");
+        } else {
+            console.log("Mismatches          ", problems);
+            revert("the chain and the record disagree");
+        }
+    }
+
+    function _verifyProvenance(string memory record, HyperionRouter router) private {
+        address expected =
+            address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"01")))));
+        address recorded = record.readAddress(".provenanceStore");
+        _expectAddress("immutable provenance address", recorded, expected);
+        _expectTrue("immutable provenance code exists", expected.code.length != 0);
+        _expectBytes32(
+            "immutable provenance code hash",
+            expected.codehash,
+            record.readBytes32(".provenanceStoreCodeHash")
+        );
+        if (expected.code.length != 0) {
+            _expectAddress(
+                "immutable provenance router", OutboundProvenance(expected).ROUTER(), address(router)
+            );
+        }
+    }
+
+    function _verifyAxelar(string memory record, HyperionRouter router, address token) private {
         if (vm.keyExistsJson(record, ".axelarAdapter")) {
             AxelarItsAdapter axelar = AxelarItsAdapter(payable(record.readAddress(".axelarAdapter")));
             _expectAddress("axelar adapter", router.adapter(RouteKind.AxelarIts), address(axelar));
@@ -87,7 +130,9 @@ contract Verify is DeployConfig {
             _expectTrue("axelar peer enabled", peer.enabled);
             _expectBytes("axelar peer address", peer.peer, vm.envBytes("STELLAR_AXELAR_PEER"));
         }
+    }
 
+    function _verifyAuthority(string memory record, HyperionRouter router) private {
         // The admin handover is the one thing that cannot be checked by equality alone, because a
         // record written before the handover matured names the deployer.
         address recordedAdmin = record.readAddress(".admin");
@@ -104,25 +149,152 @@ contract Verify is DeployConfig {
             console.log("       authority policy is not satisfied");
         }
 
-        // Treasury is intentionally checked independently above: a multisig may govern while a
-        // separate operations wallet receives fees. Guardian zero is an explicit policy choice,
-        // not a missing value, so the ready report checks the role only when one was recorded.
         address recordedGuardian = record.readAddress(".guardian");
-        bool guardianHolds = recordedGuardian != address(0)
-            && router.hasRole(router.GUARDIAN_ROLE(), recordedGuardian);
         if (recordedGuardian == address(0)) {
-            _expectFalse("guardian role disabled", guardianHolds);
+            // AccessControl is not enumerable. A zero address alone cannot prove absence of other
+            // guardians: reconstruct every grant/revoke from before deployment and fail closed
+            // when history is unavailable, truncated or exceeds the bounded read window.
+            _expectFalse(
+                "zero address has guardian authority", router.hasRole(router.GUARDIAN_ROLE(), address(0))
+            );
+            _expectUint(
+                "active guardians under disabled policy",
+                _activeGuardianCount(router, record.readUint(".deployedAtBlock")),
+                0
+            );
         } else {
-            _expectTrue("guardian role", guardianHolds);
+            _expectTrue("recorded guardian role", router.hasRole(router.GUARDIAN_ROLE(), recordedGuardian));
         }
+    }
 
-        console.log("");
-        if (problems == 0) {
-            console.log("Everything on chain matches the record.");
-        } else {
-            console.log("Mismatches          ", problems);
-            revert("the chain and the record disagree");
+    function _activeGuardianCount(HyperionRouter router, uint256 fromBlock) private returns (uint256) {
+        require(
+            fromBlock <= block.number && block.number - fromBlock <= 262_144,
+            "guardian history exceeds bounded verification window"
+        );
+        if (fromBlock > 0) {
+            string memory prior = vm.rpcJson(
+                "eth_getCode",
+                string.concat("[\"", vm.toString(address(router)), "\",\"", _quantity(fromBlock - 1), "\"]")
+            );
+            require(
+                keccak256(bytes(vm.parseJsonString(prior, "$"))) == keccak256(bytes("0x")),
+                "guardian history starts after deployment"
+            );
         }
+        address[] memory members = new address[](128);
+        bool[] memory active = new bool[](128);
+        uint256 used;
+        uint256 count;
+        bytes32 granted = keccak256("RoleGranted(bytes32,address,address)");
+        bytes32 revoked = keccak256("RoleRevoked(bytes32,address,address)");
+        for (uint256 first = fromBlock; first <= block.number;) {
+            uint256 last = first + 4095;
+            if (last > block.number) last = block.number;
+            string memory filter = string.concat(
+                "[{\"address\":\"",
+                vm.toString(address(router)),
+                "\",\"fromBlock\":\"",
+                _quantity(first),
+                "\",\"toBlock\":\"",
+                _quantity(last),
+                "\",\"topics\":[[\"",
+                vm.toString(granted),
+                "\",\"",
+                vm.toString(revoked),
+                "\"],\"",
+                vm.toString(router.GUARDIAN_ROLE()),
+                "\"]}]"
+            );
+            string memory logs = vm.rpcJson("eth_getLogs", filter);
+            (used, count) = _applyGuardianLogs(
+                logs, address(router), router.GUARDIAN_ROLE(), members, active, used, count
+            );
+            if (last == block.number) break;
+            first = last + 1;
+        }
+        for (uint256 i; i < used; ++i) {
+            require(
+                router.hasRole(router.GUARDIAN_ROLE(), members[i]) == active[i],
+                "guardian history and live roles disagree"
+            );
+        }
+        return count;
+    }
+
+    /// @dev Validate complete RPC arrays and apply each guardian event in canonical RPC order.
+    function _applyGuardianLogs(
+        string memory logs,
+        address router,
+        bytes32 role,
+        address[] memory members,
+        bool[] memory active,
+        uint256 used,
+        uint256 count
+    ) internal view returns (uint256, uint256) {
+        bytes memory raw = bytes(logs);
+        require(
+            raw.length >= 2 && raw.length <= 1_048_576 && raw[0] == "[" && raw[raw.length - 1] == "]",
+            "guardian RPC did not return a complete bounded array"
+        );
+        uint256 index;
+        while (vm.keyExistsJson(logs, string.concat("$[", vm.toString(index), "]"))) {
+            require(index < 1024, "guardian event page exceeds 1024 entries");
+            string memory key = string.concat("$[", vm.toString(index), "]");
+            bytes32[] memory topics = vm.parseJsonBytes32Array(logs, string.concat(key, ".topics"));
+            require(
+                vm.parseJsonAddress(logs, string.concat(key, ".address")) == router && topics.length == 4
+                    && topics[1] == role,
+                "guardian event identity differs"
+            );
+            require(
+                !vm.parseJsonBool(logs, string.concat(key, ".removed")),
+                "removed guardian event is not canonical evidence"
+            );
+            require(
+                vm.parseJsonBytes(logs, string.concat(key, ".data")).length == 0,
+                "unexpected guardian event data"
+            );
+            bool grant = topics[0] == keccak256("RoleGranted(bytes32,address,address)");
+            require(
+                grant || topics[0] == keccak256("RoleRevoked(bytes32,address,address)"),
+                "unexpected guardian event kind"
+            );
+            require(uint256(topics[2]) >> 160 == 0, "guardian address padding is invalid");
+            address member = address(uint160(uint256(topics[2])));
+            uint256 position;
+            while (position < used && members[position] != member) ++position;
+            if (position == used) {
+                require(used < members.length, "guardian membership exceeds verification bound");
+                members[used++] = member;
+            }
+            if (grant && !active[position]) {
+                active[position] = true;
+                ++count;
+            } else if (!grant && active[position]) {
+                active[position] = false;
+                --count;
+            }
+            ++index;
+        }
+        return (used, count);
+    }
+
+    function _quantity(uint256 number) private pure returns (string memory) {
+        bytes16 digits = "0123456789abcdef";
+        bytes memory encoded = new bytes(64);
+        uint256 length;
+        do {
+            encoded[63 - length++] = digits[number & 15];
+            number >>= 4;
+        } while (number != 0);
+        bytes memory output = new bytes(length + 2);
+        output[0] = "0";
+        output[1] = "x";
+        for (uint256 i; i < length; ++i) {
+            output[i + 2] = encoded[64 - length + i];
+        }
+        return string(output);
     }
 
     function _expectAddress(string memory what, address found, address want) private {

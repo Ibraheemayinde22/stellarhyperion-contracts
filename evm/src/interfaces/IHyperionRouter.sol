@@ -9,8 +9,8 @@ import {
     ClaimSettlementResult,
     Destination,
     Origin,
-    OutboundRequest,
     OutboundRecord,
+    OutboundRequest,
     PendingClaim,
     QueuedAction,
     RouteKind,
@@ -29,6 +29,10 @@ import {
 /// Everything else here is either a question you can ask before committing money, or an admin
 /// action that has to sit in a timelock first.
 interface IHyperionRouter {
+    /// @notice An authenticated sender intent executed through a development relayer.
+    /// @param sender The signer whose tokens were debited.
+    /// @param intentNonce The consumed sender intent nonce.
+    /// @param relayer The transaction submitter.
     event TransferIntentExecuted(
         address indexed sender, uint256 indexed intentNonce, address indexed relayer
     );
@@ -191,6 +195,9 @@ interface IHyperionRouter {
     event AdapterSet(RouteKind indexed route, address indexed adapter);
 
     /// @notice Records the deployed adapter code identity accepted at activation time.
+    /// @param route The rail accepting the adapter.
+    /// @param adapter The router-bound adapter.
+    /// @param codeHash The reviewed runtime hash.
     event AdapterIdentityRecorded(RouteKind indexed route, address indexed adapter, bytes32 codeHash);
 
     /// @notice The contract allowed to call `bridgeIn` for a rail was changed.
@@ -267,6 +274,8 @@ interface IHyperionRouter {
 
     /// @notice Read the provenance committed for a successful outbound dispatch.
     /// @dev A missing nonce returns a zero-valued record. Reverted dispatches never create one.
+    /// @param nonce The successful source dispatch nonce.
+    /// @return record Exact committed intent and provider metadata, or a zero-valued record.
     function outboundRecord(uint64 nonce) external view returns (OutboundRecord memory record);
 
     /// @notice Pay out a transfer that arrived over a rail.
@@ -315,13 +324,23 @@ interface IHyperionRouter {
         payable
         returns (uint64 nonce);
 
+    /// @notice Dispatch one sender-signed intent within its declared provider budget.
+    /// @param intent The complete chain/router-bound sender authorization.
+    /// @param signature The canonical 65-byte ECDSA signature.
+    /// @return nonce The source dispatch nonce committed on success.
     function bridgeOutWithIntent(TransferIntent calldata intent, bytes calldata signature)
         external
         payable
         returns (uint64 nonce);
 
+    /// @notice The next available signed-intent nonce for a sender.
+    /// @param sender The authenticated token owner.
+    /// @return The next nonce, consumed only by successful execution.
     function intentNonce(address sender) external view returns (uint256);
 
+    /// @notice Compute the exact EIP-712 sender authorization digest.
+    /// @param intent The complete typed transfer intent.
+    /// @return The chain/router-bound digest.
     function hashTransferIntent(TransferIntent calldata intent) external view returns (bytes32);
 
     /// @notice Return zero for passing local bounded checks, otherwise the earliest error selector.

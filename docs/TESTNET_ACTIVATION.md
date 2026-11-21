@@ -58,9 +58,9 @@ The older deployment is preserved in `deployments/archive/stellar-testnet-2026-1
 
 Deprecation is a status change, not a deletion. Archived records remain in the repository and their transaction evidence is retained in full; only their operational authority is withdrawn.
 
-| Record                                                 | Status     | Retired router                                             | Successor                                                    | Successor record                                |
-| ------------------------------------------------------ | ---------- | ---------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------- |
-| `deployments/archive/stellar-testnet-2026-10-01.json`  | `archived` | Router from the October 1 deployment (historical address)  | `CCXPCT3YFLVANSF3AQMYCCZVGCMLTURAYQ6O6DYGQJMTKVYQL6NTOC2V` | `deployments/stellar-testnet-phase1.json`       |
+| Record                                                | Status     | Retired router                                            | Successor                                                  | Successor record                          |
+| ----------------------------------------------------- | ---------- | --------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------- |
+| `deployments/archive/stellar-testnet-2026-10-01.json` | `archived` | Router from the October 1 deployment (historical address) | `CCXPCT3YFLVANSF3AQMYCCZVGCMLTURAYQ6O6DYGQJMTKVYQL6NTOC2V` | `deployments/stellar-testnet-phase1.json` |
 
 Parsed metadata contract for tools:
 
@@ -252,8 +252,10 @@ runbook. Guest exports, parameter/result types, event layouts and runtime behavi
 The same pinned Stellar CLI builds these artifacts locally and in CI under the unchanged 65,536-byte
 ledger gate.
 
-The EVM compiler uses 1,000 optimizer runs to retain EIP-170 deployment headroom; the same profile
-is used locally and by full CI, with exact gas reports. The deployment size gates are unchanged.
+The EVM compiler profile is Solidity `0.8.28+commit.7893614a`, Cancun, 200 optimizer runs and
+`viaIR=true`. The same profile is used locally and by full CI, with exact gas reports. Deployment
+records and read-only verification bind the observed artifacts to this profile. The deployment
+size gates are unchanged.
 
 The adapter instance carries configuration, gas settings and the Allbridge validator; extending
 it preserves those fields together. External rail contracts need their own restoration/upkeep
@@ -417,7 +419,7 @@ deployment before queueing a change:
 node script/stellar/verify-registry.mjs \
   --live path/to/live-snapshot.json \
   --network stellar-testnet \
-  --revision git:<selected-commit>
+  --revision git:<full-40-character-selected-commit>
 ```
 
 The command checks network identity, token identity, provider addresses and provider names. Each
@@ -426,3 +428,66 @@ the entry is explicitly unconfirmed, and `unknown` when the live provider could 
 mismatched address is `drift` and makes the command fail; an unavailable read is never reported as
 healthy. The revision is required so a report cannot silently compare a deployment against
 whichever SDK happens to be installed on the operator's machine.
+
+The selected commit must already be available in the local repository. The verifier extracts
+that commit's protocol source into a temporary directory, compiles those exact sources, and
+records the commit and source digest. It never substitutes the current working tree or installed
+SDK distribution. Snapshot `tokens` is an array with explicit `family`, `chain`, `representation`
+and address, or Stellar `code`/`issuer`, identity fields. Entries sharing a symbol remain separate.
+Provider snapshots use registry field names under `providers.cctp` and `providers.axelar-its`,
+including `interchainTokenService`, `gasService`, `gateway`, and `chainName` where present.
+Stellar identifiers, issuers, passphrases and provider chain names compare exactly; EVM address
+casing compares semantically. Unknown and inferred fields both prevent a healthy ready report.
+The input snapshot remains recorded read-only observations, not proof of public-network finality.
+
+## Durable deployment recovery
+
+Phase one and phase two use `deployments/stellar-<network>-operations.json`, overridable with
+`HYPERION_JOURNAL`. Every signing CLI command acquires an exclusive journal lock and durably
+records its canonical public intent before starting. Intent includes the actual RPC passphrase,
+public source address, command arguments and uploaded WASM content hash. Local identity aliases,
+object ordering and WASM file paths do not create another intent. Successful CLI completion stores
+a public result and receipt digest; repeated calls return that result without signing again.
+A CLI receipt is labelled `cli-success`, rather than claiming its digest is a transaction hash.
+
+Interrupted, timed-out and failed commands remain uncertain and cannot be resubmitted. List them
+with `node script/stellar/operation-journal.mjs reconcile JOURNAL.json`. After a process crash,
+inspect uncertainty before explicitly removing a stale `.lock`; lock deletion never clears an
+operation's uncertainty. Existing older journal versions must be preserved and reconciled before
+migration. A missing queue entry or failed RPC read never proves execution. Phase two skips only
+an execution with a confirmed receipt and simulates readiness as a view before reserving a
+signing attempt, so a precise early timelock refusal is safely retryable after maturity.
+
+Read-only transaction reconciliation uses a known transaction hash and the actual envelope:
+
+```sh
+node script/stellar/reconcile-transaction.mjs --rpc recovery-request.json
+node script/stellar/reconcile-transaction.mjs --recorded recorded-rpc-evidence.json
+```
+
+The RPC request contains `rpcUrl`, `contractId`, `expectedHash`, `expectedNetwork` (the exact
+passphrase), `expectedSender`, and complete `expectedConfig`. Configuration requires exactly
+`admin`, `guardian`, `treasury`, `fee_bps`, `flow_window_ledgers`, `timelock_delay`, and `paused`.
+Live mode checks `getNetwork`, retrieves `getTransaction` for that hash, derives hash/source from
+its real XDR, and invokes `get_config` as a view. Missing, extra, narrowed or divergent configuration
+cannot confirm the operation. Recorded mode additionally requires `observedNetwork`, `transaction`
+with `envelopeXdr`, and `liveConfig`, and labels its output as recorded evidence. Asserted transaction
+hash, source and network strings never replace decoding. Failed or unknown results never recommend
+a replacement transaction. An operator can attach a reviewed positive transaction receipt to the
+original intent with the journal's explicit `confirm` command; that command does not broadcast.
+
+## Local activation rehearsal
+
+`STELLAR_NETWORK=local script/stellar/rehearse-activation.sh` runs the native real router and
+CCTP/Axelar adapter fixture. It checks the exact `TimelockNotReady` contract error, advances the
+controlled ledger clock, executes all seven queued actions in order, links real adapter peers,
+verifies token mappings/capability, and repeats phase two without executing an action twice.
+The runner requires the unique successful fixture report; an unrelated command failure or zero
+selected tests cannot pass the rehearsal. It signs no public-network transaction.
+
+EVM phase two validates provider intent against recorded adapters before signing, then checks
+registered token and configured router pointers immediately before enabling each route, after
+those queued prerequisites have executed. Its report-only path requires the correct chain/router
+and bounded uint64 IDs but starts no broadcast. Verification compares actual artifact metadata
+against the deployment record. A zero-guardian policy requires complete role grant/revoke history
+from before deployment plus matching live role state; unavailable or excessive history fails closed.

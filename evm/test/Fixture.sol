@@ -124,11 +124,21 @@ contract Fixture is Test {
     function _configureProviderFaults(uint64 seed) internal {
         providerFaults = ProviderFaultSchedule({
             seed: seed,
-            dispatchMask: uint64(uint256(keccak256(abi.encode(seed, PROVIDER_STAGE_DISPATCH)))),
-            inboundMask: uint64(uint256(keccak256(abi.encode(seed, PROVIDER_STAGE_INBOUND)))),
+            dispatchMask: _mixFaultSeed(seed ^ 0x4453504154434848),
+            inboundMask: _mixFaultSeed(seed ^ 0x494e424f554e4448),
             dispatchAttempts: 0,
             inboundAttempts: 0
         });
+    }
+
+    function _mixFaultSeed(uint64 value) internal pure returns (uint64) {
+        unchecked {
+            value ^= value >> 30;
+            value *= 0xbf58476d1ce4e5b9;
+            value ^= value >> 27;
+            value *= 0x94d049bb133111eb;
+            return value ^ (value >> 31);
+        }
     }
 
     function _nextProviderFault(uint8 stage) internal returns (bool) {
@@ -289,11 +299,7 @@ contract Fixture is Test {
         uint256 totalNative;
     }
 
-    function _snapshot(address sender, address recipient)
-        internal
-        view
-        returns (BalanceSnapshot memory s)
-    {
+    function _snapshot(address sender, address recipient) internal view returns (BalanceSnapshot memory s) {
         s.router = usdc.balanceOf(address(router));
         s.treasury = usdc.balanceOf(treasury);
         s.sender = usdc.balanceOf(sender);
@@ -301,20 +307,32 @@ contract Fixture is Test {
         s.railReceiver = usdc.balanceOf(railReceiver);
         s.cctpRail = usdc.balanceOf(address(cctpRail));
         s.itsRail = usdc.balanceOf(address(itsRail));
-        s.total = s.router + s.treasury + s.sender + s.recipient + s.railReceiver + s.cctpRail + s.itsRail;
+
         s.senderNative = sender.balance;
         s.recipientNative = recipient.balance;
         s.routerNative = address(router).balance;
         s.cctpRailNative = address(cctpRail).balance;
         s.itsRailNative = address(itsRail).balance;
-        s.totalNative = s.senderNative + s.recipientNative + s.routerNative + s.cctpRailNative + s.itsRailNative;
+        address[7] memory accounts =
+            [address(router), treasury, sender, recipient, railReceiver, address(cctpRail), address(itsRail)];
+        for (uint256 i; i < accounts.length; ++i) {
+            bool duplicate;
+            for (uint256 j; j < i; ++j) {
+                if (accounts[j] == accounts[i]) duplicate = true;
+            }
+            if (!duplicate) {
+                s.total += usdc.balanceOf(accounts[i]);
+                s.totalNative += accounts[i].balance;
+            }
+        }
     }
 
     /// @dev Assert conservation with an operation name that identifies the failing path.
-    function _assertConserved(BalanceSnapshot memory before_, BalanceSnapshot memory after_, string memory operation)
-        internal
-        pure
-    {
+    function _assertConserved(
+        BalanceSnapshot memory before_,
+        BalanceSnapshot memory after_,
+        string memory operation
+    ) internal pure {
         assertEq(after_.total, before_.total, string.concat(operation, ": token balance delta is non-zero"));
         assertEq(
             after_.totalNative,

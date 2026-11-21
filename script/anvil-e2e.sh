@@ -22,12 +22,15 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-export PATH="$HOME/.foundry/bin:$PATH"
+# Respect a caller's reviewed toolchain; the default install is a fallback.
+export PATH="$PATH:$HOME/.foundry/bin"
 
 RPC="${RPC:-http://127.0.0.1:8545}"
 EVM_DIR="evm"
 HYPERION_FAULT_SEED="${HYPERION_FAULT_SEED:-156}"
 export HYPERION_FAULT_SEED
+node -e 'const seed=process.env.HYPERION_FAULT_SEED;if(!/^[0-9]+$/.test(seed)||BigInt(seed)>((1n<<64n)-1n))process.exit(1)' \
+  || { printf 'HYPERION_FAULT_SEED must be an unsigned 64-bit integer\n' >&2; exit 1; }
 
 note() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mfailed: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -66,6 +69,9 @@ json() { node -e 'const f=require("fs");process.stdout.write(String(JSON.parse(f
 
 note "deploying stand in rails"
 note "using deterministic provider fault schedule (seed ${HYPERION_FAULT_SEED})"
+( cd "$EVM_DIR" && forge test --match-contract RouterProviderFaultTest --fuzz-seed "$HYPERION_FAULT_SEED" ) \
+  > /tmp/hyperion-provider-faults.log 2>&1 \
+  || { tail -30 /tmp/hyperion-provider-faults.log; die "seeded provider rollback/retry rehearsal"; }
 ( cd "$EVM_DIR" && mkdir -p deployments && forge script script/LocalRails.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" >/tmp/hyperion-rails.log 2>&1 ) \
   || { tail -30 /tmp/hyperion-rails.log; die "LocalRails"; }
 

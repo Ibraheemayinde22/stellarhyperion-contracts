@@ -25,7 +25,7 @@ contract MockRailAdapter is IRailAdapter, IAxelarItsIntentAdapter {
     }
 
     RouteKind private immutable ROUTE;
-    address private immutable ROUTER;
+    address public immutable ROUTER;
 
     Call private _lastCall;
     uint256 public callCount;
@@ -46,10 +46,6 @@ contract MockRailAdapter is IRailAdapter, IAxelarItsIntentAdapter {
 
     function route() external view override returns (RouteKind) {
         return ROUTE;
-    }
-
-    function ROUTER() external view returns (address) {
-        return ROUTER;
     }
 
     function supportsChain(string calldata chain) external view override returns (bool) {

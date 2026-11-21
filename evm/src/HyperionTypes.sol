@@ -92,13 +92,9 @@ struct TokenConfig {
     bool enabled;
 }
 
-/// @dev Notes on two structs that exist on the Stellar side and deliberately do not exist here.
-///
-/// `TransferRecord` and `InboundRecord` are stored contract state in the Soroban router, because
-/// Soroban events are not retained for long and an indexer that falls behind has nowhere else to
-/// look. On this chain a log is permanent and indexable by topic, so the same information is
-/// emitted and not written to storage. Paying sixty thousand gas per transfer to duplicate a log
-/// into a mapping nothing on chain ever reads would be a cost with no reader.
+/// @dev OutboundRecord is an append-only source provenance lookup for successful dispatches.
+/// It duplicates selected event fields for on-chain reconciliation and costs storage per transfer.
+/// Failed dispatches and failed refunds revert this record along with source accounting.
 
 /// @dev Funds that arrived but could not be handed over yet.
 ///
