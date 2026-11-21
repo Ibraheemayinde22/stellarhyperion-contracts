@@ -3,6 +3,7 @@ mod admin;
 #[path = "../../../../test-support/capability.rs"]
 mod capability;
 
+mod doubles;
 mod inbound;
 mod its;
 mod outbound;
@@ -10,4 +11,5 @@ mod paid;
 mod setup;
 
 mod capabilities;
+mod diagnostics;
 mod maintenance;

@@ -27,3 +27,5 @@ mod maintenance;
 
 mod approval;
 mod capabilities;
+
+mod rotation;
