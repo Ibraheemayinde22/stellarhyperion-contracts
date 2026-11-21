@@ -1,0 +1,90 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+#
+# Development surface only. The active deployment is Stellar Testnet outbound ITS/CCTP;
+# EVM dispatch is not active until independently validated.
+surface evm/router
+contract HyperionRouter
+status gated
+# Public callable methods, sorted.
+method DEFAULT_ADMIN_ROLE
+method EIP712_DOMAIN_TYPEHASH
+method GRACE_PERIOD
+method GUARDIAN_ROLE
+method MAX_CLAIMS_PER_BATCH
+method MAX_FLOW_WINDOW
+method MAX_REASON_LEN
+method MAX_SUPPORTED_INBOUND_AMOUNT
+method MAX_TIMELOCK_DELAY
+method MIN_FLOW_WINDOW
+method MIN_TIMELOCK_DELAY
+method TRANSFER_INTENT_TYPEHASH
+method actionCancelled
+method actionCount
+method adapter
+method adapterCodeHash
+method bridgeIn
+method bridgeOut
+method bridgeOutBounded
+method bridgeOutWithIntent
+method bridgeOutWithPermit
+method bridgeOutWithRefundCredit
+method cancelAction
+method cancelActionWithReason
+method checkDestination
+method checkOutbound
+method claimCount
+method claimFailureReason
+method executeAction
+method explainOutbound
+method feeBps
+method flowAvailable
+method flowWindow
+method getRoleAdmin
+method grantRole
+method hasRole
+method hashTransferIntent
+method intentNonce
+method lowerTokenFlowLimit
+method outboundNonce
+method outboundRecord
+method pause
+method pauseRoute
+method paused
+method pendingClaim
+method processed
+method queueAction
+method queuedAction
+method quote
+method quoteAll
+method quoteV2
+method railReceiver
+method refundCredits
+method renounceRole
+method revokeRole
+method routeEnabled
+method routePaused
+method settleClaim
+method settleClaimItem
+method settleClaims
+method supportsInterface
+method timelockDelay
+method tokenConfig
+method treasury
+method unpause
+method unpauseRoute
+method withdrawRefundCredit
+
+# Routes this surface can carry, as protocol slugs.
+route cctp
+route axelar-its
+
+# Entry points that attach a provider payment.
+paid-method bridgeOut
+paid-method bridgeOutBounded
+paid-method bridgeOutWithIntent
+paid-method bridgeOutWithPermit
+paid-method bridgeOutWithRefundCredit

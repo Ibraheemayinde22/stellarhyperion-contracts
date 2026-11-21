@@ -34,6 +34,62 @@ export const HOOK_VERSION = 1;
 /** Diagnostic format version for CCTP approval lifecycle audits. */
 export const APPROVAL_DIAGNOSTICS_VERSION = 1;
 
+export enum ProviderReadStatus {
+  Unknown = 0,
+  Usable = 1,
+  Paused = 2,
+}
+export interface CctpLaneReadiness {
+  readonly version: 1;
+  readonly routerPaused: boolean;
+  readonly messenger: ProviderReadStatus;
+  readonly transmitter: ProviderReadStatus;
+  readonly messengerContract: Hex;
+  readonly transmitterContract: Hex;
+  readonly laneAvailable: boolean;
+}
+
+export enum AttestationCondition {
+  Unverified = 0,
+  Verified = 1,
+  Expired = 2,
+  UnsupportedRecovery = 3,
+}
+export interface CctpRenewalPlan {
+  readonly version: 1;
+  readonly condition: AttestationCondition;
+  readonly sourceMessageId: Hex;
+  readonly payoutIntent: Hex;
+  readonly expiresAt: bigint;
+  readonly recoverySupported: boolean;
+}
+
+export function classifyCctpRenewal(
+  sourceMessageId: Hex,
+  payoutIntent: Hex,
+  expiresAt: bigint,
+  now: bigint,
+  verifiedAttestation: boolean,
+  recoverySupported: boolean,
+): CctpRenewalPlan {
+  const condition =
+    expiresAt <= now
+      ? AttestationCondition.Expired
+      : !recoverySupported
+        ? AttestationCondition.UnsupportedRecovery
+        : verifiedAttestation
+          ? AttestationCondition.Verified
+          : AttestationCondition.Unverified;
+  return {
+    version: 1,
+    condition,
+    sourceMessageId,
+    payoutIntent,
+    expiresAt,
+    recoverySupported: recoverySupported && expiresAt > now,
+  };
+}
+
 /** Documented residual allowance expected between adapter and token messenger. */
 export const DOCUMENTED_RESIDUAL_ALLOWANCE = 0n;
 

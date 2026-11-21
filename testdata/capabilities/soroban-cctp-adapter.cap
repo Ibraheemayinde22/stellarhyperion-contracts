@@ -1,0 +1,53 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+surface soroban/cctp-adapter
+contract CctpAdapter
+status active
+# Public callable methods, sorted.
+method apply_messenger_rotation
+method apply_peer_rotation
+method asset_for
+method audit_allowance
+method cancel_messenger_rotation
+method cancel_peer_rotation
+method check_dispatch
+method dispatch
+method dispatch_from
+method domain_for
+method get_config
+method get_link
+method initialize
+method is_domain_disabled
+method keep_alive
+method key_coverage
+method lane_readiness
+method link_domain
+method maintain_storage
+method map_asset
+method old_peer_messenger
+method old_token_messenger
+method peer_messenger
+method pending_messenger_rotation
+method pending_peer_rotation
+method prepare_renewal
+method propose_messenger_rotation
+method propose_peer_rotation
+method quote_dispatch
+method quote_max_fee
+method receive
+method set_admin
+method set_domain_disabled
+method set_fee_policy
+method set_lane_finality_policy
+method set_peer_messenger
+method sweep
+method upgrade
+
+# Routes this surface can carry, as protocol slugs.
+route cctp
+
+# Entry points that attach a provider payment.
+paid-method dispatch_from

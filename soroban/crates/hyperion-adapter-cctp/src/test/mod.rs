@@ -12,6 +12,10 @@
 //! empty attestation, and can be told to take a fee, so the adapter's habit of measuring the
 //! balance delta rather than trusting `burn.amount` is genuinely exercised rather than asserted.
 
+// The one shared copy of the capability snapshot grammar, compiled into each crate's tests.
+#[path = "../../../../test-support/capability.rs"]
+mod capability;
+
 mod admin;
 mod circle;
 mod inbound;
@@ -22,3 +26,6 @@ mod setup;
 mod maintenance;
 
 mod approval;
+
+mod capabilities;
+mod rotation;

@@ -19,6 +19,9 @@ error NotRailReceiver();
 error RouteDisabled();
 error RouteIsPaused(RouteKind route);
 error AdapterNotSet();
+error AdapterCodeMissing();
+error AdapterIdentityMismatch();
+error UpgradeableAdapterUnsupported();
 
 // Amounts, decimals and fees.
 error InvalidAmount();
@@ -81,9 +84,27 @@ error ZeroAddress();
 // sending change to the sender. A sender who cannot accept it is refused rather than tipped,
 // because silently keeping the difference is a second fee nobody agreed to.
 error RefundFailed();
+error NoRefundCredit();
 
 /// @notice The native provider payment exceeds the explicit sender cap.
 error ProviderBudgetExceeded();
 
 /// @notice The adapter lacks a usable local dispatch validation method.
 error AdapterMethodUnavailable();
+
+error InvalidSignature();
+error IntentExpired(uint256 deadline);
+error IntentNonceMismatch(uint256 expected, uint256 provided);
+error IntentDomainMismatch();
+
+// Messenger rotation.
+error RotationAlreadyPending();
+error RotationNotPending();
+error RotationNotReady();
+error MessengerUnchanged();
+error OldMessengerExpired();
+/// @notice No outbound ITS transfer is registered for this top-up intent.
+error TopUpIntentNotFound();
+
+/// @notice A top-up changed an intent's bound message, destination, or refund recipient.
+error TopUpBindingMismatch();

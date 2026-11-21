@@ -1,5 +1,7 @@
 # Current Stellar Testnet deployment
 
+> **Status:** Active. This record is the single current Stellar Testnet deployment for outbound ITS/CCTP. Archived deployments are listed under "Deprecated and archived deployments" below; their addresses must not be used for activation or monitoring.
+
 The wallet-owned router and ITS adapter were deployed with the dedicated `hyperion-testnet-20261028` CLI wallet and activated after the normal 3600-second router timelock. This wallet owns the fresh deployment; it does not control the older October 1 router.
 
 | Setting          | Confirmed value                                              |
@@ -15,6 +17,35 @@ The wallet-owned router and ITS adapter were deployed with the dedicated `hyperi
 
 The received asset is the ITS representation of Stellar USDC, not Circle's native Sepolia USDC. Route 1 sends directly to the recipient through ITS and needs no EVM Hyperion adapter.
 
+## Axelar capability admission and upgrade compatibility
+
+The adapter now stores an explicit capability for each `(Hyperion chain, ITS token id)` pair. A
+record captures the current Axelar chain name, peer address, and locally reported ITS token-manager
+type. The capability is either `DirectItsTransfer` (recipient address, empty metadata) or
+`GmpPayload` (Hyperion peer address plus an authenticated note); a route instance cannot use the
+other shape. Dispatch and GMP callback acceptance fail closed if the record is missing, the manager
+type has changed, or the lane no longer matches the recorded peer. Soroban keeps these records in
+instance storage so the existing bounded instance-TTL maintenance keeps admission alive alongside
+the adapter configuration. Exact integer amounts,
+authenticated ITS calls, router replay protection and recipient-bound claims are unchanged.
+
+The active Sepolia source route is the bare `AxelarIts` shape. Its existing link and token mappings
+are not overwritten by admission, but the new capability key does not exist in older adapter state.
+When upgrading that adapter, retain the existing trusted link and USDC token mapping, then call
+`set_destination_capability` for the `sepolia` / existing ITS-USDC pair with
+`DirectItsTransfer`. Until this admission is written, the new implementation refuses dispatch;
+perform the upgrade and admission as one planned maintenance window, or configure a replacement
+adapter and switch the router through its normal timelock. Do not select `GmpPayload` for the
+active direct-transfer lane. CCTP configuration and delivery are unaffected.
+
+GMP instances need their own `GmpPayload` admission for each chain/token pair and still require
+the exact peer trust check. Repointing a chain or changing its token-manager type invalidates the
+old record and requires a fresh admin admission. The EVM Axelar adapter is separately gated:
+`developmentGateOpen` is false by default, and its GMP pair records and nonzero validation evidence
+must only be configured after independent EVM/destination validation. The evidence hash is an
+operator reference, not an on-chain proof. EVM and other unvalidated rail development must not be
+activated as part of the current Stellar Testnet rollout.
+
 ## Deployment evidence
 
 `deployments/stellar-testnet-phase1.json` is the canonical app/indexer record, retaining its historical filename. `deployments/evidence/2026-10-28-paid-its.json` records actual transaction hashes, ledgers, artifact hashes, token mapping, lane link, queued actions, execution and transfer acceptance status. Check that evidence for the latest source/destination verification result.
@@ -22,6 +53,29 @@ The received asset is the ITS representation of Stellar USDC, not Circle's nativ
 The current router uses WASM `281d946ea78b194c0ef44ad9488ed02b2aa6912fb4f6fbab523ad38f1e0803f1`; the CCTP adapter uses `80f109e7467ace6899f865a4f77079917a2bea8a5def593a4d87c08c09206af4`, built from forwarding implementation `b91c6ca`. The unchanged ITS adapter uses `5f32139554d29edc3501a39ae3d05761101234523dd48b4d9e2d81ebf001f2c3`, built from `60b3310`. Actual deployed code was downloaded and its SHA-256 verified. All initial configuration actions and the later CCTP/router upgrade actions were confirmed after their original 3600-second timelocks matured. No shortened timelock or bootstrap bypass was used.
 
 The older deployment is preserved in `deployments/archive/stellar-testnet-2026-10-01.json`. Its separate admin upgrade instructions are historical in `docs/LEGACY_TESTNET_UPGRADE.md`. Do not run those old-address commands against this fresh deployment.
+
+## Deprecated and archived deployments
+
+Deprecation is a status change, not a deletion. Archived records remain in the repository and their transaction evidence is retained in full; only their operational authority is withdrawn.
+
+| Record                                                | Status     | Retired router                                            | Successor                                                  | Successor record                          |
+| ----------------------------------------------------- | ---------- | --------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------- |
+| `deployments/archive/stellar-testnet-2026-10-01.json` | `archived` | Router from the October 1 deployment (historical address) | `CCXPCT3YFLVANSF3AQMYCCZVGCMLTURAYQ6O6DYGQJMTKVYQL6NTOC2V` | `deployments/stellar-testnet-phase1.json` |
+
+Parsed metadata contract for tools:
+
+- `status: "active"` marks the only record eligible for activation, proposal generation, verification and monitoring.
+- `status: "archived"` marks a record that must be read-only for historical evidence. Consumers must not activate, queue, upgrade or monitor it.
+- Every archived record must carry `successor` (the active router address) and `supersededAt` (ISO-8601 timestamp) fields. A missing successor is a hard error.
+- Archiving never removes or rewrites `evidence` entries, transaction hashes, ledgers or artifact hashes.
+
+Actionable warnings for consumers:
+
+- If a tool is configured with the retired October 1 router address, it must refuse activation and emit a warning that names the successor router `CCXPCT3YFLVANSF3AQMYCCZVGCMLTURAYQ6O6DYGQJMTKVYQL6NTOC2V` and the record `deployments/stellar-testnet-phase1.json`.
+- Monitoring and indexing of a retired router is read-only and must be labelled `archived` in output. Do not present archived delivery or balance data as current.
+- Do not run the legacy upgrade instructions in `docs/LEGACY_TESTNET_UPGRADE.md` against the successor; they target retired addresses.
+
+Compatibility and migration: existing consumers that read only the active record are unaffected. Consumers that enumerate archive files must parse `status` and `successor` before use. Tools that previously accepted the archived router without checking status must be updated to refuse it; this is a breaking change for those tools and is listed here so it can be planned.
 
 ## Verified acceptance transfer
 
@@ -198,8 +252,10 @@ runbook. Guest exports, parameter/result types, event layouts and runtime behavi
 The same pinned Stellar CLI builds these artifacts locally and in CI under the unchanged 65,536-byte
 ledger gate.
 
-The EVM compiler uses 1,000 optimizer runs to retain EIP-170 deployment headroom; the same profile
-is used locally and by full CI, with exact gas reports. The deployment size gates are unchanged.
+The EVM compiler profile is Solidity `0.8.28+commit.7893614a`, Cancun, 200 optimizer runs and
+`viaIR=true`. The same profile is used locally and by full CI, with exact gas reports. Deployment
+records and read-only verification bind the observed artifacts to this profile. The deployment
+size gates are unchanged.
 
 The adapter instance carries configuration, gas settings and the Allbridge validator; extending
 it preserves those fields together. External rail contracts need their own restoration/upkeep
@@ -353,3 +409,85 @@ production pricing and funded broadcasts require separate operator evidence.
 The active deployment remains Stellar Testnet outbound ITS/CCTP. EVM and other
 rails remain gated until independently validated; these local fixtures do not
 activate them or publish a live deployment.
+
+## Registry verification
+
+Compare a read-only live snapshot with the exact protocol SDK registry revision selected for a
+deployment before queueing a change:
+
+```sh
+node script/stellar/verify-registry.mjs \
+  --live path/to/live-snapshot.json \
+  --network stellar-testnet \
+  --revision git:<full-40-character-selected-commit>
+```
+
+The command checks network identity, token identity, provider addresses and provider names. Each
+field is labelled `verified` when its registry entry has primary-source provenance, `inferred` when
+the entry is explicitly unconfirmed, and `unknown` when the live provider could not be read. A
+mismatched address is `drift` and makes the command fail; an unavailable read is never reported as
+healthy. The revision is required so a report cannot silently compare a deployment against
+whichever SDK happens to be installed on the operator's machine.
+
+The selected commit must already be available in the local repository. The verifier extracts
+that commit's protocol source into a temporary directory, compiles those exact sources, and
+records the commit and source digest. It never substitutes the current working tree or installed
+SDK distribution. Snapshot `tokens` is an array with explicit `family`, `chain`, `representation`
+and address, or Stellar `code`/`issuer`, identity fields. Entries sharing a symbol remain separate.
+Provider snapshots use registry field names under `providers.cctp` and `providers.axelar-its`,
+including `interchainTokenService`, `gasService`, `gateway`, and `chainName` where present.
+Stellar identifiers, issuers, passphrases and provider chain names compare exactly; EVM address
+casing compares semantically. Unknown and inferred fields both prevent a healthy ready report.
+The input snapshot remains recorded read-only observations, not proof of public-network finality.
+
+## Durable deployment recovery
+
+Phase one and phase two use `deployments/stellar-<network>-operations.json`, overridable with
+`HYPERION_JOURNAL`. Every signing CLI command acquires an exclusive journal lock and durably
+records its canonical public intent before starting. Intent includes the actual RPC passphrase,
+public source address, command arguments and uploaded WASM content hash. Local identity aliases,
+object ordering and WASM file paths do not create another intent. Successful CLI completion stores
+a public result and receipt digest; repeated calls return that result without signing again.
+A CLI receipt is labelled `cli-success`, rather than claiming its digest is a transaction hash.
+
+Interrupted, timed-out and failed commands remain uncertain and cannot be resubmitted. List them
+with `node script/stellar/operation-journal.mjs reconcile JOURNAL.json`. After a process crash,
+inspect uncertainty before explicitly removing a stale `.lock`; lock deletion never clears an
+operation's uncertainty. Existing older journal versions must be preserved and reconciled before
+migration. A missing queue entry or failed RPC read never proves execution. Phase two skips only
+an execution with a confirmed receipt and simulates readiness as a view before reserving a
+signing attempt, so a precise early timelock refusal is safely retryable after maturity.
+
+Read-only transaction reconciliation uses a known transaction hash and the actual envelope:
+
+```sh
+node script/stellar/reconcile-transaction.mjs --rpc recovery-request.json
+node script/stellar/reconcile-transaction.mjs --recorded recorded-rpc-evidence.json
+```
+
+The RPC request contains `rpcUrl`, `contractId`, `expectedHash`, `expectedNetwork` (the exact
+passphrase), `expectedSender`, and complete `expectedConfig`. Configuration requires exactly
+`admin`, `guardian`, `treasury`, `fee_bps`, `flow_window_ledgers`, `timelock_delay`, and `paused`.
+Live mode checks `getNetwork`, retrieves `getTransaction` for that hash, derives hash/source from
+its real XDR, and invokes `get_config` as a view. Missing, extra, narrowed or divergent configuration
+cannot confirm the operation. Recorded mode additionally requires `observedNetwork`, `transaction`
+with `envelopeXdr`, and `liveConfig`, and labels its output as recorded evidence. Asserted transaction
+hash, source and network strings never replace decoding. Failed or unknown results never recommend
+a replacement transaction. An operator can attach a reviewed positive transaction receipt to the
+original intent with the journal's explicit `confirm` command; that command does not broadcast.
+
+## Local activation rehearsal
+
+`STELLAR_NETWORK=local script/stellar/rehearse-activation.sh` runs the native real router and
+CCTP/Axelar adapter fixture. It checks the exact `TimelockNotReady` contract error, advances the
+controlled ledger clock, executes all seven queued actions in order, links real adapter peers,
+verifies token mappings/capability, and repeats phase two without executing an action twice.
+The runner requires the unique successful fixture report; an unrelated command failure or zero
+selected tests cannot pass the rehearsal. It signs no public-network transaction.
+
+EVM phase two validates provider intent against recorded adapters before signing, then checks
+registered token and configured router pointers immediately before enabling each route, after
+those queued prerequisites have executed. Its report-only path requires the correct chain/router
+and bounded uint64 IDs but starts no broadcast. Verification compares actual artifact metadata
+against the deployment record. A zero-guardian policy requires complete role grant/revoke history
+from before deployment plus matching live role state; unavailable or excessive history fails closed.

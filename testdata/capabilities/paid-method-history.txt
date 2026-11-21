@@ -1,0 +1,14 @@
+# Paid-method history. Append only: every paid entry point that has ever shipped on a
+# surface stays here even after it is removed. A method no longer callable must be acknowledged
+# with a removed-paid-method line in that surface snapshot. Never delete an entry.
+paid-method soroban/router bridge_out_bounded
+paid-method soroban/router bridge_out_with_gas
+paid-method soroban/cctp-adapter dispatch_from
+paid-method soroban/axelar-adapter dispatch_from
+paid-method evm/router bridgeOut
+paid-method evm/router bridgeOutBounded
+paid-method evm/cctp-adapter dispatch
+paid-method evm/axelar-adapter dispatch
+paid-method evm/router bridgeOutWithPermit
+paid-method evm/router bridgeOutWithRefundCredit
+paid-method evm/router bridgeOutWithIntent

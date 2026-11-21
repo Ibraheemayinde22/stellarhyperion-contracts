@@ -9,13 +9,15 @@ import {
     ClaimSettlementResult,
     Destination,
     Origin,
+    OutboundRecord,
     OutboundRequest,
     PendingClaim,
     QueuedAction,
     RouteKind,
     RouteQuote,
     RouteQuoteV2,
-    TokenConfig
+    TokenConfig,
+    TransferIntent
 } from "../HyperionTypes.sol";
 
 /// @title The router, as everything outside it sees it
@@ -27,6 +29,14 @@ import {
 /// Everything else here is either a question you can ask before committing money, or an admin
 /// action that has to sit in a timelock first.
 interface IHyperionRouter {
+    /// @notice An authenticated sender intent executed through a development relayer.
+    /// @param sender The signer whose tokens were debited.
+    /// @param intentNonce The consumed sender intent nonce.
+    /// @param relayer The transaction submitter.
+    event TransferIntentExecuted(
+        address indexed sender, uint256 indexed intentNonce, address indexed relayer
+    );
+
     /// @notice A transfer left for another chain.
     /// @dev The Soroban router writes a `TransferRecord` to storage as well as emitting, because
     /// Soroban events age out after about a week and an indexer that fell behind has nowhere else
@@ -184,6 +194,12 @@ interface IHyperionRouter {
     /// @param adapter Its new adapter, or zero when the rail was unwired.
     event AdapterSet(RouteKind indexed route, address indexed adapter);
 
+    /// @notice Records the deployed adapter code identity accepted at activation time.
+    /// @param route The rail accepting the adapter.
+    /// @param adapter The router-bound adapter.
+    /// @param codeHash The reviewed runtime hash.
+    event AdapterIdentityRecorded(RouteKind indexed route, address indexed adapter, bytes32 codeHash);
+
     /// @notice The contract allowed to call `bridgeIn` for a rail was changed.
     /// @param route The rail.
     /// @param receiver The only address that rail's arrivals may come from.
@@ -195,6 +211,35 @@ interface IHyperionRouter {
     /// @param timelockDelay How long a queued change now waits, in seconds.
     /// @param flowWindow How long a flow window now runs, in seconds.
     event ConfigChanged(address treasury, uint16 feeBps, uint64 timelockDelay, uint64 flowWindow);
+
+    /// @notice A native refund could not be delivered and was recorded for the sender.
+    /// @param beneficiary The caller whose direct native refund failed.
+    /// @param amount The retained native remainder.
+    event RefundCreditRecorded(address indexed beneficiary, uint256 amount);
+
+    /// @notice The beneficiary withdrew their native refund credit to their selected recipient.
+    /// @param beneficiary The original credit owner authorizing withdrawal.
+    /// @param recipient The native-currency recipient selected by that owner.
+    /// @param amount The credit paid out.
+    event RefundCreditWithdrawn(address indexed beneficiary, address indexed recipient, uint256 amount);
+
+    /// @notice Dispatch while recording an undeliverable native refund for the sender.
+    /// @dev This is opt-in. `bridgeOut` retains its legacy reverting-refund behavior.
+    /// @param request The unchanged token, amount, rail, destination, and slippage intent.
+    /// @return nonce The outbound nonce.
+    function bridgeOutWithRefundCredit(OutboundRequest calldata request)
+        external
+        payable
+        returns (uint64 nonce);
+
+    /// @notice Withdraw the caller's previously recorded native refund credit.
+    function withdrawRefundCredit() external;
+
+    /// @notice Withdraw the caller's credit to a recipient they authorize.
+    /// @dev Enables recovery for beneficiaries whose own receive function always rejects native currency.
+    /// A failed delivery reverts and preserves the caller's credit.
+    /// @param recipient A nonzero native-currency recipient selected by the original beneficiary.
+    function withdrawRefundCredit(address payable recipient) external;
 
     /// @notice Send `request.amount` of a token to another chain.
     /// @dev Pull, then fee, then floor, then hand off. The fee comes off the raw amount and the
@@ -208,6 +253,30 @@ interface IHyperionRouter {
     /// @return nonce This router's own counter for the transfer, which is also what appears in the
     /// note the far side reads.
     function bridgeOut(OutboundRequest calldata request) external payable returns (uint64 nonce);
+
+    /// @notice Approve exactly this transfer with EIP-2612, then dispatch it.
+    /// @dev The permit value is the router's calculated gross debit (net amount plus fee),
+    /// never an allowance chosen by the caller. Tokens without EIP-2612 keep using `bridgeOut`
+    /// after an explicit approval.
+    /// @param request The token, amount, rail, destination, and slippage floor.
+    /// @param deadline The permit deadline enforced by the token.
+    /// @param v The ECDSA recovery byte for the permit signature.
+    /// @param r The first ECDSA signature word.
+    /// @param s The second ECDSA signature word.
+    /// @return nonce The outbound nonce.
+    function bridgeOutWithPermit(
+        OutboundRequest calldata request,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable returns (uint64 nonce);
+
+    /// @notice Read the provenance committed for a successful outbound dispatch.
+    /// @dev A missing nonce returns a zero-valued record. Reverted dispatches never create one.
+    /// @param nonce The successful source dispatch nonce.
+    /// @return record Exact committed intent and provider metadata, or a zero-valued record.
+    function outboundRecord(uint64 nonce) external view returns (OutboundRecord memory record);
 
     /// @notice Pay out a transfer that arrived over a rail.
     /// @dev Callable only by the contract registered as that rail's receiver, and only after the
@@ -254,6 +323,25 @@ interface IHyperionRouter {
         external
         payable
         returns (uint64 nonce);
+
+    /// @notice Dispatch one sender-signed intent within its declared provider budget.
+    /// @param intent The complete chain/router-bound sender authorization.
+    /// @param signature The canonical 65-byte ECDSA signature.
+    /// @return nonce The source dispatch nonce committed on success.
+    function bridgeOutWithIntent(TransferIntent calldata intent, bytes calldata signature)
+        external
+        payable
+        returns (uint64 nonce);
+
+    /// @notice The next available signed-intent nonce for a sender.
+    /// @param sender The authenticated token owner.
+    /// @return The next nonce, consumed only by successful execution.
+    function intentNonce(address sender) external view returns (uint256);
+
+    /// @notice Compute the exact EIP-712 sender authorization digest.
+    /// @param intent The complete typed transfer intent.
+    /// @return The chain/router-bound digest.
+    function hashTransferIntent(TransferIntent calldata intent) external view returns (bytes32);
 
     /// @notice Return zero for passing local bounded checks, otherwise the earliest error selector.
     /// @param request The legacy outbound request.

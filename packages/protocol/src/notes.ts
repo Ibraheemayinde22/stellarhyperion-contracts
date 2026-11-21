@@ -26,7 +26,36 @@ import type { Hex } from "./bytes.js";
 import { fail } from "./errors.js";
 
 /** One envelope version across both rails, so nobody has to remember which rail numbers what. */
-export const NOTE_VERSION = 1;
+export const NOTE_VERSION_V1 = 1;
+export const NOTE_VERSION = NOTE_VERSION_V1;
+export const SUPPORTED_NOTE_VERSIONS = [NOTE_VERSION_V1] as const;
+
+/** True only for versions with an implemented codec in this package. */
+export function supportsNoteVersion(version: number): boolean {
+  return version === NOTE_VERSION_V1;
+}
+
+/**
+ * Select the highest common supported version at or above the destination's requirement.
+ * The requirement is a floor, not a preference: negotiation never falls back below it.
+ */
+export function negotiateNoteVersion(
+  requiredVersion: number,
+  localVersions: readonly number[],
+  destinationVersions: readonly number[],
+): number {
+  const common = localVersions.filter(
+    (version) =>
+      version >= requiredVersion &&
+      supportsNoteVersion(version) &&
+      destinationVersions.includes(version),
+  );
+  const selected = Math.max(...common);
+  if (!Number.isSafeInteger(selected) || selected <= 0) {
+    fail("UnsupportedHookVersion", `no common version at or above ${String(requiredVersion)}`);
+  }
+  return selected;
+}
 
 /** Version, twenty byte address, eight byte nonce. */
 export const OUTBOUND_NOTE_LEN = 29;
@@ -64,11 +93,19 @@ export interface InboundNote {
  */
 export function decodeOutboundNote(payload: Uint8Array | Hex): OutboundNote {
   const bytes = typeof payload === "string" ? fromHex(payload) : payload;
+  const version = bytes[0];
+  if (version === undefined) fail("MalformedMessage", "missing note version");
+  switch (version) {
+    case NOTE_VERSION_V1:
+      return decodeOutboundNoteV1(bytes);
+    default:
+      fail("UnsupportedHookVersion", `note version ${String(version)}`);
+  }
+}
+
+function decodeOutboundNoteV1(bytes: Uint8Array): OutboundNote {
   if (bytes.length !== OUTBOUND_NOTE_LEN) {
     fail("MalformedMessage", `an outbound note is ${String(OUTBOUND_NOTE_LEN)} bytes`);
-  }
-  if (bytes[0] !== NOTE_VERSION) {
-    fail("UnsupportedHookVersion", `note version ${String(bytes[0])}`);
   }
 
   const recipient = toHex(bytes.slice(1, 21));
@@ -99,8 +136,18 @@ export function encodeInboundNote(strkey: string, nonce: bigint): Uint8Array {
 /** Read an inbound note back, which is what the Stellar side does with it. */
 export function decodeInboundNote(payload: Uint8Array | Hex): InboundNote {
   const bytes = typeof payload === "string" ? fromHex(payload) : payload;
+  const version = bytes[0];
+  if (version === undefined) fail("MalformedMessage", "missing note version");
+  switch (version) {
+    case NOTE_VERSION_V1:
+      return decodeInboundNoteV1(bytes);
+    default:
+      fail("UnsupportedHookVersion", `note version ${String(version)}`);
+  }
+}
+
+function decodeInboundNoteV1(bytes: Uint8Array): InboundNote {
   if (bytes.length < INBOUND_NOTE_MIN) fail("MalformedMessage", "too short to be a note");
-  if (bytes[0] !== NOTE_VERSION) fail("UnsupportedHookVersion", `note version ${String(bytes[0])}`);
 
   const tag = bytes[1] ?? 0xff;
   if (tag > AddressKind.MuxedAccount) fail("MalformedMessage", `address kind ${String(tag)}`);
@@ -217,4 +264,302 @@ function bigIntToEight(value: bigint): Uint8Array {
     remaining >>= 8n;
   }
   return out;
+}
+
+export interface AxelarSourceIntent {
+  readonly direction?: "outbound" | "inbound";
+  readonly note?: Hex | Uint8Array;
+  readonly recipient?: string;
+  readonly tokenId: string;
+  readonly amount: bigint | string | number;
+  readonly commandId?: string;
+  readonly messageId?: string;
+  readonly nonce?: bigint | number | string;
+  readonly rawReferences?: Record<string, unknown>;
+}
+
+export interface AxelarCandidatePayment {
+  readonly recipient?: string;
+  readonly tokenId?: string;
+  readonly amount?: bigint | string | number;
+  readonly commandId?: string;
+  readonly messageId?: string;
+  readonly rawReferences?: Record<string, unknown>;
+}
+
+export interface AxelarReconciliationReport {
+  readonly verified: boolean;
+  readonly evidenceOnly: true;
+  readonly executionProofVerified: false;
+  readonly sourceRawReferences: Record<string, unknown>;
+  readonly candidateRawReferences: Record<string, unknown>;
+  readonly status: "verified" | "unverified";
+  readonly direction: "outbound" | "inbound";
+  readonly discrepancies: readonly string[];
+  readonly agreements: readonly string[];
+  readonly rawReferences: Record<string, unknown>;
+  readonly details: {
+    readonly expectedRecipient: string;
+    readonly candidateRecipient?: string;
+    readonly expectedTokenId: string;
+    readonly candidateTokenId?: string;
+    readonly expectedAmount: string;
+    readonly candidateAmount?: string;
+    readonly expectedCommandId?: string;
+    readonly candidateCommandId?: string;
+    readonly displayNonce?: string;
+  };
+}
+
+function normalizeHex32(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const clean = value.replace(/^0x/i, "");
+  return /^[0-9a-fA-F]{64}$/.test(clean) && !/^0{64}$/.test(clean) ? clean.toLowerCase() : "";
+}
+function paymentIdentity(value: unknown, direction: "inbound" | "outbound"): string {
+  if (direction === "outbound") return normalizeHex32(value);
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    /^[!-~]+$/.test(value)
+    ? value
+    : "";
+}
+
+function parseIntegerAmount(value: unknown): bigint | null {
+  const maximum = (1n << 256n) - 1n;
+  if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) return null;
+  if (typeof value !== "bigint" && typeof value !== "number" && typeof value !== "string")
+    return null;
+  if (typeof value === "string" && (!/^\d+$/.test(value) || value.length > 78)) return null;
+  try {
+    const amount = BigInt(value);
+    return amount >= 0n && amount <= maximum ? amount : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reconcile encoded source note intent with candidate destination ITS payment events.
+ *
+ * Verifies exact agreement on recipient, token ID, amount, and full command identity.
+ * Discrepancies, partial receipts, or missing candidates result in status "unverified".
+ * Reports retain original raw references without relying on a display nonce.
+ */
+function isEvidenceRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function reconcileAxelarPayment(
+  source: AxelarSourceIntent,
+  candidate?: AxelarCandidatePayment | null,
+): AxelarReconciliationReport;
+export function reconcileAxelarPayment(
+  sourceInput: unknown,
+  candidateInput?: unknown,
+): AxelarReconciliationReport {
+  const discrepancies: string[] = [];
+  const agreements: string[] = [];
+  const source = isEvidenceRecord(sourceInput)
+    ? (sourceInput as unknown as AxelarSourceIntent)
+    : { tokenId: "", amount: "" };
+  const candidate = isEvidenceRecord(candidateInput)
+    ? (candidateInput as AxelarCandidatePayment)
+    : null;
+  if (!isEvidenceRecord(sourceInput)) discrepancies.push("malformed source intent");
+  if (candidateInput !== null && candidateInput !== undefined && !isEvidenceRecord(candidateInput))
+    discrepancies.push("malformed candidate payment");
+  if (source.direction !== "outbound" && source.direction !== "inbound")
+    discrepancies.push("missing or unsupported explicit direction");
+  const direction: "outbound" | "inbound" = source.direction === "inbound" ? "inbound" : "outbound";
+  let expectedRecipient = "";
+  let displayNonce: string | undefined;
+  try {
+    if (typeof source.note !== "string" && !(source.note instanceof Uint8Array))
+      throw new Error("missing encoded source note");
+    if (typeof source.note === "string" && !/^(?:0x)?(?:[0-9a-fA-F]{2})+$/i.test(source.note))
+      throw new Error("invalid complete hex source note");
+    const decoded =
+      direction === "inbound" ? decodeInboundNote(source.note) : decodeOutboundNote(source.note);
+    expectedRecipient = "strkey" in decoded ? decoded.strkey : decoded.recipient.toLowerCase();
+    displayNonce = decoded.nonce.toString();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    discrepancies.push(`malformed note payload: ${message}`);
+  }
+  if (!expectedRecipient) discrepancies.push("missing expected recipient in encoded source note");
+
+  if (
+    source.recipient !== undefined &&
+    expectedRecipient &&
+    (direction === "outbound" && typeof source.recipient === "string"
+      ? source.recipient.toLowerCase()
+      : source.recipient) !== expectedRecipient
+  )
+    discrepancies.push("source recipient label disagrees with encoded note");
+  if (candidate?.recipient !== undefined) {
+    try {
+      if (direction === "outbound") {
+        if (
+          typeof candidate.recipient !== "string" ||
+          !/^0x[0-9a-fA-F]{40}$/.test(candidate.recipient) ||
+          /^0x0{40}$/.test(candidate.recipient)
+        )
+          throw new Error("invalid EVM recipient");
+      } else {
+        parseStellarAddress(candidate.recipient);
+      }
+    } catch {
+      discrepancies.push("malformed candidate recipient");
+    }
+  }
+  for (const references of [source.rawReferences, candidate?.rawReferences]) {
+    if (references !== undefined && !isEvidenceRecord(references))
+      discrepancies.push("malformed raw references");
+  }
+  const expectedToken = normalizeHex32(source.tokenId);
+  if (!expectedToken) discrepancies.push("missing or malformed complete source token ID");
+  const expectedAmount = parseIntegerAmount(source.amount);
+  const expectedCommandId = paymentIdentity(source.commandId ?? source.messageId, direction);
+  if (!expectedCommandId) discrepancies.push("missing or malformed complete source command ID");
+  for (const identity of [source, candidate]) {
+    if (
+      identity?.commandId !== undefined &&
+      identity.messageId !== undefined &&
+      paymentIdentity(identity.commandId, direction) !==
+        paymentIdentity(identity.messageId, direction)
+    )
+      discrepancies.push("conflicting command/message identity aliases");
+  }
+
+  if (expectedAmount === null || expectedAmount <= 0n) {
+    discrepancies.push(`invalid or non-positive source amount: ${String(source.amount)}`);
+  }
+
+  let candidateRecipient: string | undefined;
+  let candidateToken: string | undefined;
+  let candidateAmount: bigint | null = null;
+  let candidateCommandId: string | undefined;
+
+  if (!candidate) {
+    discrepancies.push("missing candidate payment");
+  } else {
+    // 1. Recipient check
+    if (typeof candidate.recipient !== "string" || !candidate.recipient) {
+      discrepancies.push("missing recipient on candidate payment");
+    } else {
+      candidateRecipient =
+        direction === "outbound" ? candidate.recipient.toLowerCase() : candidate.recipient;
+      if (expectedRecipient && candidateRecipient !== expectedRecipient) {
+        discrepancies.push(
+          `recipient mismatch: expected ${expectedRecipient} but candidate received ${candidateRecipient}`,
+        );
+      } else if (expectedRecipient) {
+        agreements.push("recipient");
+      }
+    }
+
+    // 2. Token ID check
+    if (!candidate.tokenId) {
+      discrepancies.push("missing token ID on candidate payment");
+    } else {
+      candidateToken = normalizeHex32(candidate.tokenId);
+      if (expectedToken && candidateToken !== expectedToken) {
+        discrepancies.push(
+          `token ID mismatch: expected ${expectedToken} but candidate received ${candidateToken}`,
+        );
+      } else if (expectedToken) {
+        agreements.push("tokenId");
+      }
+    }
+
+    // 3. Exact integer amount check
+    candidateAmount = parseIntegerAmount(candidate.amount);
+    if (candidateAmount === null) {
+      discrepancies.push(`missing or invalid candidate amount: ${String(candidate.amount)}`);
+    } else if (expectedAmount !== null) {
+      if (candidateAmount < expectedAmount) {
+        discrepancies.push(
+          `partial receipt detected: expected amount ${expectedAmount.toString()} but candidate received ${candidateAmount.toString()}`,
+        );
+      } else if (candidateAmount > expectedAmount) {
+        discrepancies.push(
+          `amount mismatch: expected ${expectedAmount.toString()} but candidate received ${candidateAmount.toString()}`,
+        );
+      } else {
+        agreements.push("amount");
+      }
+    }
+
+    // 4. Full command identity check
+    if (!paymentIdentity(candidate.commandId ?? candidate.messageId, direction)) {
+      discrepancies.push(
+        "missing candidate command ID (command identity must be non-empty and retained)",
+      );
+    } else {
+      candidateCommandId = paymentIdentity(candidate.commandId ?? candidate.messageId, direction);
+      if (expectedCommandId && candidateCommandId !== expectedCommandId) {
+        discrepancies.push(
+          `command ID mismatch: expected ${expectedCommandId} but candidate received ${candidateCommandId}`,
+        );
+      } else {
+        agreements.push("commandId");
+      }
+    }
+  }
+
+  const sourceRawReferences = isEvidenceRecord(source.rawReferences)
+    ? { ...source.rawReferences }
+    : {};
+  const candidateRawReferences = isEvidenceRecord(candidate?.rawReferences)
+    ? { ...candidate.rawReferences }
+    : {};
+  // Legacy flattened references remain available. The separated records preserve collisions.
+  const rawReferences: Record<string, unknown> = {
+    ...sourceRawReferences,
+    ...candidateRawReferences,
+  };
+  if (source.commandId && !rawReferences.sourceCommandId) {
+    rawReferences.sourceCommandId = source.commandId;
+  }
+  if (candidate?.commandId && !rawReferences.candidateCommandId) {
+    rawReferences.candidateCommandId = candidate.commandId;
+  }
+  if (source.tokenId && !rawReferences.tokenId) {
+    rawReferences.tokenId = source.tokenId;
+  }
+  if (
+    (typeof source.note === "string" || source.note instanceof Uint8Array) &&
+    !rawReferences.rawNote
+  ) {
+    rawReferences.rawNote = typeof source.note === "string" ? source.note : toHex(source.note);
+  }
+
+  const verified =
+    discrepancies.length === 0 &&
+    ["recipient", "tokenId", "amount", "commandId"].every((key) => agreements.includes(key));
+  return {
+    verified,
+    evidenceOnly: true,
+    executionProofVerified: false,
+    sourceRawReferences,
+    candidateRawReferences,
+    status: verified ? "verified" : "unverified",
+    direction,
+    discrepancies,
+    agreements,
+    rawReferences,
+    details: {
+      expectedRecipient,
+      ...(candidateRecipient === undefined ? {} : { candidateRecipient }),
+      expectedTokenId: expectedToken,
+      ...(candidateToken === undefined ? {} : { candidateTokenId: candidateToken }),
+      expectedAmount: expectedAmount !== null ? expectedAmount.toString() : String(source.amount),
+      ...(candidateAmount === null ? {} : { candidateAmount: candidateAmount.toString() }),
+      expectedCommandId,
+      ...(candidateCommandId === undefined ? {} : { candidateCommandId }),
+      ...(displayNonce === undefined ? {} : { displayNonce }),
+    },
+  };
 }

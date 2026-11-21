@@ -3,6 +3,10 @@ pragma solidity 0.8.28;
 
 import {Script} from "forge-std/Script.sol";
 
+import {HyperionRouter} from "../src/HyperionRouter.sol";
+import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
+import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
+
 import {RouteKind} from "../src/HyperionTypes.sol";
 
 /// @title Everything a deployment needs to know that is not in the source tree
@@ -16,6 +20,50 @@ import {RouteKind} from "../src/HyperionTypes.sol";
 /// `CCTP_TOKEN_MESSENGER` should stop the deployment, not deploy an adapter pointed at the zero
 /// address that reverts on first use.
 abstract contract DeployConfig is Script {
+    string internal constant VERIFIED_EVM_VERSION = "cancun";
+    string internal constant VERIFIED_SOLC_VERSION = "0.8.28";
+    string internal constant VERIFIED_SOLC_FULL_VERSION = "0.8.28+commit.7893614a";
+
+    struct CompatibilityProfile {
+        string compilerVersion;
+        string evmVersion;
+        uint256 optimizerRuns;
+        bool viaIR;
+    }
+
+    /// @dev Read actual compiler metadata from the local artifact selected by compiled creation
+    /// code. Environment labels are additional constraints, never evidence about the build.
+    function _verifiedArtifactProfile(string memory path)
+        internal
+        view
+        returns (CompatibilityProfile memory)
+    {
+        return _validateArtifactProfileJson(vm.readFile(path));
+    }
+
+    function _validateArtifactProfileJson(string memory artifact)
+        internal
+        pure
+        returns (CompatibilityProfile memory profile)
+    {
+        profile.compilerVersion = vm.parseJsonString(artifact, ".metadata.compiler.version");
+        profile.evmVersion = vm.parseJsonString(artifact, ".metadata.settings.evmVersion");
+        profile.optimizerRuns = vm.parseJsonUint(artifact, ".metadata.settings.optimizer.runs");
+        profile.viaIR = vm.parseJsonBool(artifact, ".metadata.settings.viaIR");
+        require(
+            keccak256(bytes(profile.compilerVersion)) == keccak256(bytes(VERIFIED_SOLC_FULL_VERSION)),
+            "artifact compiler revision mismatch"
+        );
+        require(
+            keccak256(bytes(profile.evmVersion)) == keccak256(bytes(VERIFIED_EVM_VERSION)),
+            "artifact EVM revision mismatch"
+        );
+        require(
+            vm.parseJsonBool(artifact, ".metadata.settings.optimizer.enabled") && profile.optimizerRuns == 200
+                && profile.viaIR,
+            "artifact optimizer profile mismatch"
+        );
+    }
     /// @dev The one hard coded value, and only because Circle assigned it rather than deployed it.
     /// Stellar is domain twenty seven on CCTP. It is not a chain id, not derived from one, and not
     /// configurable, so putting it in the environment would only create a way to get it wrong.
@@ -73,6 +121,30 @@ abstract contract DeployConfig is Script {
             // rather than a reset time.
             flowWindow: uint64(vm.envOr("HYPERION_FLOW_WINDOW", uint256(1 hours)))
         });
+    }
+
+    /// @dev Refuse to queue any deployment action when the compiler/fork assumptions are not the
+    /// ones reviewed for this tree. Chain IDs are explicit because a fork can share an ID with a
+    /// live network while exposing different opcode and precompile behavior.
+    function requireCompatibleExecutionTarget() internal view {
+        string memory evmVersion = vm.envOr("HYPERION_EVM_VERSION", string(VERIFIED_EVM_VERSION));
+        string memory solcVersion = vm.envOr("HYPERION_SOLC_VERSION", string(VERIFIED_SOLC_VERSION));
+        require(
+            keccak256(bytes(evmVersion)) == keccak256(bytes(VERIFIED_EVM_VERSION)),
+            "unsupported EVM revision; use cancun"
+        );
+        require(
+            keccak256(bytes(solcVersion)) == keccak256(bytes(VERIFIED_SOLC_VERSION)),
+            "unsupported compiler revision; use 0.8.28"
+        );
+        require(
+            block.chainid == 31_337 || block.chainid == 1337 || block.chainid == 11_155_111
+                || block.chainid == 84_532 || block.chainid == 5_042_002,
+            "unsupported deployment chain"
+        );
+        _verifiedArtifactProfile(vm.getArtifactPathByCode(type(HyperionRouter).creationCode));
+        _verifiedArtifactProfile(vm.getArtifactPathByCode(type(CctpAdapter).creationCode));
+        _verifiedArtifactProfile(vm.getArtifactPathByCode(type(AxelarItsAdapter).creationCode));
     }
 
     function railParams() internal view returns (RailParams memory params) {

@@ -1,0 +1,41 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+#
+# Included for development. Not offered by the active testnet app and not activated here.
+surface soroban/allbridge-adapter
+contract AllbridgeAdapter
+status gated
+# Public callable methods, sorted.
+method bridge_in
+method chain_for
+method dispatch
+method fund_gas
+method gas_balance
+method get_asset
+method get_config
+method get_lane
+method get_validator
+method initialize
+method is_processed
+method keep_alive
+method key_coverage
+method link_asset
+method link_chain
+method maintain_storage
+method pool_for
+method quote_gas
+method rail_open
+method receive
+method revalidate_asset
+method route
+method set_admin
+method set_validator
+method sweep
+method upgrade
+method withdraw_gas
+
+# Routes this surface can carry, as protocol slugs.
+route allbridge

@@ -1,0 +1,16 @@
+{
+  "sourceIntent": {
+    "direction": "outbound",
+    "note": "0x011111111111111111111111111111111111111111000000000000002a",
+    "tokenId": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "amount": "5000000000",
+    "commandId": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "nonce": 42
+  },
+  "candidatePayment": {
+    "recipient": "0x1111111111111111111111111111111111111111",
+    "tokenId": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "amount": "5000000000",
+    "commandId": ""
+  }
+}

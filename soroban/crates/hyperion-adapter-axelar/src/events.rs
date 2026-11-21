@@ -12,7 +12,7 @@
 
 use soroban_sdk::{contractevent, Address, Bytes, BytesN, String};
 
-use crate::rail::TokenManagerType;
+use hyperion_core::axelar::{DestinationCapability, TokenManagerType};
 
 /// Funds handed to ITS on the way out.
 #[contractevent(topics = ["hyperion", "axl_out"])]
@@ -86,6 +86,17 @@ pub struct TokenMapped {
 
 #[contractevent(topics = ["hyperion", "axl_cfg"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DestinationCapabilitySet {
+    #[topic]
+    pub chain: String,
+    #[topic]
+    pub token_id: BytesN<32>,
+    pub token_manager_type: TokenManagerType,
+    pub capability: DestinationCapability,
+}
+
+#[contractevent(topics = ["hyperion", "axl_cfg"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdminChanged {
     #[topic]
     pub old: Address,
@@ -126,6 +137,14 @@ pub struct ChainStatusChanged {
     #[topic]
     pub chain: String,
     pub enabled: bool,
+}
+
+#[contractevent(topics = ["hyperion", "axl_cfg"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NoteVersionRequired {
+    #[topic]
+    pub chain: String,
+    pub version: u32,
 }
 
 #[contractevent(topics = ["hyperion", "axl_cfg"])]

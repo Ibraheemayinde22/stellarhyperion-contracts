@@ -27,6 +27,9 @@ export * from "./bytes.js";
 // The rails, and what is true about each one.
 export * from "./routes.js";
 
+// Canonical route/lane identities, including exact source and destination asset representations.
+export * from "./lanes.js";
+
 // The error vocabulary shared by both chains, with a sentence of help per error.
 export * from "./errors.js";
 
@@ -50,6 +53,10 @@ export * from "./chains.js";
 
 // Pricing a route locally so an app can render four of them while somebody types.
 export * from "./quotes.js";
+export * from "./route-health.js";
+
+// Reading a token registration diagnostic, which both chains answer in the same shape.
+export * from "./tokenMapping.js";
 
 // Deployment records, and a loader that checks them instead of casting them.
 export * from "./deployments.js";

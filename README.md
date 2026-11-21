@@ -11,6 +11,13 @@ trust assumption and is not offered by the current testnet app.
 
 The active app sends canonical Stellar USDC through Axelar ITS to its seven-decimal representation on Ethereum Sepolia, or through Circle CCTP to six-decimal native USDC on Ethereum Sepolia, Base Sepolia and Arc Testnet. The frontend can first convert other liquid classic Stellar assets into USDC. ITS's representation differs from Circle's native USDC. Both active rails have real signed source/destination acceptance evidence. EVM router and Allbridge implementations are included for development; they are outside the active app's deployment scope.
 
+Axelar dispatch now requires an explicit chain/token capability admission bound to the current
+ITS token-manager type and peer. Bare ITS transfers and GMP payload transfers are distinct
+capabilities. Existing chain links and token mappings are retained, but a Soroban adapter upgrade
+must admit its existing Sepolia ITS pair before dispatch resumes. The EVM Axelar adapter is
+development-only: its global activation gate is closed by default and must remain closed until the
+EVM lane has been independently validated.
+
 ## Changes since October 12, 2026
 
 - Implemented authenticated paid dispatch through Axelar ITS and Circle CCTP, retaining atomic protocol fees, precision checks, flow limits and failure rollback.
@@ -105,6 +112,13 @@ the quote blockers, the CCTP offsets, the SEP-23 version bytes, the note layout 
 decimal ceilings have drifted apart. Three implementations of one wire format is the actual risk in
 this design, and that test is what turns drift into a red branch rather than a transfer that
 arrives somewhere unexpected.
+
+Every contract surface also has a committed capability snapshot under `testdata/capabilities/`:
+the public methods it exports and the routes it advertises, recorded separately for each router and
+adapter. The Rust and Foundry suites compare their own surfaces with those files and the protocol
+suite compares the EVM surfaces with the generated ABIs. A paid entry point cannot disappear
+without an explicit compatibility acknowledgement. See
+[interface capabilities](docs/INTERFACE_CAPABILITIES.md) for the format and the upgrade rules.
 
 ## Things that are easy to get wrong, and what was done about them
 
@@ -205,6 +219,8 @@ ITS route 1 delivers the seven-decimal Stellar USDC representation to Ethereum S
 
 The older October 1 deployment is archived under `deployments/archive/`. It is not the current app router. Records are validated with the protocol package's `parseDeploymentSet`; activation also reads deployed methods and code hashes rather than treating a JSON address as proof of availability.
 
+Provider token addresses can be recorded separately from an asset's canonical `address`/`sacId` and `decimals`. An optional token-level `providerAddresses` map in a deployment record is keyed by rail slug; its values are validated against that chain's address format, the token's enabled rails, and configured adapters. Existing canonical records need no changes. `providerAddressOverridesFromDeploymentSet` exposes those records in the endpoint-independent form; `parseProviderAddressOverrides` validates external chain → symbol → rail maps, and `resolveProviderAddressPair` requires an explicit address on both same-network endpoints with that provider capability. Quote helpers `planQuoteWithProviderAddresses` and `quoteBatchWithProviderAddresses` return the address metadata separately from quote amounts, so provider overrides never alter a declared chain or token precision. The protocol package continues to have zero runtime dependencies.
+
 ## Active fee routing and recovery
 
 The active Stellar router charges 30 basis points (0.3%) on outbound USDC and transfers the protocol fee to its configured treasury atomically with dispatch. Bridge forwarding, relay and Stellar network fees are separate provider/network costs. Other liquid Stellar assets are converted into canonical USDC by a separate frontend-signed transaction before bridging.
@@ -280,3 +296,5 @@ and does not own them.
 ## License
 
 Apache-2.0 for the contracts, MIT for the protocol package.
+
+Read-only Axelar note/payment tooling and its evidence boundary are documented in [Axelar reconciliation](docs/AXELAR_RECONCILIATION.md).

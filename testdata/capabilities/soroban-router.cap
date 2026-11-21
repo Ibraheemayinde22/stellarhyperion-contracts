@@ -1,0 +1,73 @@
+# Hyperion contract interface capability snapshot.
+#
+# This file is the reviewed record of one surface's public methods and advertised routes.
+# The Rust, Foundry and protocol suites read it; changing the contract without changing
+# this file is a failing test. See docs/INTERFACE_CAPABILITIES.md before editing.
+#
+# Active Stellar Testnet deployment: outbound ITS and CCTP only are paid.
+surface soroban/router
+contract HyperionRouter
+status active
+# Public callable methods, sorted.
+method archive_settled_claims
+method bridge_in
+method bridge_out
+method bridge_out_bounded
+method bridge_out_with_gas
+method cancel_action
+method cancel_action_with_reason
+method check_token_behavior
+method claim_count
+method claim_failure_reason
+method claim_history
+method claim_liability
+method disable_route
+method disable_token
+method execute_action
+method explain_outbound
+method flow_available
+method get_action_payload
+method get_adapter
+method get_claim
+method get_claim_provenance
+method get_config
+method get_migration_status
+method get_queued
+method get_rail_receiver
+method get_route_config
+method get_token
+method get_transfer
+method initialize
+method is_paused
+method is_route_enabled
+method keep_alive
+method keep_alive_replays
+method last_out_nonce
+method lower_token_flow_limit
+method migrate_storage
+method pause
+method preview_claim_recipient
+method queue_action
+method queue_count
+method quote_routes
+method quote_routes_v2
+method settle_claim
+method settle_claims
+method supports_paid_route
+method treasury
+method unpause
+method was_processed
+
+# Routes this surface can carry, as protocol slugs.
+route cctp
+route axelar-its
+route axelar-gmp
+route allbridge
+
+# Routes with a local paid dispatch entry point.
+paid-route cctp
+paid-route axelar-its
+
+# Entry points that attach a provider payment.
+paid-method bridge_out_bounded
+paid-method bridge_out_with_gas

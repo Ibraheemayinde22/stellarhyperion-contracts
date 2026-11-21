@@ -46,6 +46,7 @@ pub struct Origin {
 // ever wired to.
 #[contractclient(name = "RouterClient")]
 pub trait Router {
+    fn is_paused(env: Env) -> bool;
     // Deliver funds that arrived over `route`, pulled out of the calling adapter.
     fn bridge_in(
         env: Env,

@@ -41,6 +41,19 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "function",
+    "name": "applyPeerRotation",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "APPROVAL_DIAGNOSTICS_VERSION",
     "inputs": [],
     "outputs": [
@@ -160,6 +173,19 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "function",
+    "name": "cancelPeerRotation",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "checkDispatch",
     "inputs": [
       {
@@ -191,6 +217,19 @@ export const cctpAdapterAbi = [
       }
     ],
     "outputs": [],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "DEFAULT_OVERLAP_WINDOW",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
     "stateMutability": "view"
   },
   {
@@ -267,6 +306,37 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "function",
+    "name": "historicalPeerOf",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct CctpAdapter.HistoricalPeer",
+        "components": [
+          {
+            "name": "oldMintRecipient",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "validUntil",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "laneOf",
     "inputs": [
       {
@@ -308,6 +378,82 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "function",
+    "name": "laneReadiness",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct CctpAdapter.LaneReadiness",
+        "components": [
+          {
+            "name": "version",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "routerPaused",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "messenger",
+            "type": "uint8",
+            "internalType": "enum CctpAdapter.ProviderReadStatus"
+          },
+          {
+            "name": "transmitter",
+            "type": "uint8",
+            "internalType": "enum CctpAdapter.ProviderReadStatus"
+          },
+          {
+            "name": "messengerContract",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "transmitterContract",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "laneAvailable",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "messageTransmitter",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MIN_ROTATION_DELAY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -334,6 +480,136 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "function",
+    "name": "pendingRotationOf",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct CctpAdapter.PeerRotation",
+        "components": [
+          {
+            "name": "newMintRecipient",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "eta",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "queuedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "prepareRenewal",
+    "inputs": [
+      {
+        "name": "sourceMessageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "payoutIntent",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifiedAttestation",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "recoverySupported",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct CctpAdapter.RenewalPlan",
+        "components": [
+          {
+            "name": "version",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "condition",
+            "type": "uint8",
+            "internalType": "enum CctpAdapter.AttestationCondition"
+          },
+          {
+            "name": "sourceMessageId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "payoutIntent",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "expiresAt",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "recoverySupported",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposePeerRotation",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "newPeer",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "delay",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "quoteFee",
     "inputs": [
       {
@@ -355,6 +631,25 @@ export const cctpAdapterAbi = [
       }
     ],
     "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "quoteFinalityPolicy",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -425,6 +720,19 @@ export const cctpAdapterAbi = [
         "name": "enabled",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMessageTransmitter",
+    "inputs": [
+      {
+        "name": "transmitter",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -570,6 +878,31 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "event",
+    "name": "FinalityPolicyUsed",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      },
+      {
+        "name": "domain",
+        "type": "uint32",
+        "indexed": true,
+        "internalType": "uint32"
+      },
+      {
+        "name": "minFinalityThreshold",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "LaneConfigured",
     "inputs": [
       {
@@ -614,6 +947,19 @@ export const cctpAdapterAbi = [
   },
   {
     "type": "event",
+    "name": "MessageTransmitterSet",
+    "inputs": [
+      {
+        "name": "transmitter",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "OwnershipTransferred",
     "inputs": [
       {
@@ -651,8 +997,94 @@ export const cctpAdapterAbi = [
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "PeerRotationApplied",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "indexed": true,
+        "internalType": "string"
+      },
+      {
+        "name": "oldPeer",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "newPeer",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "overlapDeadline",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PeerRotationCancelled",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "indexed": true,
+        "internalType": "string"
+      },
+      {
+        "name": "cancelledPeer",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PeerRotationQueued",
+    "inputs": [
+      {
+        "name": "chain",
+        "type": "string",
+        "indexed": true,
+        "internalType": "string"
+      },
+      {
+        "name": "currentPeer",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "newPeer",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "eta",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "AlreadyConfigured",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DecimalOverflow",
     "inputs": []
   },
   {
@@ -705,6 +1137,27 @@ export const cctpAdapterAbi = [
         "name": "token",
         "type": "address",
         "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TimelockDelayOutOfRange",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TimelockNotQueued",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TimelockNotReady",
+    "inputs": [
+      {
+        "name": "eta",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ]
   },

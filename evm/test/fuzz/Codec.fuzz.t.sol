@@ -243,8 +243,11 @@ contract CodecFuzzTest is Test {
 
         // Reading the first twenty nine bytes of something longer is how a parser turns into an
         // attack surface. A note with anything appended is a note somebody else built.
+        bytes memory payload = new bytes(len);
+        if (len != 0) payload[0] = bytes1(uint8(1));
+
         vm.expectRevert(MalformedMessage.selector);
-        notes.decodeOutboundNote(new bytes(len));
+        notes.decodeOutboundNote(payload);
     }
 
     function testFuzz_an_outbound_note_of_any_other_version_is_refused(

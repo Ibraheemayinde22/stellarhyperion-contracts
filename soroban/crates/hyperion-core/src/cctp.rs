@@ -9,7 +9,7 @@
 //! field for field, which is the definition the on-chain contracts read from. Everything here is
 //! a pure function over bytes so the whole parser can be tested without a rail in sight.
 
-use soroban_sdk::{contracttype, Bytes, BytesN, Env};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env};
 
 use crate::address::{AddressKind, StellarDestination};
 use crate::error::HyperionError;
@@ -24,6 +24,27 @@ pub const BURN_MESSAGE_VERSION: u32 = 1;
 
 /// Finality threshold at or above which Circle considers a message finalised.
 pub const FINALITY_THRESHOLD_FINALIZED: u32 = 2000;
+/// The supported fast-transfer threshold. Selecting this requires a lane-level admin action.
+pub const FINALITY_THRESHOLD_FAST: u32 = 1000;
+
+/// Whether Circle must attest a finalized burn or may attest a fast burn.
+pub fn is_supported_finality_threshold(threshold: u32) -> bool {
+    matches!(
+        threshold,
+        FINALITY_THRESHOLD_FAST | FINALITY_THRESHOLD_FINALIZED
+    )
+}
+
+/// Minimum delay required before a proposed CCTP peer messenger rotation can become active (1 hour).
+///
+/// 3600 seconds (1 hour) enforces an explicit review and timelock window so that
+/// unintended or unauthorized messenger migrations can be audited and cancelled before
+/// taking effect.
+pub const MIN_PEER_ROTATION_DELAY: u64 = 3_600;
+
+/// Default overlap window during which historical/in-flight messages from a retired
+/// peer messenger remain acceptable after rotation (24 hours).
+pub const DEFAULT_ROTATION_OVERLAP_WINDOW: u64 = 86_400;
 
 // ------------------------------------------------------------------------------------------
 // Header offsets
@@ -295,6 +316,81 @@ impl HyperionHook {
 /// Diagnostic format version for CCTP approval lifecycle audits.
 pub const APPROVAL_DIAGNOSTICS_VERSION: u32 = 1;
 
+/// Provider/attestation diagnostics versions remain independent from CCTP message versions.
+pub const LANE_READINESS_VERSION: u32 = 1;
+pub const EXPIRY_TOOL_VERSION: u32 = 1;
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ProviderReadStatus {
+    Unknown = 0,
+    Usable = 1,
+    Paused = 2,
+}
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum AttestationCondition {
+    Unverified = 0,
+    Verified = 1,
+    Expired = 2,
+    UnsupportedRecovery = 3,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaneReadiness {
+    pub version: u32,
+    pub router_paused: bool,
+    pub messenger: ProviderReadStatus,
+    pub transmitter: ProviderReadStatus,
+    pub messenger_contract: Address,
+    pub transmitter_contract: Address,
+    pub lane_available: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RenewalPlan {
+    pub version: u32,
+    pub condition: AttestationCondition,
+    pub source_message_id: BytesN<32>,
+    pub payout_intent: BytesN<32>,
+    pub expires_at: i128,
+    pub recovery_supported: bool,
+}
+
+impl RenewalPlan {
+    pub fn classify(
+        source_message_id: BytesN<32>,
+        payout_intent: BytesN<32>,
+        expires_at: i128,
+        now: i128,
+        has_verified_attestation: bool,
+        recovery_supported: bool,
+    ) -> Self {
+        let condition = if expires_at <= now {
+            AttestationCondition::Expired
+        } else if !recovery_supported {
+            AttestationCondition::UnsupportedRecovery
+        } else if has_verified_attestation {
+            AttestationCondition::Verified
+        } else {
+            AttestationCondition::Unverified
+        };
+        Self {
+            version: EXPIRY_TOOL_VERSION,
+            condition,
+            source_message_id,
+            payout_intent,
+            expires_at,
+            recovery_supported: recovery_supported && expires_at > now,
+        }
+    }
+}
+
 /// Documented residual allowance expected between adapter and token messenger.
 /// Hyperion leaves no standing allowance on any rail messenger; expected residual is always zero.
 pub const DOCUMENTED_RESIDUAL_ALLOWANCE: i128 = 0;
@@ -377,7 +473,7 @@ pub fn validate_burn_boundary(
     if max_fee < 0 || max_fee >= amount {
         return Err(HyperionError::FeeTooHigh);
     }
-    if min_finality_threshold == 0 || min_finality_threshold > FINALITY_THRESHOLD_FINALIZED {
+    if !is_supported_finality_threshold(min_finality_threshold) {
         return Err(HyperionError::InvalidLimit);
     }
     Ok(())
@@ -684,5 +780,16 @@ mod tests {
             validate_burn_boundary(1000, &dest, 10, 0),
             Err(HyperionError::InvalidLimit)
         );
+        assert_eq!(
+            validate_burn_boundary(1000, &dest, 10, 999),
+            Err(HyperionError::InvalidLimit)
+        );
+        assert!(validate_burn_boundary(1000, &dest, 10, FINALITY_THRESHOLD_FAST).is_ok());
+    }
+
+    #[test]
+    fn minimum_peer_rotation_delay_is_at_least_one_hour() {
+        assert_eq!(MIN_PEER_ROTATION_DELAY, 3_600);
+        assert_eq!(DEFAULT_ROTATION_OVERLAP_WINDOW, 86_400);
     }
 }

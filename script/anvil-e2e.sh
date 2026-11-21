@@ -15,14 +15,22 @@
 # timelock warp below is explicit and deterministic. The Stellar side (ledger time) is not exercised
 # here and must be validated separately.
 #
+# This local harness is not activation evidence: the active deployment gate remains Stellar
+# Testnet outbound ITS/CCTP. Adapter-owner controls here are distinct from router timelocks.
+#
 # Usage: script/anvil-e2e.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-export PATH="$HOME/.foundry/bin:$PATH"
+# Respect a caller's reviewed toolchain; the default install is a fallback.
+export PATH="$PATH:$HOME/.foundry/bin"
 
 RPC="${RPC:-http://127.0.0.1:8545}"
 EVM_DIR="evm"
+HYPERION_FAULT_SEED="${HYPERION_FAULT_SEED:-156}"
+export HYPERION_FAULT_SEED
+node -e 'const seed=process.env.HYPERION_FAULT_SEED;if(!/^[0-9]+$/.test(seed)||BigInt(seed)>((1n<<64n)-1n))process.exit(1)' \
+  || { printf 'HYPERION_FAULT_SEED must be an unsigned 64-bit integer\n' >&2; exit 1; }
 
 note() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mfailed: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -60,6 +68,10 @@ TREASURY=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 json() { node -e 'const f=require("fs");process.stdout.write(String(JSON.parse(f.readFileSync(process.argv[1],"utf8"))[process.argv[2]]))' "$1" "$2"; }
 
 note "deploying stand in rails"
+note "using deterministic provider fault schedule (seed ${HYPERION_FAULT_SEED})"
+( cd "$EVM_DIR" && forge test --match-contract RouterProviderFaultTest --fuzz-seed "$HYPERION_FAULT_SEED" ) \
+  > /tmp/hyperion-provider-faults.log 2>&1 \
+  || { tail -30 /tmp/hyperion-provider-faults.log; die "seeded provider rollback/retry rehearsal"; }
 ( cd "$EVM_DIR" && mkdir -p deployments && forge script script/LocalRails.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" >/tmp/hyperion-rails.log 2>&1 ) \
   || { tail -30 /tmp/hyperion-rails.log; die "LocalRails"; }
 
@@ -92,8 +104,14 @@ export STELLAR_RAIL_RECIPIENT=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a2478372660
 export STELLAR_AXELAR_PEER=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
 
 note "phase one: deploy and queue"
-( cd "$EVM_DIR" && forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \
-  | grep -E '^  (router|cctp adapter|axelar adapter|queued|Queued|record)' || die "Deploy"
+DEPLOY_LOG=/tmp/hyperion-deploy.log
+if ! ( cd "$EVM_DIR" && forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" ) \
+  >"$DEPLOY_LOG" 2>&1; then
+  cat "$DEPLOY_LOG"
+  die "Deploy"
+fi
+grep -E '^  (router|cctp adapter|axelar adapter|queued|Queued|record)' "$DEPLOY_LOG" \
+  || { cat "$DEPLOY_LOG"; die "Deploy output"; }
 
 note "the timelock has to refuse this"
 if ( cd "$EVM_DIR" && forge script script/Execute.s.sol --rpc-url "$RPC" --unlocked --sender "$SENDER" >/tmp/hyperion-early.log 2>&1 ); then
@@ -118,6 +136,42 @@ note "phase two again, to prove it is idempotent"
 note "verifying the chain against the record"
 ( cd "$EVM_DIR" && forge script script/Verify.s.sol --rpc-url "$RPC" --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (Everything|BAD|WARN|Mismatches)' || die "Verify"
+
+note "checking deployed capabilities against the snapshot"
+RECORD="$EVM_DIR/deployments/evm-$CHAIN_ID-phase1.json"
+ROUTER=$(json "$RECORD" router)
+[ -n "$ROUTER" ] || die "no router in $RECORD"
+route_kind() {
+  case "$1" in
+    cctp) echo 0 ;;
+    axelar-its) echo 1 ;;
+    axelar-gmp) echo 2 ;;
+    allbridge) echo 3 ;;
+    *) die "$1 is not a protocol route slug" ;;
+  esac
+}
+while read -r directive slug; do
+  [ "$directive" = "route" ] || continue
+  adapter=$(cast call "$ROUTER" "adapter(uint8)(address)" "$(route_kind "$slug")" --rpc-url "$RPC")
+  case "$adapter" in
+    0x0000000000000000000000000000000000000000) die "the router advertises $slug but has no adapter" ;;
+  esac
+  echo "  $slug adapter $adapter"
+done < testdata/capabilities/evm-router.cap
+CCTP=$(json "$RECORD" cctpAdapter)
+CCTP_SLUG=$(awk '$1 == "route" { print $2; exit }' testdata/capabilities/evm-cctp-adapter.cap)
+[ "$(cast call "$CCTP" 'route()(uint8)' --rpc-url "$RPC")" = "$(route_kind "$CCTP_SLUG")" ] \
+  || die "the deployed CCTP adapter does not report its recorded route"
+AXELAR=$(json "$RECORD" axelarAdapter)
+AXELAR_SLUG=$(awk '$1 == "route" { print $2; exit }' testdata/capabilities/evm-axelar-adapter.cap)
+[ "$(cast call "$AXELAR" 'route()(uint8)' --rpc-url "$RPC")" = "$(route_kind "$AXELAR_SLUG")" ] \
+  || die "the deployed Axelar adapter does not report its recorded route"
+echo "  adapters report the routes the snapshots record"
+
+note "checking the versioned malformed-message corpus"
+node script/malformed-message-corpus.mjs >/tmp/hyperion-malformed-corpus.json \
+  || die "malformed-message corpus"
+echo "  corpus: $(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync("/tmp/hyperion-malformed-corpus.json")); console.log(x.cases.length+" cases")')"
 
 note "sending one real transfer"
 ( cd "$EVM_DIR" && forge script script/Smoke.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \

@@ -1,0 +1,27 @@
+{
+  "sourceIntent": {
+    "direction": "outbound",
+    "note": "0x011111111111111111111111111111111111111111000000000000002a",
+    "tokenId": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "amount": "5000000000",
+    "commandId": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "nonce": 42,
+    "rawReferences": {
+      "sourceChain": "stellar",
+      "sourceTxHash": "3f9c08e54d72803bba2a20bfa51829375e2ecb534d0263f5339f427f7fef4036",
+      "sourceLedger": 5420100
+    }
+  },
+  "candidatePayment": {
+    "recipient": "0x1111111111111111111111111111111111111111",
+    "tokenId": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "amount": "5000000000",
+    "commandId": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "rawReferences": {
+      "destinationChain": "ethereum",
+      "destinationTxHash": "0x89e1a2f64c8fbe5a73e6559388df1c3f27de15e5f396497f1f970220cb3d3c85",
+      "destinationBlock": 21345678,
+      "logIndex": 4
+    }
+  }
+}

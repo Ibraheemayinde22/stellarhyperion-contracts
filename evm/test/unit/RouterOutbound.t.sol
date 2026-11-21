@@ -36,6 +36,27 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 /// somebody for dust that never left the chain, which is a real bug that reads as a rounding
 /// detail in a diff.
 contract RouterOutboundTest is Fixture {
+    function test_cctp_success_conserves_every_token_balance() public {
+        vm.deal(alice, 1);
+        BalanceSnapshot memory before_ = _snapshot(alice, bob);
+
+        vm.prank(alice);
+        router.bridgeOut{value: 1}(_usdcRequest(1000e6));
+
+        _assertConserved(before_, _snapshot(alice, bob), "CCTP outbound success");
+    }
+
+    function test_its_failure_conserves_every_token_balance() public {
+        itsRail.setDispatchReverts(true);
+        BalanceSnapshot memory before_ = _snapshot(alice, bob);
+
+        vm.prank(alice);
+        vm.expectRevert(MockRailAdapter.Rejected.selector);
+        router.bridgeOut(_itsRequest(1000e6));
+
+        _assertConserved(before_, _snapshot(alice, bob), "ITS outbound failure");
+    }
+
     function test_bounded_provider_payment_refuses_before_any_fee_or_flow_movement() public {
         OutboundRequest memory request = _itsRequest(1000e6);
         uint256 balance = usdc.balanceOf(alice);
@@ -53,6 +74,7 @@ contract RouterOutboundTest is Fixture {
         vm.prank(alice);
         router.bridgeOutBounded{value: 1}(request, 1);
         assertEq(itsRail.lastCall().value, 1);
+        assertEq(itsRail.lastCall().sender, alice);
         assertEq(alice.balance, 2);
         assertEq(router.outboundNonce(), 1);
     }

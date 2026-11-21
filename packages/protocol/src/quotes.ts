@@ -11,10 +11,32 @@
  * agree, and `quote.test.ts` walks the same cases through both. Where they ever disagree the
  * chain is right and this file is a bug.
  */
-import { BPS_DENOMINATOR, MAX_DECIMALS, convertDecimals, floorToRepresentable } from "./amounts.js";
+import {
+  BPS_DENOMINATOR,
+  MAX_DECIMALS,
+  MAX_FEE_BPS,
+  convertDecimals,
+  floorToRepresentable,
+  pow10,
+} from "./amounts.js";
 import { tryParseStellarAddress, AddressKind } from "./addresses.js";
+import type { Asset, AssetIdentity } from "./registry/assets.js";
+import { ASSETS, assetByIdentity, sameAssetIdentity } from "./registry/assets.js";
 import type { RouteKind } from "./routes.js";
-import { ROUTE_KINDS, carriesPayload, isCanonical, waitsOnAttestation } from "./routes.js";
+import {
+  ROUTE_KINDS,
+  carriesPayload,
+  isCanonical,
+  isRouteKind,
+  waitsOnAttestation,
+} from "./routes.js";
+import {
+  resolveProviderAddressPair,
+  type ProviderAddressOverrides,
+  type ProviderAddressPair,
+} from "./registry/assets.js";
+import type { ChainKey } from "./chains.js";
+import { MAX_WORD, boundedNumber, validatePlanningSnapshot } from "./quotes/validation.js";
 
 /**
  * Why a rail turned a quote down. Same integers as the Solidity enum and the Soroban one, in
@@ -178,6 +200,8 @@ export interface RouterSnapshot {
   readonly tokenRegistered: boolean;
   readonly tokenEnabled: boolean;
   readonly tokenDecimals: number;
+  /** Identity of the token whose registration, decimals and flow limits were read. */
+  readonly tokenIdentity?: AssetIdentity;
   /** Per rail, in this chain's units for this asset. */
   readonly flowAvailable: Partial<Record<RouteKind, bigint>>;
   /** Per rail, whether the adapter says it can reach the destination chain. */
@@ -192,8 +216,277 @@ export interface QuoteRequest {
   readonly destinationDecimals: number;
 }
 
+export interface ForwardingBudget {
+  /** Amount reserved from the bridged destination token before checking the recipient minimum. */
+  readonly destinationAmount: bigint;
+  readonly unit: "destination-token-base-units";
+}
+
+export interface ForwardQuoteRequest extends QuoteRequest {
+  readonly minimumDestinationAmount: bigint;
+  readonly forwardingBudget: ForwardingBudget;
+}
+
+export interface ForwardQuotePlan {
+  readonly available: boolean;
+  readonly meetsMinimum: boolean;
+  readonly reason: string | null;
+  readonly quote: RouteQuote;
+  readonly recipientDestinationAmount: bigint;
+  readonly minimumDestinationAmount: bigint;
+  readonly forwardingBudget: ForwardingBudget;
+  readonly roundingOvershoot: bigint | null;
+  readonly roundingBoundDestinationAmount: bigint;
+}
+
+export interface InverseQuoteRequest extends Omit<QuoteRequest, "amount"> {
+  readonly minimumDestinationAmount: bigint;
+  readonly forwardingBudget: ForwardingBudget;
+}
+
+export interface InverseQuotePlan {
+  readonly available: boolean;
+  readonly reason: string | null;
+  readonly blocker: QuoteBlocker | null;
+  readonly requiredSourceAmount: bigint | null;
+  readonly requiredDestinationAmount: bigint;
+  readonly recipientDestinationAmount: bigint;
+  readonly minimumDestinationAmount: bigint;
+  readonly forwardingBudget: ForwardingBudget;
+  readonly roundingOvershoot: bigint | null;
+  /** Largest overshoot possible from one source-base-unit rounding step. */
+  readonly roundingBoundDestinationAmount: bigint;
+  readonly quote: RouteQuote | null;
+}
+
+/** Explicit provider context for callers that need provider-side token addresses with a quote. */
+export interface ProviderAwareQuoteRequest extends QuoteRequest {
+  readonly sourceChain: ChainKey;
+  readonly destinationChain: ChainKey;
+  readonly symbol: string;
+  readonly providerAddressOverrides: ProviderAddressOverrides;
+}
+
+export interface ProviderAwareQuoteResult {
+  readonly quote: RouteQuote;
+  readonly providerAddresses: ProviderAddressPair;
+}
+
+/**
+ * Quote one route while resolving both explicit provider addresses.
+ *
+ * Chain and precision continue to come from the request and snapshot; provider addresses are
+ * metadata only and cannot silently rewrite either.
+ */
+export function planQuoteWithProviderAddresses(
+  request: ProviderAwareQuoteRequest,
+  snapshot: RouterSnapshot,
+): ProviderAwareQuoteResult {
+  const providerAddresses = resolveProviderAddressPair(
+    request.sourceChain,
+    request.destinationChain,
+    request.symbol,
+    request.route,
+    request.providerAddressOverrides,
+  );
+  return {
+    quote: planQuote(request, snapshot),
+    providerAddresses,
+  };
+}
+
+export interface MaximumSendRequest {
+  readonly route: RouteKind;
+  readonly balance: bigint;
+  readonly strkey: string;
+  readonly destinationDecimals: number;
+  readonly snapshot: RouterSnapshot;
+}
+
+export interface MaximumSendResult {
+  readonly executable: boolean;
+  /** Largest gross request that remains within balance, flow, and precision constraints. */
+  readonly requestAmount: bigint;
+  readonly quote: RouteQuote | null;
+  /** Source units retained because the destination cannot represent them exactly. */
+  readonly precisionDust: bigint;
+  /** Source units left after the suggested request. */
+  readonly balanceDust: bigint;
+  /** A blocker suitable for diagnostics when no executable request exists. */
+  readonly reason: QuoteBlocker;
+}
+
+/**
+ * Find the largest executable request with integer-only arithmetic.
+ *
+ * The search bounds the monotonic rounded net, then checks the positive-amount threshold.
+ * Tiny requests can round to zero even when larger requests are executable. Dust is returned
+ * explicitly rather than silently added to a request that would round differently at the destination.
+ */
+export function maximumSend(request: MaximumSendRequest): MaximumSendResult {
+  validatePlanningSnapshot(request.snapshot);
+  boundedNumber(request.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  if (!isRouteKind(request.route)) throw new TypeError("route is not supported");
+  if (typeof request.balance !== "bigint") throw new TypeError("balance must be a bigint");
+  if (request.balance <= 0n) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance > 0n ? request.balance : 0n,
+      reason: QuoteBlocker.AmountTooSmall,
+    };
+  }
+
+  const evaluate = (amount: bigint): RouteQuote =>
+    planQuote(
+      {
+        route: request.route,
+        amount,
+        strkey: request.strkey,
+        destinationDecimals: request.destinationDecimals,
+      },
+      request.snapshot,
+    );
+  const first = evaluate(1n);
+  if (
+    !first.available &&
+    first.reason !== QuoteBlocker.FlowLimitExceeded &&
+    first.reason !== QuoteBlocker.NotRepresentable &&
+    first.reason !== QuoteBlocker.AmountTooSmall
+  ) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance,
+      reason: first.reason,
+    };
+  }
+
+  let low = 0n;
+  let high = request.balance < MAX_QUOTE_AMOUNT ? request.balance : MAX_QUOTE_AMOUNT;
+  const flow = request.snapshot.flowAvailable[request.route] ?? 0n;
+  const conversionLimit =
+    request.destinationDecimals > request.snapshot.tokenDecimals
+      ? MAX_WORD / pow10(request.destinationDecimals - request.snapshot.tokenDecimals)
+      : MAX_WORD;
+  const netLimit = flow < conversionLimit ? flow : conversionLimit;
+  const feeBps = BigInt(request.snapshot.feeBps);
+  while (low < high) {
+    const candidate = low + (high - low + 1n) / 2n;
+    // Representability has a lower threshold, so availability itself is not monotonic.
+    // The rounded net is monotonic, including the zero plateau below that threshold.
+    const net = floorToRepresentable(
+      candidate - (candidate * feeBps) / BPS_DENOMINATOR,
+      request.snapshot.tokenDecimals,
+      request.destinationDecimals,
+    );
+    if (net <= netLimit) low = candidate;
+    else high = candidate - 1n;
+  }
+  const quote = evaluate(low);
+  if (!quote.available) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance,
+      reason: flow === 0n ? QuoteBlocker.FlowLimitExceeded : quote.reason,
+    };
+  }
+  return {
+    executable: true,
+    requestAmount: low,
+    quote,
+    precisionDust: low - quote.grossAmount,
+    balanceDust: request.balance - low,
+    reason: QuoteBlocker.None,
+  };
+}
+
+export interface BoundedQuoteSearchRequest {
+  readonly balance: bigint;
+  readonly maxAmount: bigint;
+  readonly minDestinationAmount: bigint;
+  readonly strkey: string;
+  readonly destinationDecimals: number;
+  readonly snapshot: RouterSnapshot;
+  readonly allowedRoutes?: readonly RouteKind[];
+}
+
+export interface BoundedQuoteSearchResult {
+  readonly route: RouteKind;
+  readonly quote: RouteQuote | null;
+  readonly requestAmount: bigint;
+  readonly included: boolean;
+  readonly reason: QuoteBlocker | "RouteNotAllowed" | "DestinationMinimumNotMet";
+}
+
+/** Search every permitted route locally, with deterministic integer bounds and no network calls. */
+export function searchBoundedQuotes(
+  request: BoundedQuoteSearchRequest,
+): readonly BoundedQuoteSearchResult[] {
+  for (const field of ["balance", "maxAmount", "minDestinationAmount"] as const) {
+    if (typeof request[field] !== "bigint" || request[field] < 0n)
+      throw new TypeError(`${field} must be a non-negative bigint`);
+  }
+  if (
+    request.allowedRoutes !== undefined &&
+    (!Array.isArray(request.allowedRoutes) ||
+      request.allowedRoutes.some(
+        (route: unknown) => typeof route !== "number" || !isRouteKind(route),
+      ))
+  ) {
+    throw new TypeError("allowedRoutes must contain supported routes");
+  }
+  validatePlanningSnapshot(request.snapshot);
+  boundedNumber(request.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  const upperBound = request.balance < request.maxAmount ? request.balance : request.maxAmount;
+  return ROUTE_KINDS.map((route) => {
+    if (request.allowedRoutes && !request.allowedRoutes.includes(route)) {
+      return { route, quote: null, requestAmount: 0n, included: false, reason: "RouteNotAllowed" };
+    }
+    const maximum = maximumSend({
+      route,
+      balance: upperBound,
+      strkey: request.strkey,
+      destinationDecimals: request.destinationDecimals,
+      snapshot: request.snapshot,
+    });
+    if (!maximum.executable || maximum.quote === null) {
+      return { route, quote: null, requestAmount: 0n, included: false, reason: maximum.reason };
+    }
+    if (maximum.quote.destinationAmount < request.minDestinationAmount) {
+      return {
+        route,
+        quote: maximum.quote,
+        requestAmount: maximum.requestAmount,
+        included: false,
+        reason: "DestinationMinimumNotMet",
+      };
+    }
+    return {
+      route,
+      quote: maximum.quote,
+      requestAmount: maximum.requestAmount,
+      included: true,
+      reason: QuoteBlocker.None,
+    };
+  });
+}
+
 function blocked(base: RouteQuote, reason: QuoteBlocker): RouteQuote {
   return { ...base, available: false, reason };
+}
+
+function destinationRoundingBound(sourceDecimals: number, destinationDecimals: number): bigint {
+  return destinationDecimals > sourceDecimals
+    ? pow10(destinationDecimals - sourceDecimals) - 1n
+    : 0n;
 }
 
 /**
@@ -260,6 +553,234 @@ export function planQuote(request: QuoteRequest, snapshot: RouterSnapshot): Rout
   };
 }
 
+/**
+ * Apply the caller's explicit destination-token reserve to a forward quote.
+ *
+ * This is an amount budget, not a gas-price conversion: it is reserved in destination token
+ * base units and does not model native-token provider pricing.
+ */
+function validForwardingBudget(value: unknown): value is ForwardingBudget {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("unit" in value) ||
+    !("destinationAmount" in value)
+  )
+    return false;
+  return (
+    value.unit === "destination-token-base-units" &&
+    typeof value.destinationAmount === "bigint" &&
+    value.destinationAmount >= 0n
+  );
+}
+
+export function planForwardQuote(
+  request: ForwardQuoteRequest,
+  snapshot: RouterSnapshot,
+): ForwardQuotePlan {
+  const { minimumDestinationAmount, forwardingBudget } = request;
+  const quote = planQuote(request, snapshot);
+  const roundingBoundDestinationAmount =
+    Number.isInteger(snapshot.tokenDecimals) &&
+    Number.isInteger(request.destinationDecimals) &&
+    snapshot.tokenDecimals >= 0 &&
+    request.destinationDecimals >= snapshot.tokenDecimals &&
+    request.destinationDecimals <= MAX_DECIMALS
+      ? destinationRoundingBound(snapshot.tokenDecimals, request.destinationDecimals)
+      : 0n;
+  const validInputs =
+    typeof minimumDestinationAmount === "bigint" &&
+    minimumDestinationAmount > 0n &&
+    validForwardingBudget(forwardingBudget);
+
+  if (!validInputs) {
+    return {
+      available: false,
+      meetsMinimum: false,
+      reason:
+        "minimum must be positive and forwarding budget non-negative, both in destination-token-base-units",
+      quote,
+      recipientDestinationAmount: 0n,
+      minimumDestinationAmount,
+      forwardingBudget,
+      roundingOvershoot: null,
+      roundingBoundDestinationAmount,
+    };
+  }
+
+  const recipientDestinationAmount =
+    quote.destinationAmount > forwardingBudget.destinationAmount
+      ? quote.destinationAmount - forwardingBudget.destinationAmount
+      : 0n;
+  const available = quote.available;
+  const meetsMinimum = available && recipientDestinationAmount >= minimumDestinationAmount;
+
+  return {
+    available,
+    meetsMinimum,
+    reason: !available
+      ? BLOCKER_COPY[quote.reason].detail
+      : meetsMinimum
+        ? null
+        : "quoted destination amount after the forwarding reserve is below the requested minimum",
+    quote,
+    recipientDestinationAmount,
+    minimumDestinationAmount,
+    forwardingBudget,
+    roundingOvershoot: meetsMinimum ? recipientDestinationAmount - minimumDestinationAmount : null,
+    roundingBoundDestinationAmount,
+  };
+}
+
+/**
+ * Find the smallest source amount whose exact forward quote meets a destination minimum.
+ *
+ * Search is bounded by the router quote ceiling and the route's current flow headroom. It uses
+ * the same fee floor and destination-precision floor as `planQuote`; no floating-point estimate
+ * or guessed fee inversion is involved.
+ */
+export function planInverseQuote(
+  request: InverseQuoteRequest,
+  snapshot: RouterSnapshot,
+): InverseQuotePlan {
+  const { route, strkey, destinationDecimals, minimumDestinationAmount, forwardingBudget } =
+    request;
+  const initialRoundingBoundDestinationAmount =
+    Number.isInteger(snapshot.tokenDecimals) &&
+    Number.isInteger(destinationDecimals) &&
+    snapshot.tokenDecimals >= 0 &&
+    destinationDecimals >= snapshot.tokenDecimals &&
+    destinationDecimals <= MAX_DECIMALS
+      ? destinationRoundingBound(snapshot.tokenDecimals, destinationDecimals)
+      : 0n;
+  const requiredDestinationAmount =
+    typeof minimumDestinationAmount === "bigint" && validForwardingBudget(forwardingBudget)
+      ? minimumDestinationAmount + forwardingBudget.destinationAmount
+      : 0n;
+
+  const failure = (reason: string, blocker: QuoteBlocker | null = null): InverseQuotePlan => ({
+    available: false,
+    reason,
+    blocker,
+    requiredSourceAmount: null,
+    requiredDestinationAmount,
+    recipientDestinationAmount: 0n,
+    minimumDestinationAmount,
+    forwardingBudget,
+    roundingOvershoot: null,
+    roundingBoundDestinationAmount: initialRoundingBoundDestinationAmount,
+    quote: null,
+  });
+
+  if (
+    typeof minimumDestinationAmount !== "bigint" ||
+    minimumDestinationAmount <= 0n ||
+    !validForwardingBudget(forwardingBudget)
+  ) {
+    return failure(
+      "minimum must be positive and forwarding budget non-negative, both in destination-token-base-units",
+    );
+  }
+  if (!isRouteKind(route)) return failure("route is not a recognized rail");
+  if (!Number.isInteger(snapshot.feeBps) || snapshot.feeBps < 0 || snapshot.feeBps > MAX_FEE_BPS) {
+    return failure(`fee assumption must be an integer from 0 to ${String(MAX_FEE_BPS)} bps`);
+  }
+  if (
+    !Number.isInteger(snapshot.tokenDecimals) ||
+    snapshot.tokenDecimals < 0 ||
+    snapshot.tokenDecimals > MAX_DECIMALS ||
+    !Number.isInteger(destinationDecimals) ||
+    destinationDecimals < 0 ||
+    destinationDecimals > MAX_DECIMALS
+  ) {
+    return failure(
+      `source and destination decimals must be integers from 0 to ${String(MAX_DECIMALS)}`,
+    );
+  }
+
+  const firstQuote = planQuote({ route, amount: 1n, strkey, destinationDecimals }, snapshot);
+  if (
+    firstQuote.reason !== QuoteBlocker.None &&
+    firstQuote.reason !== QuoteBlocker.AmountTooSmall &&
+    firstQuote.reason !== QuoteBlocker.NotRepresentable
+  ) {
+    return failure(BLOCKER_COPY[firstQuote.reason].detail, firstQuote.reason);
+  }
+
+  const flowHeadroom = snapshot.flowAvailable[route] ?? 0n;
+  const feeBps = BigInt(snapshot.feeBps);
+  let low = 0n;
+  let high = MAX_QUOTE_AMOUNT;
+  while (low < high) {
+    const middle = (low + high + 1n) >> 1n;
+    const fee = (middle * feeBps) / BPS_DENOMINATOR;
+    const net = floorToRepresentable(middle - fee, snapshot.tokenDecimals, destinationDecimals);
+    if (net <= flowHeadroom) low = middle;
+    else high = middle - 1n;
+  }
+  const maximumSourceAmount = low;
+  if (maximumSourceAmount === 0n) {
+    return failure(
+      "route flow headroom is zero or too small for a representable transfer",
+      QuoteBlocker.FlowLimitExceeded,
+    );
+  }
+
+  const maximumQuote = planQuote(
+    { route, amount: maximumSourceAmount, strkey, destinationDecimals },
+    snapshot,
+  );
+  if (!maximumQuote.available) {
+    return failure(BLOCKER_COPY[maximumQuote.reason].detail, maximumQuote.reason);
+  }
+  if (maximumQuote.destinationAmount < requiredDestinationAmount) {
+    return failure(
+      maximumSourceAmount === MAX_QUOTE_AMOUNT
+        ? "minimum is not representable within the router's maximum quote amount"
+        : "minimum is unattainable within the route's current flow headroom",
+      maximumSourceAmount === MAX_QUOTE_AMOUNT
+        ? QuoteBlocker.NotRepresentable
+        : QuoteBlocker.FlowLimitExceeded,
+    );
+  }
+
+  let searchLow = 1n;
+  let searchHigh = maximumSourceAmount;
+  while (searchLow < searchHigh) {
+    const middle = (searchLow + searchHigh) >> 1n;
+    const quote = planQuote({ route, amount: middle, strkey, destinationDecimals }, snapshot);
+    if (quote.available && quote.destinationAmount >= requiredDestinationAmount) {
+      searchHigh = middle;
+    } else {
+      searchLow = middle + 1n;
+    }
+  }
+
+  const quote = planQuote({ route, amount: searchLow, strkey, destinationDecimals }, snapshot);
+  if (!quote.available) {
+    return failure(BLOCKER_COPY[quote.reason].detail, quote.reason);
+  }
+  const recipientDestinationAmount = quote.destinationAmount - forwardingBudget.destinationAmount;
+  const roundingOvershoot = recipientDestinationAmount - minimumDestinationAmount;
+
+  return {
+    available: true,
+    reason: null,
+    blocker: null,
+    requiredSourceAmount: searchLow,
+    requiredDestinationAmount,
+    recipientDestinationAmount,
+    minimumDestinationAmount,
+    forwardingBudget,
+    roundingOvershoot,
+    roundingBoundDestinationAmount: destinationRoundingBound(
+      snapshot.tokenDecimals,
+      destinationDecimals,
+    ),
+    quote,
+  };
+}
+
 /** Price every rail, in the enum's own order so a list does not reshuffle itself between renders. */
 export function planQuotes(
   request: Omit<QuoteRequest, "route">,
@@ -305,9 +826,9 @@ export function wouldSlip(quote: RouteQuote, minDestinationAmount: bigint): bool
   return quote.available && quote.destinationAmount < minDestinationAmount;
 }
 
+export * from "./quotes/snapshots.js";
+
 /**
- * A sane minimum from a quote and a tolerance in basis points.
- *
  * Rounds the floor down, so the guard is never tighter than the tolerance somebody chose. On a
  * rail with a fixed rate this is theatre, and on one that skims a variable fee it is the
  * difference between a transfer and a surprise.
@@ -328,6 +849,63 @@ export const quoteAllRails = planQuotes;
 
 export * from "./quotes/types.js";
 export * from "./quotes/ladder.js";
+export * from "./quotes/snapshot.js";
+
+/**
+ * A quote request that names the asset by identity rather than by ticker.
+ *
+ * `planQuote` prices whatever the snapshot's `tokenRegistered` and `tokenDecimals` describe, which
+ * is enough for a single-asset router view and not enough for one that lists native USDC and an
+ * ITS representation side by side. Here the asset carries its chain, its representation and its
+ * address or issuer, so a quote cannot silently be for the other USDC.
+ */
+export interface AssetQuoteRequest extends QuoteRequest {
+  readonly asset: AssetIdentity;
+}
+
+/**
+ * Price one rail for one specific asset representation.
+ *
+ * The rail must be one the asset is registered for, and the identity must resolve to exactly one
+ * entry in the registry. Anything else is `TokenNotRegistered`: the snapshot describes what the
+ * router holds, and this says whether the asset the caller named is the thing being priced.
+ */
+export function planQuoteForAsset(
+  request: AssetQuoteRequest,
+  snapshot: RouterSnapshot,
+  registry: readonly Asset[] = ASSETS,
+): RouteQuote {
+  const asset = assetByIdentity(request.asset, registry);
+  const base: RouteQuote = {
+    route: request.route,
+    available: false,
+    reason: QuoteBlocker.TokenNotRegistered,
+    grossAmount: request.amount,
+    fee: 0n,
+    netAmount: 0n,
+    destinationAmount: 0n,
+    flowAvailable: snapshot.flowAvailable[request.route] ?? 0n,
+    waitsOnAttestation: waitsOnAttestation(request.route),
+    isCanonical: isCanonical(request.route),
+  };
+  if (
+    !asset?.routes.includes(request.route) ||
+    snapshot.tokenIdentity === undefined ||
+    !sameAssetIdentity(snapshot.tokenIdentity, request.asset) ||
+    snapshot.tokenDecimals !== asset.decimals
+  )
+    return base;
+  return planQuote(request, snapshot);
+}
+
+/** Price every rail this asset is registered for, leaving the rest blocked. */
+export function planQuotesForAsset(
+  request: Omit<AssetQuoteRequest, "route">,
+  snapshot: RouterSnapshot,
+  registry: readonly Asset[] = ASSETS,
+): readonly RouteQuote[] {
+  return ROUTE_KINDS.map((route) => planQuoteForAsset({ ...request, route }, snapshot, registry));
+}
 
 /** Additive V2 wrapper. `quote`, planQuote and quoteBatch retain their legacy schema. */
 export interface RouteQuoteV2 {

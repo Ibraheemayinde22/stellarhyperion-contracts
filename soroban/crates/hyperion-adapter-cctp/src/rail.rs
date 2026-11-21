@@ -23,6 +23,13 @@
 //! - Residual approval reconciliation: the read-only allowance auditor inspects standing
 //!   approvals and produces findings (`ApprovalFinding::UnexpectedResidual`) without mutating state. Unreadable amounts report
 //!   `ApprovalFinding::Unavailable` and are never presented as clean zero.
+//! - Remote messenger rotation with overlap controls: peer messenger replacements require an
+//!   explicit timelock delay (minimum 1 hour) before activation. Once applied, an explicit
+//!   overlap window allows historical in-flight messages signed against the retired peer
+//!   messenger to settle without stranding user funds. After the acceptance window expires,
+//!   old-messenger deliveries are rejected and unauthorized peers never acquire inbound custody.
+//! - Emergency disable controls: administrative disable controls halt inbound and outbound
+//!   custody immediately, preserving fund safety across rotation transitions.
 //!
 //! # Active Deployment Gating
 //!
@@ -50,6 +57,7 @@ pub const TOKEN_MESSENGER_ALLOWANCE_CONSUMPTION: &str = "transfer_from";
 /// burn token's own decimals rather than in any canonical base.
 #[contractclient(name = "TokenMessengerClient")]
 pub trait TokenMessenger {
+    fn paused(env: Env) -> bool;
     #[allow(clippy::too_many_arguments)]
     fn deposit_for_burn(
         env: Env,
@@ -85,5 +93,6 @@ pub trait TokenMessenger {
 /// the whole point of routing over a rail instead of building one.
 #[contractclient(name = "MessageTransmitterClient")]
 pub trait Receiver {
+    fn paused(env: Env) -> bool;
     fn receive_message(env: Env, caller: Address, message: Bytes, signature: Bytes) -> bool;
 }

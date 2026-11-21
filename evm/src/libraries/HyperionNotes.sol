@@ -28,12 +28,26 @@ library HyperionNotes {
     /// @dev One envelope version across both rails, so nobody has to remember which rail numbers
     /// its payloads differently from the other.
     uint8 internal constant NOTE_VERSION = 1;
+    uint8 internal constant NOTE_VERSION_V1 = NOTE_VERSION;
 
     /// @dev Version, twenty byte address, eight byte nonce.
     uint256 internal constant OUTBOUND_NOTE_LEN = 29;
 
     /// @dev The shortest an inbound note can be: version, kind, length, a strkey, a nonce.
     uint256 private constant INBOUND_NOTE_MIN = 1 + 3 + 8;
+
+    /// @notice Whether this build has a codec registered for `version`.
+    function supportsNoteVersion(uint8 version) internal pure returns (bool) {
+        return version == NOTE_VERSION_V1;
+    }
+
+    /// @dev Fails closed instead of allowing a newer destination requirement to fall back to v1.
+    function negotiateNoteVersion(uint8 requiredVersion) internal pure returns (uint8) {
+        if (supportsNoteVersion(requiredVersion) && requiredVersion <= NOTE_VERSION_V1) {
+            return NOTE_VERSION_V1;
+        }
+        revert UnsupportedHookVersion();
+    }
 
     /// @notice Read the note that came with a transfer out of Stellar.
     /// @dev Wire form is `[version][20 byte recipient][8 byte big endian nonce]`, written by
@@ -45,8 +59,18 @@ library HyperionNotes {
         pure
         returns (address recipient, uint64 nonce)
     {
+        if (payload.length == 0) revert MalformedMessage();
+        uint8 version = uint8(payload[0]);
+        if (version == NOTE_VERSION_V1) return _decodeOutboundNoteV1(payload);
+        revert UnsupportedHookVersion();
+    }
+
+    function _decodeOutboundNoteV1(bytes calldata payload)
+        private
+        pure
+        returns (address recipient, uint64 nonce)
+    {
         if (payload.length != OUTBOUND_NOTE_LEN) revert MalformedMessage();
-        if (uint8(payload[0]) != NOTE_VERSION) revert UnsupportedHookVersion();
 
         recipient = address(bytes20(payload[1:21]));
         if (recipient == address(0)) revert ZeroAddressKey();
@@ -77,8 +101,18 @@ library HyperionNotes {
         pure
         returns (AddressKind kind, string memory strkey, uint64 nonce)
     {
+        if (payload.length == 0) revert MalformedMessage();
+        uint8 version = uint8(payload[0]);
+        if (version == NOTE_VERSION_V1) return _decodeInboundNoteV1(payload);
+        revert UnsupportedHookVersion();
+    }
+
+    function _decodeInboundNoteV1(bytes memory payload)
+        private
+        pure
+        returns (AddressKind kind, string memory strkey, uint64 nonce)
+    {
         if (payload.length < INBOUND_NOTE_MIN) revert MalformedMessage();
-        if (uint8(payload[0]) != NOTE_VERSION) revert UnsupportedHookVersion();
 
         uint8 tag = uint8(payload[1]);
         if (tag > uint8(AddressKind.MuxedAccount)) revert MalformedMessage();

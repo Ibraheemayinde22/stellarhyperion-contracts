@@ -5,10 +5,18 @@ import {
   floorToRepresentable,
 } from "../amounts.js";
 import { tryParseStellarAddress, AddressKind } from "../addresses.js";
+import { ASSETS, assetByIdentity, sameAssetIdentity } from "../registry/assets.js";
 import type { RouteKind } from "../routes.js";
 import { ROUTE_KINDS, carriesPayload, isCanonical, waitsOnAttestation } from "../routes.js";
-import { MAX_QUOTE_AMOUNT, QuoteBlocker, bestQuote } from "../quotes.js";
-import type { RouteQuote } from "../quotes.js";
+import { MAX_QUOTE_AMOUNT, QuoteBlocker, bestQuote, planInverseQuote } from "../quotes.js";
+import type { InverseQuotePlan, InverseQuoteRequest, RouteQuote } from "../quotes.js";
+import {
+  resolveProviderAddressPair,
+  type ProviderAddressOverrides,
+  type ProviderAddressPair,
+} from "../registry/assets.js";
+import type { ChainKey } from "../chains.js";
+import { boundedNumber, validatePlanningSnapshot } from "./validation.js";
 import {
   RAIL_DESTINATION_GAS_ESTIMATES,
   type BatchQuoteResult,
@@ -40,6 +48,12 @@ export function quoteBatch(
   params: QuoteParams,
 ): readonly BatchQuoteResult[] {
   const { strkey, destinationDecimals, snapshot, gasEstimates } = params;
+
+  // Resolve the requested asset identity once. An unknown identity or a rail the representation
+  // is not registered for fails shut, the same way an unregistered token does.
+  const requestedAsset = params.asset ?? null;
+  const resolvedAsset =
+    requestedAsset === null ? null : assetByIdentity(requestedAsset, params.registry ?? ASSETS);
 
   // Build combined gas projections from historical defaults and caller overrides
   const gasProjections: Record<RouteKind, bigint> = {
@@ -75,6 +89,14 @@ export function quoteBatch(
       staticBlocker = QuoteBlocker.TokenNotRegistered;
     } else if (!snapshot.tokenEnabled) {
       staticBlocker = QuoteBlocker.TokenDisabled;
+    } else if (
+      requestedAsset !== null &&
+      (!resolvedAsset?.routes.includes(route) ||
+        snapshot.tokenIdentity === undefined ||
+        !sameAssetIdentity(snapshot.tokenIdentity, requestedAsset) ||
+        snapshot.tokenDecimals !== resolvedAsset.decimals)
+    ) {
+      staticBlocker = QuoteBlocker.TokenNotRegistered;
     } else if (tokenDecimalsInvalid) {
       staticBlocker = QuoteBlocker.NotRepresentable;
     }
@@ -154,6 +176,7 @@ export function quoteBatch(
 
     return {
       amount: tierAmount,
+      asset: requestedAsset,
       available,
       winningRail: best !== null ? best.route : null,
       bestQuote: best,
@@ -166,4 +189,103 @@ export function quoteBatch(
       quotes,
     };
   });
+}
+
+/**
+ * Invert a batch of destination minimums using one shared route snapshot and budget assumption.
+ *
+ * This intentionally returns one exact plan per requested minimum; it does not interpolate
+ * between tiers because fees and representability are integer floors.
+ */
+export function quoteMinimumBatch(
+  minimums: readonly bigint[],
+  params: Omit<InverseQuoteRequest, "minimumDestinationAmount"> & {
+    readonly snapshot: QuoteParams["snapshot"];
+  },
+): readonly InverseQuotePlan[] {
+  return minimums.map((minimumDestinationAmount) =>
+    planInverseQuote({ ...params, minimumDestinationAmount }, params.snapshot),
+  );
+}
+
+/** Provider address context for a batch quote; token decimals remain part of the quote inputs. */
+export interface ProviderAwareQuoteParams extends QuoteParams {
+  readonly sourceChain: ChainKey;
+  readonly destinationChain: ChainKey;
+  readonly symbol: string;
+  readonly providerAddressOverrides: ProviderAddressOverrides;
+}
+
+export interface ProviderAwareBatchQuoteResult {
+  readonly quotes: readonly BatchQuoteResult[];
+  readonly providerAddresses: Readonly<Partial<Record<RouteKind, ProviderAddressPair>>>;
+}
+
+/**
+ * Quote a ladder and resolve explicit provider address pairs for each snapshot-supported route.
+ *
+ * The pair metadata is returned separately so existing quote result schemas remain unchanged.
+ */
+export function quoteBatchWithProviderAddresses(
+  tiers: readonly bigint[],
+  params: ProviderAwareQuoteParams,
+): ProviderAwareBatchQuoteResult {
+  const providerAddresses: Partial<Record<RouteKind, ProviderAddressPair>> = {};
+  for (const route of ROUTE_KINDS) {
+    if (params.snapshot.chainSupported[route] !== true) continue;
+    providerAddresses[route] = resolveProviderAddressPair(
+      params.sourceChain,
+      params.destinationChain,
+      params.symbol,
+      route,
+      params.providerAddressOverrides,
+    );
+  }
+  return {
+    quotes: quoteBatch(tiers, params),
+    providerAddresses: Object.freeze(providerAddresses),
+  };
+}
+
+export interface SharedFlowBatchResult {
+  /** Results in input order. A blocked item does not consume virtual flow. */
+  readonly results: readonly BatchQuoteResult[];
+  /** Net amount consumed per rail by successful items in this plan. */
+  readonly consumedFlow: Readonly<Partial<Record<RouteKind, bigint>>>;
+  /** Remaining virtual headroom after successful items, without touching chain state. */
+  readonly remainingFlow: Readonly<Partial<Record<RouteKind, bigint>>>;
+}
+
+/**
+ * Plan sequential transfers against one virtual flow budget.
+ *
+ * Each item sees the headroom left by earlier successful items. A blocked item is excluded and
+ * rolls back nothing; only a result with a winning rail commits its net amount to the virtual
+ * budget. The caller can discard the returned plan without changing the live router.
+ */
+export function quoteBatchWithSharedFlow(
+  tiers: readonly bigint[],
+  params: QuoteParams,
+): SharedFlowBatchResult {
+  validatePlanningSnapshot(params.snapshot);
+  boundedNumber(params.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  if (tiers.some((tier) => typeof tier !== "bigint"))
+    throw new TypeError("tiers must contain bigint amounts");
+  const remaining: Partial<Record<RouteKind, bigint>> = { ...params.snapshot.flowAvailable };
+  const consumed: Partial<Record<RouteKind, bigint>> = {};
+  const results: BatchQuoteResult[] = [];
+
+  for (const tier of tiers) {
+    const snapshot: typeof params.snapshot = { ...params.snapshot, flowAvailable: remaining };
+    const result = quoteBatch([tier], { ...params, snapshot })[0];
+    if (result === undefined) throw new Error("single-tier quote did not return a result");
+    results.push(result);
+    if (result.bestQuote === null || result.winningRail === null) continue;
+    const route = result.winningRail;
+    const next = (remaining[route] ?? 0n) - result.netAmount;
+    remaining[route] = next;
+    consumed[route] = (consumed[route] ?? 0n) + result.netAmount;
+  }
+
+  return { results, consumedFlow: consumed, remainingFlow: remaining };
 }

@@ -69,6 +69,11 @@ export const SOROBAN_ERROR_NAMES = [
   "ExceedsRouteLimit",
   "ProviderBudgetExceeded",
   "AdapterMethodUnavailable",
+  "RotationAlreadyPending",
+  "RotationNotPending",
+  "RotationNotReady",
+  "MessengerUnchanged",
+  "OldMessengerExpired",
 ] as const;
 
 export type SorobanErrorName = (typeof SOROBAN_ERROR_NAMES)[number];
@@ -82,6 +87,9 @@ export const EVM_ERROR_NAMES = [
   "RouteDisabled",
   "RouteIsPaused",
   "AdapterNotSet",
+  "AdapterCodeMissing",
+  "AdapterIdentityMismatch",
+  "UpgradeableAdapterUnsupported",
   "InvalidAmount",
   "AmountNotRepresentable",
   "DecimalOverflow",
@@ -124,8 +132,20 @@ export const EVM_ERROR_NAMES = [
   "ProtectedAsset",
   "ZeroAddress",
   "RefundFailed",
+  "NoRefundCredit",
   "ProviderBudgetExceeded",
   "AdapterMethodUnavailable",
+  "InvalidSignature",
+  "IntentExpired",
+  "IntentNonceMismatch",
+  "IntentDomainMismatch",
+  "RotationAlreadyPending",
+  "RotationNotPending",
+  "RotationNotReady",
+  "MessengerUnchanged",
+  "OldMessengerExpired",
+  "TopUpIntentNotFound",
+  "TopUpBindingMismatch",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -146,17 +166,23 @@ export type ErrorFault =
   | "timing" // right request, wrong moment
   | "internal"; // should not happen, and if it does somebody wants to know
 
+/** Stable recovery guidance for callers; unknown future errors are never retryable by default. */
+export type RecoveryClass =
+  "transient" | "user_correctable" | "operator_action" | "unknown_outcome";
+
 export interface ErrorHelp {
   /** One sentence, written for the person who hit it rather than the person who wrote it. */
   readonly summary: string;
   readonly fault: ErrorFault;
   /** Whether the identical request could work later with nothing changed. */
   readonly retryable: boolean;
+  /** Conservative action class for UI and retry orchestration. */
+  readonly recovery: RecoveryClass;
   /** The Soroban tag, when Stellar has this error at all. */
   readonly sorobanCode: number | null;
 }
 
-const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
+const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery">> = {
   AlreadyInitialized: {
     summary: "This contract was already set up once, and setup only happens once.",
     fault: "config",
@@ -196,6 +222,22 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
   },
   AdapterNotSet: {
     summary: "Nothing is wired up to carry that rail yet.",
+    fault: "config",
+    retryable: false,
+  },
+  AdapterCodeMissing: {
+    summary: "The proposed rail adapter has no deployed code. Review its deployment address.",
+    fault: "config",
+    retryable: false,
+  },
+  AdapterIdentityMismatch: {
+    summary: "The rail adapter no longer matches its reviewed code, router or route identity.",
+    fault: "config",
+    retryable: false,
+  },
+  UpgradeableAdapterUnsupported: {
+    summary:
+      "The rail adapter exposes an upgradeable implementation that this router does not accept.",
     fault: "config",
     retryable: false,
   },
@@ -434,7 +476,12 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
   },
   RefundFailed: {
     summary:
-      "Change was owed and the sender would not accept it. A contract that rejects a plain transfer cannot send through Hyperion.",
+      "The native refund or credit payment was rejected. Use the opt-in credit mode or an accepting recipient for credit withdrawal.",
+    fault: "input",
+    retryable: false,
+  },
+  NoRefundCredit: {
+    summary: "This account has no native refund credit to withdraw.",
     fault: "input",
     retryable: false,
   },
@@ -449,9 +496,68 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
     fault: "config",
     retryable: false,
   },
+  InvalidSignature: {
+    summary:
+      "The transfer signature does not authenticate the signed sender. Sign the reviewed intent again.",
+    fault: "input",
+    retryable: false,
+  },
+  IntentExpired: {
+    summary: "The signed transfer deadline has passed. Review and sign a new intent.",
+    fault: "input",
+    retryable: false,
+  },
+  IntentNonceMismatch: {
+    summary:
+      "The signed transfer nonce is no longer current. Check its outcome before signing again.",
+    fault: "input",
+    retryable: false,
+  },
+  IntentDomainMismatch: {
+    summary:
+      "The signed transfer belongs to a different chain or router. Review the destination deployment.",
+    fault: "input",
+    retryable: false,
+  },
+  TopUpIntentNotFound: {
+    summary: "This gas top-up does not match an outbound transfer recorded by the adapter.",
+    fault: "input",
+    retryable: false,
+  },
+  TopUpBindingMismatch: {
+    summary:
+      "The gas top-up changes the sender, destination, token, amount, or message already bound to this transfer.",
+    fault: "input",
+    retryable: false,
+  },
   ExceedsRouteLimit: {
     summary: "That transfer exceeds the maximum single transfer limit configured for this route.",
     fault: "limit",
+    retryable: false,
+  },
+  RotationAlreadyPending: {
+    summary: "A rotation is already queued for this peer; cancel it before proposing a new one.",
+    fault: "config",
+    retryable: false,
+  },
+  RotationNotPending: {
+    summary: "No rotation is queued for this peer, so there is nothing to apply or cancel.",
+    fault: "config",
+    retryable: false,
+  },
+  RotationNotReady: {
+    summary: "The timelock delay on this peer rotation has not elapsed yet.",
+    fault: "timing",
+    retryable: true,
+  },
+  MessengerUnchanged: {
+    summary: "The proposed new messenger is the same as the current one.",
+    fault: "config",
+    retryable: false,
+  },
+  OldMessengerExpired: {
+    summary: "The in-flight message names a retired messenger whose acceptance window has closed.",
+    fault: "timing",
     retryable: false,
   },
 };
@@ -460,12 +566,23 @@ const SOROBAN_CODE_BY_NAME: ReadonlyMap<string, number> = new Map(
   SOROBAN_ERROR_NAMES.map((name, index) => [name, index + 1]),
 );
 
+function recoveryClass(help: Omit<ErrorHelp, "sorobanCode" | "recovery">): RecoveryClass {
+  if (help.fault === "internal") return "unknown_outcome";
+  if (help.fault === "input") return "user_correctable";
+  if (help.fault === "config") return "operator_action";
+  return help.retryable ? "transient" : "operator_action";
+}
+
 /** Every error name with its Soroban tag filled in where Stellar has one. */
 export const ERROR_HELP: Readonly<Record<HyperionErrorName, ErrorHelp>> = Object.freeze(
   Object.fromEntries(
     Object.entries(HELP).map(([name, help]) => [
       name,
-      { ...help, sorobanCode: SOROBAN_CODE_BY_NAME.get(name) ?? null },
+      {
+        ...help,
+        recovery: recoveryClass(help),
+        sorobanCode: SOROBAN_CODE_BY_NAME.get(name) ?? null,
+      },
     ]),
   ) as Record<HyperionErrorName, ErrorHelp>,
 );
@@ -496,6 +613,7 @@ export function describeError(name: string): ErrorHelp {
     summary: `The contract returned ${name}, which this version of the app does not have a translation for.`,
     fault: "internal",
     retryable: false,
+    recovery: "unknown_outcome",
     sorobanCode: null,
   };
 }
@@ -507,6 +625,7 @@ export function describeError(name: string): ErrorHelp {
  */
 export class HyperionProtocolError extends Error {
   readonly code: HyperionErrorName;
+  readonly recovery: RecoveryClass;
 
   constructor(code: HyperionErrorName, detail?: string) {
     const help = ERROR_HELP[code];
@@ -517,6 +636,7 @@ export class HyperionProtocolError extends Error {
     super(`${code}: ${body}`);
     this.name = "HyperionProtocolError";
     this.code = code;
+    this.recovery = help.recovery;
   }
 }
 

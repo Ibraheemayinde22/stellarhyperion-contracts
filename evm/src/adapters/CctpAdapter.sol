@@ -8,12 +8,16 @@ import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import {
     AlreadyConfigured,
+    DecimalOverflow,
     InvalidAmount,
     MalformedMessage,
     NotMintRecipient,
     NothingMinted,
     RailNotConfigured,
     RefundFailed,
+    TimelockDelayOutOfRange,
+    TimelockNotQueued,
+    TimelockNotReady,
     TokenNotMapped,
     Unauthorized,
     UnsupportedMessageVersion,
@@ -57,6 +61,41 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
 
     /// @notice Version for CCTP approval diagnostics.
     uint32 public constant APPROVAL_DIAGNOSTICS_VERSION = 1;
+
+    enum ProviderReadStatus {
+        Unknown,
+        Usable,
+        Paused
+    }
+
+    struct LaneReadiness {
+        uint32 version;
+        bool routerPaused;
+        ProviderReadStatus messenger;
+        ProviderReadStatus transmitter;
+        address messengerContract;
+        address transmitterContract;
+        bool laneAvailable;
+    }
+
+    enum AttestationCondition {
+        Unverified,
+        Verified,
+        Expired,
+        UnsupportedRecovery
+    }
+
+    struct RenewalPlan {
+        uint32 version;
+        AttestationCondition condition;
+        bytes32 sourceMessageId;
+        bytes32 payoutIntent;
+        uint256 expiresAt;
+        bool recoverySupported;
+    }
+
+    /// @notice CCTP message transmitter used to attest provider lane readiness.
+    address public messageTransmitter;
 
     /// @notice Expected residual allowance on the token messenger.
     uint256 public constant DOCUMENTED_RESIDUAL_ALLOWANCE = 0;
@@ -107,11 +146,32 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         bool enabled;
     }
 
+    /// @notice Minimum delay before a proposed peer rotation can become active (1 hour).
+    uint64 public constant MIN_ROTATION_DELAY = 1 hours;
+
+    /// @notice Default overlap acceptance window for historical in-flight messages (24 hours).
+    uint64 public constant DEFAULT_OVERLAP_WINDOW = 1 days;
+
+    /// @notice A proposed peer rotation awaiting the timelock delay.
+    struct PeerRotation {
+        bytes32 newMintRecipient;
+        uint64 eta;
+        uint64 queuedAt;
+    }
+
+    /// @notice Historical peer window for retired peer messenger.
+    struct HistoricalPeer {
+        bytes32 oldMintRecipient;
+        uint64 validUntil;
+    }
+
     mapping(string chain => Lane lane) private _lanes;
     mapping(uint32 domain => Lane sourceLane) private _sourceLanes;
     mapping(uint32 domain => string chain) private _sourceChain;
     mapping(uint32 domain => bytes32 sender) private _remoteSender;
     mapping(bytes32 replayKey => bool processed) private _processed;
+    mapping(string chain => PeerRotation) private _pendingRotations;
+    mapping(string chain => HistoricalPeer) private _historicalPeers;
 
     /// @notice A destination became reachable.
     event LaneConfigured(string chain, uint32 domain, bytes32 mintRecipient);
@@ -119,10 +179,22 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
     /// @notice A destination was turned on or off.
     event LaneEnabled(string chain, bool enabled);
 
+    /// @notice A peer messenger rotation was proposed.
+    event PeerRotationQueued(string indexed chain, bytes32 currentPeer, bytes32 newPeer, uint64 eta);
+
+    /// @notice A peer messenger rotation was applied.
+    event PeerRotationApplied(string indexed chain, bytes32 oldPeer, bytes32 newPeer, uint64 overlapDeadline);
+
+    /// @notice A peer messenger rotation was cancelled.
+    event PeerRotationCancelled(string indexed chain, bytes32 cancelledPeer);
+
     /// @notice A burn was handed to Circle.
     event BurnSubmitted(
         string chain, uint32 domain, uint256 amount, bytes32 mintRecipient, uint64 nonce, bytes hookData
     );
+
+    /// @notice Effective finality policy applied to a submitted burn.
+    event FinalityPolicyUsed(string chain, uint32 indexed domain, uint32 minFinalityThreshold);
 
     /// @notice Diagnostics announced for CCTP approval lifecycle during dispatch.
     event ApprovalAudited(
@@ -144,6 +216,11 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
             router == address(0) || tokenMessenger == address(0)
                 || messageTransmitter == address(0) || usdc == address(0)
         ) {
+    /// @notice Emitted when the configured CCTP message transmitter changes.
+    event MessageTransmitterSet(address indexed transmitter);
+
+    constructor(address router, address tokenMessenger, address usdc, address owner_) Ownable(owner_) {
+        if (router == address(0) || tokenMessenger == address(0) || usdc == address(0)) {
             revert ZeroAddress();
         }
         ROUTER = router;
@@ -180,6 +257,15 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         _dispatchPlan(token, amount, destination);
     }
 
+    /// @notice Quote the effective policy for a configured and enabled lane.
+    /// @dev This development adapter supports finalized transfers only.
+    function quoteFinalityPolicy(string calldata chain) external view returns (uint32) {
+        Lane storage lane = _lanes[chain];
+        if (!lane.configured) revert UnknownChain();
+        if (!lane.enabled) revert RailNotConfigured();
+        return FINALITY_THRESHOLD_FINALIZED;
+    }
+
     function _dispatchPlan(address token, uint256 amount, Destination calldata destination)
         private
         view
@@ -206,6 +292,7 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         if (msg.sender != ROUTER) revert Unauthorized();
         (Lane memory lane, bytes memory hookData) = _dispatchPlan(token, amount, destination);
         emit BurnSubmitted(destination.chain, lane.domain, amount, lane.mintRecipient, nonce, hookData);
+        emit FinalityPolicyUsed(destination.chain, lane.domain, FINALITY_THRESHOLD_FINALIZED);
         uint256 allowanceBefore = IERC20(USDC).allowance(address(this), address(TOKEN_MESSENGER));
         IERC20(USDC).forceApprove(address(TOKEN_MESSENGER), amount);
         if (IERC20(USDC).allowance(address(this), address(TOKEN_MESSENGER)) != amount) {
@@ -382,6 +469,71 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         return _lanes[chain];
     }
 
+    /// @notice Propose a rotation of the peer messenger / mint recipient on a remote chain.
+    /// @param chain The Hyperion chain name.
+    /// @param newPeer The new peer mint recipient address (bytes32).
+    /// @param delay Timelock delay in seconds (must be >= MIN_ROTATION_DELAY).
+    function proposePeerRotation(string calldata chain, bytes32 newPeer, uint64 delay) external onlyOwner {
+        Lane storage lane = _lanes[chain];
+        if (!lane.configured) revert UnknownChain();
+        if (newPeer == bytes32(0)) revert ZeroAddress();
+        if (newPeer == lane.mintRecipient) revert AlreadyConfigured();
+        if (delay < MIN_ROTATION_DELAY) revert TimelockDelayOutOfRange();
+        if (_pendingRotations[chain].eta != 0) revert AlreadyConfigured();
+        if (block.timestamp > type(uint64).max - delay) revert DecimalOverflow();
+
+        uint64 nowTime = uint64(block.timestamp);
+        uint64 eta = nowTime + delay;
+        _pendingRotations[chain] = PeerRotation({newMintRecipient: newPeer, eta: eta, queuedAt: nowTime});
+
+        emit PeerRotationQueued(chain, lane.mintRecipient, newPeer, eta);
+    }
+
+    /// @notice Apply a previously proposed peer rotation after the delay has passed.
+    /// @param chain The Hyperion chain name.
+    function applyPeerRotation(string calldata chain) external onlyOwner {
+        Lane storage lane = _lanes[chain];
+        if (!lane.configured) revert UnknownChain();
+
+        PeerRotation memory rotation = _pendingRotations[chain];
+        if (rotation.eta == 0) revert TimelockNotQueued();
+        if (block.timestamp < rotation.eta) revert TimelockNotReady(rotation.eta);
+
+        bytes32 oldPeer = lane.mintRecipient;
+        lane.mintRecipient = rotation.newMintRecipient;
+        delete _pendingRotations[chain];
+
+        uint64 overlapDeadline = uint64(block.timestamp) + DEFAULT_OVERLAP_WINDOW;
+        _historicalPeers[chain] = HistoricalPeer({oldMintRecipient: oldPeer, validUntil: overlapDeadline});
+
+        emit PeerRotationApplied(chain, oldPeer, lane.mintRecipient, overlapDeadline);
+    }
+
+    /// @notice Cancel a pending peer rotation.
+    /// @param chain The Hyperion chain name.
+    function cancelPeerRotation(string calldata chain) external onlyOwner {
+        Lane storage lane = _lanes[chain];
+        if (!lane.configured) revert UnknownChain();
+
+        PeerRotation memory rotation = _pendingRotations[chain];
+        if (rotation.eta == 0) revert TimelockNotQueued();
+
+        bytes32 cancelled = rotation.newMintRecipient;
+        delete _pendingRotations[chain];
+
+        emit PeerRotationCancelled(chain, cancelled);
+    }
+
+    /// @notice Read the pending rotation for a chain.
+    function pendingRotationOf(string calldata chain) external view returns (PeerRotation memory) {
+        return _pendingRotations[chain];
+    }
+
+    /// @notice Read the historical peer window for a chain.
+    function historicalPeerOf(string calldata chain) external view returns (HistoricalPeer memory) {
+        return _historicalPeers[chain];
+    }
+
     /// @notice Audits current allowance granted to the token messenger for USDC.
     /// @dev Read-only inspection. Unexpected residual approvals produce findings
     /// without automatic mutation.
@@ -414,6 +566,70 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
             isClean: isClean,
             finding: finding
         });
+    }
+
+    /// @notice Configure the optional transmitter identity for provider pause diagnostics.
+    function setMessageTransmitter(address transmitter) external onlyOwner {
+        if (transmitter == address(0)) revert ZeroAddress();
+        messageTransmitter = transmitter;
+        emit MessageTransmitterSet(transmitter);
+    }
+
+    /// @notice Coherent lane readiness across router and upstream providers.
+    function laneReadiness() external view returns (LaneReadiness memory) {
+        bool routerPaused = false;
+        (bool routerRead, bytes memory routerResult) = ROUTER.staticcall(abi.encodeWithSignature("paused()"));
+        if (routerRead && routerResult.length == 32) {
+            routerPaused = abi.decode(routerResult, (bool));
+        } else {
+            routerPaused = true;
+        }
+
+        ProviderReadStatus messenger = _providerPause(address(TOKEN_MESSENGER));
+        ProviderReadStatus transmitter = messageTransmitter == address(0)
+            ? ProviderReadStatus.Unknown
+            : _providerPause(messageTransmitter);
+        bool available = !routerPaused && messenger == ProviderReadStatus.Usable
+            && transmitter == ProviderReadStatus.Usable;
+
+        return LaneReadiness({
+            version: 1,
+            routerPaused: routerPaused,
+            messenger: messenger,
+            transmitter: transmitter,
+            messengerContract: address(TOKEN_MESSENGER),
+            transmitterContract: messageTransmitter,
+            laneAvailable: available
+        });
+    }
+
+    /// @notice Classify renewal evidence without verification or mint mutation.
+    function prepareRenewal(
+        bytes32 sourceMessageId,
+        bytes32 payoutIntent,
+        uint256 expiresAt,
+        bool verifiedAttestation,
+        bool recoverySupported
+    ) external view returns (RenewalPlan memory) {
+        AttestationCondition condition = expiresAt <= block.timestamp
+            ? AttestationCondition.Expired
+            : !recoverySupported
+                ? AttestationCondition.UnsupportedRecovery
+                : verifiedAttestation ? AttestationCondition.Verified : AttestationCondition.Unverified;
+        return RenewalPlan({
+            version: 1,
+            condition: condition,
+            sourceMessageId: sourceMessageId,
+            payoutIntent: payoutIntent,
+            expiresAt: expiresAt,
+            recoverySupported: recoverySupported && expiresAt > block.timestamp
+        });
+    }
+
+    function _providerPause(address provider) private view returns (ProviderReadStatus) {
+        (bool readable, bytes memory result) = provider.staticcall(abi.encodeWithSignature("paused()"));
+        if (!readable || result.length != 32) return ProviderReadStatus.Unknown;
+        return abi.decode(result, (bool)) ? ProviderReadStatus.Paused : ProviderReadStatus.Usable;
     }
 
     /// @dev Adapters hold nothing. Anything sent here goes straight back to the router, which
