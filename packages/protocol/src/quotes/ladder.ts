@@ -5,6 +5,7 @@ import {
   floorToRepresentable,
 } from "../amounts.js";
 import { tryParseStellarAddress, AddressKind } from "../addresses.js";
+import { ASSETS, assetByIdentity, sameAssetIdentity } from "../registry/assets.js";
 import type { RouteKind } from "../routes.js";
 import { ROUTE_KINDS, carriesPayload, isCanonical, waitsOnAttestation } from "../routes.js";
 import { MAX_QUOTE_AMOUNT, QuoteBlocker, bestQuote, planInverseQuote } from "../quotes.js";
@@ -47,6 +48,12 @@ export function quoteBatch(
 ): readonly BatchQuoteResult[] {
   const { strkey, destinationDecimals, snapshot, gasEstimates } = params;
 
+  // Resolve the requested asset identity once. An unknown identity or a rail the representation
+  // is not registered for fails shut, the same way an unregistered token does.
+  const requestedAsset = params.asset ?? null;
+  const resolvedAsset =
+    requestedAsset === null ? null : assetByIdentity(requestedAsset, params.registry ?? ASSETS);
+
   // Build combined gas projections from historical defaults and caller overrides
   const gasProjections: Record<RouteKind, bigint> = {
     ...RAIL_DESTINATION_GAS_ESTIMATES,
@@ -81,6 +88,14 @@ export function quoteBatch(
       staticBlocker = QuoteBlocker.TokenNotRegistered;
     } else if (!snapshot.tokenEnabled) {
       staticBlocker = QuoteBlocker.TokenDisabled;
+    } else if (
+      requestedAsset !== null &&
+      (!resolvedAsset?.routes.includes(route) ||
+        snapshot.tokenIdentity === undefined ||
+        !sameAssetIdentity(snapshot.tokenIdentity, requestedAsset) ||
+        snapshot.tokenDecimals !== resolvedAsset.decimals)
+    ) {
+      staticBlocker = QuoteBlocker.TokenNotRegistered;
     } else if (tokenDecimalsInvalid) {
       staticBlocker = QuoteBlocker.NotRepresentable;
     }
@@ -160,6 +175,7 @@ export function quoteBatch(
 
     return {
       amount: tierAmount,
+      asset: requestedAsset,
       available,
       winningRail: best !== null ? best.route : null,
       bestQuote: best,

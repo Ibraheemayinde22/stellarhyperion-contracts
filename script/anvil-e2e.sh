@@ -128,6 +128,37 @@ note "verifying the chain against the record"
 ( cd "$EVM_DIR" && forge script script/Verify.s.sol --rpc-url "$RPC" --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (Everything|BAD|WARN|Mismatches)' || die "Verify"
 
+note "checking deployed capabilities against the snapshot"
+RECORD="$EVM_DIR/deployments/evm-$CHAIN_ID-phase1.json"
+ROUTER=$(json "$RECORD" router)
+[ -n "$ROUTER" ] || die "no router in $RECORD"
+route_kind() {
+  case "$1" in
+    cctp) echo 0 ;;
+    axelar-its) echo 1 ;;
+    axelar-gmp) echo 2 ;;
+    allbridge) echo 3 ;;
+    *) die "$1 is not a protocol route slug" ;;
+  esac
+}
+while read -r directive slug; do
+  [ "$directive" = "route" ] || continue
+  adapter=$(cast call "$ROUTER" "adapter(uint8)(address)" "$(route_kind "$slug")" --rpc-url "$RPC")
+  case "$adapter" in
+    0x0000000000000000000000000000000000000000) die "the router advertises $slug but has no adapter" ;;
+  esac
+  echo "  $slug adapter $adapter"
+done < testdata/capabilities/evm-router.cap
+CCTP=$(json "$RECORD" cctpAdapter)
+CCTP_SLUG=$(awk '$1 == "route" { print $2; exit }' testdata/capabilities/evm-cctp-adapter.cap)
+[ "$(cast call "$CCTP" 'route()(uint8)' --rpc-url "$RPC")" = "$(route_kind "$CCTP_SLUG")" ] \
+  || die "the deployed CCTP adapter does not report its recorded route"
+AXELAR=$(json "$RECORD" axelarAdapter)
+AXELAR_SLUG=$(awk '$1 == "route" { print $2; exit }' testdata/capabilities/evm-axelar-adapter.cap)
+[ "$(cast call "$AXELAR" 'route()(uint8)' --rpc-url "$RPC")" = "$(route_kind "$AXELAR_SLUG")" ] \
+  || die "the deployed Axelar adapter does not report its recorded route"
+echo "  adapters report the routes the snapshots record"
+
 note "sending one real transfer"
 ( cd "$EVM_DIR" && forge script script/Smoke.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (quote available|sent|fee to treasury|What the rail|The hook)|^    (amount burned|destination domain|mint recipient|hook)' || die "Smoke"

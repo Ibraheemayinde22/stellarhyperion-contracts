@@ -81,6 +81,7 @@ error ZeroAddress();
 // sending change to the sender. A sender who cannot accept it is refused rather than tipped,
 // because silently keeping the difference is a second fee nobody agreed to.
 error RefundFailed();
+error NoRefundCredit();
 
 /// @notice The native provider payment exceeds the explicit sender cap.
 error ProviderBudgetExceeded();

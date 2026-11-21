@@ -129,6 +129,7 @@ export const EVM_ERROR_NAMES = [
   "ProtectedAsset",
   "ZeroAddress",
   "RefundFailed",
+  "NoRefundCredit",
   "ProviderBudgetExceeded",
   "AdapterMethodUnavailable",
   "RotationAlreadyPending",
@@ -158,17 +159,23 @@ export type ErrorFault =
   | "timing" // right request, wrong moment
   | "internal"; // should not happen, and if it does somebody wants to know
 
+/** Stable recovery guidance for callers; unknown future errors are never retryable by default. */
+export type RecoveryClass =
+  "transient" | "user_correctable" | "operator_action" | "unknown_outcome";
+
 export interface ErrorHelp {
   /** One sentence, written for the person who hit it rather than the person who wrote it. */
   readonly summary: string;
   readonly fault: ErrorFault;
   /** Whether the identical request could work later with nothing changed. */
   readonly retryable: boolean;
+  /** Conservative action class for UI and retry orchestration. */
+  readonly recovery: RecoveryClass;
   /** The Soroban tag, when Stellar has this error at all. */
   readonly sorobanCode: number | null;
 }
 
-const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
+const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery">> = {
   AlreadyInitialized: {
     summary: "This contract was already set up once, and setup only happens once.",
     fault: "config",
@@ -446,7 +453,12 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode">> = {
   },
   RefundFailed: {
     summary:
-      "Change was owed and the sender would not accept it. A contract that rejects a plain transfer cannot send through Hyperion.",
+      "The native refund or credit payment was rejected. Use the opt-in credit mode or an accepting recipient for credit withdrawal.",
+    fault: "input",
+    retryable: false,
+  },
+  NoRefundCredit: {
+    summary: "This account has no native refund credit to withdraw.",
     fault: "input",
     retryable: false,
   },
@@ -508,12 +520,23 @@ const SOROBAN_CODE_BY_NAME: ReadonlyMap<string, number> = new Map(
   SOROBAN_ERROR_NAMES.map((name, index) => [name, index + 1]),
 );
 
+function recoveryClass(help: Omit<ErrorHelp, "sorobanCode" | "recovery">): RecoveryClass {
+  if (help.fault === "internal") return "unknown_outcome";
+  if (help.fault === "input") return "user_correctable";
+  if (help.fault === "config") return "operator_action";
+  return help.retryable ? "transient" : "operator_action";
+}
+
 /** Every error name with its Soroban tag filled in where Stellar has one. */
 export const ERROR_HELP: Readonly<Record<HyperionErrorName, ErrorHelp>> = Object.freeze(
   Object.fromEntries(
     Object.entries(HELP).map(([name, help]) => [
       name,
-      { ...help, sorobanCode: SOROBAN_CODE_BY_NAME.get(name) ?? null },
+      {
+        ...help,
+        recovery: recoveryClass(help),
+        sorobanCode: SOROBAN_CODE_BY_NAME.get(name) ?? null,
+      },
     ]),
   ) as Record<HyperionErrorName, ErrorHelp>,
 );
@@ -544,6 +567,7 @@ export function describeError(name: string): ErrorHelp {
     summary: `The contract returned ${name}, which this version of the app does not have a translation for.`,
     fault: "internal",
     retryable: false,
+    recovery: "unknown_outcome",
     sorobanCode: null,
   };
 }
@@ -555,6 +579,7 @@ export function describeError(name: string): ErrorHelp {
  */
 export class HyperionProtocolError extends Error {
   readonly code: HyperionErrorName;
+  readonly recovery: RecoveryClass;
 
   constructor(code: HyperionErrorName, detail?: string) {
     const help = ERROR_HELP[code];
@@ -565,6 +590,7 @@ export class HyperionProtocolError extends Error {
     super(`${code}: ${body}`);
     this.name = "HyperionProtocolError";
     this.code = code;
+    this.recovery = help.recovery;
   }
 }
 

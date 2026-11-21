@@ -64,6 +64,106 @@ Existing `QuoteRequest` and quote results remain compatible; consumers opting in
 must provide the explicit reserve unit and migrate UI copy to distinguish a destination-token
 reserve from gas units.
 
+## Asset identity, and why a symbol is not one
+
+A ticker names an asset the way a surname names a person. `USDC` on Base can be Circle's native
+issuance or an Axelar Interchain Token Service representation of it, and those are two contracts
+with two addresses, sometimes two precisions and two different sets of rails. Picking the first
+entry that matches a symbol is how a transfer leaves as the wrong token.
+
+So the identity of an asset is everything that distinguishes it on its chain:
+
+- the chain key (`base`, `stellar-testnet`, …)
+- the representation, `native` or `its`
+- the on-chain handle: an EVM contract address, or a Stellar code and issuer
+
+The registry and the deployment loader both expose identity-first lookups:
+
+```ts
+import {
+  assetIdentity,
+  assetOn,
+  assetByIdentity,
+  resolveAsset,
+  resolveAssetForRoute,
+  resolveToken,
+  tokenByIdentity,
+  planQuoteForAsset,
+} from "@hyperion/protocol";
+
+resolveAsset({ chain: "base", symbol: "USDC" });
+// → { ok: false, reason: "ambiguous", candidates: [native, its] }
+
+resolveAsset({ chain: "base", symbol: "USDC", representation: "its" });
+// → { ok: true, asset: the ITS entry }
+
+resolveAssetForRoute("base", RouteKind.Cctp, "USDC");
+// → { ok: true, asset: native USDC }, because the ITS entry does not list CCTP
+```
+
+`resolveAsset`, `resolveAssetForRoute` and `resolveToken` either name exactly one entry or return a
+reason (`not-found` or `ambiguous`) and the candidates, so a picker can show the choice instead of
+hiding it. `assetByIdentity` and `tokenByIdentity` take an identity and answer a single asset or
+null; they never approximate. `planQuoteForAsset` and `planQuotesForAsset` price a named identity,
+and an identity the registry does not carry, or a rail the representation is not registered for,
+comes back `TokenNotRegistered` rather than priced against whatever token the snapshot held.
+
+Identity-scoped quotes require `snapshot.tokenIdentity` to name the token whose registration,
+decimals and flow limits were read, and require its decimals to match the resolved registry asset.
+An unqualified or mismatched snapshot is blocked. Legacy quotes without a requested identity
+remain available. Supply the token identity when migrating to the new quote APIs; registry
+membership alone cannot establish which token an arbitrary snapshot describes.
+
+### Legacy symbol lookup
+
+`assetOn(chain, symbol)` and `tokenFor(set, chain, symbol)` remain, because plenty of code only
+knows a ticker and a chain. Their ambiguity behaviour is now explicit and the same in both:
+
+- exactly one match returns it
+- no match returns null
+- **more than one match returns null**
+
+A duplicate symbol never silently resolves to the first entry. `pairExists` and `routesForPair`
+follow `assetOn`, so an ambiguous end makes them answer `false` and `[]` rather than guess.
+Migration is mechanical: if a call site can see two representations of one ticker, switch it to
+`resolveAsset({ chain, symbol, representation })`, `resolveAssetForRoute` or `assetByIdentity`.
+
+### Deployment records
+
+Deployment token entries may now carry two optional fields:
+
+```json
+"tokens": {
+  "USDC": { "address": "0x8335…2913", "representation": "native", … },
+  "USDC.its": {
+    "symbol": "USDC",
+    "representation": "its",
+    "address": "0x…",
+    "routes": ["axelar-its"],
+    …
+  }
+}
+```
+
+`symbol` defaults to the map key and `representation` defaults to `native`, so every file written
+before this change loads unchanged and keeps its current meaning. The map key is now free to be a
+stable identity key (`USDC.its`) rather than a ticker, which is what allows two representations of
+one asset in one record. Unknown representation values are refused by the loader with the field
+path, because a typo must not quietly promote an ITS representation to native.
+
+Compatibility is additive: no existing exported name changed its parameters or return type, and
+`quoteBatch` results grew one field (`asset`, null when no identity was supplied). The one
+behavioural change is the ambiguity rule above, which only differs for a registry or record that
+actually lists a duplicate symbol.
+
+### Current deployment scope
+
+The active deployment is **Stellar Testnet, outbound ITS/CCTP**. EVM and other rail development
+remains explicitly gated until it is independently validated; the EVM entries in `registry` are
+reference data for those rails and are not evidence that a route is live. Identity resolution
+does not change that gate: a resolved asset says what token a rail would use, not that the rail is
+enabled on chain.
+
 ## Three decisions worth knowing about
 
 **No runtime dependencies.** Everything works on `Uint8Array` and `bigint`. No `Buffer`, no viem at
@@ -92,7 +192,13 @@ and checks that:
   side has ever emitted, each one plausibly, which is the worst kind of wrong.
 - `EVM_ERROR_NAMES` matches the declaration order in `HyperionErrors.sol`.
 - Every error selector equals `keccak256` of its signature, so no selector is ever typed by hand.
+- `describeError` and `HyperionProtocolError` expose a stable `recovery` class: `transient`,
+  `user_correctable`, `operator_action`, or `unknown_outcome`. Unknown names and submission
+  uncertainty use `unknown_outcome` and are never automatic retry recommendations.
 - `RouteKind`, `AddressKind` and `QuoteBlocker` carry the same integers in all three languages.
+- `laneKey` includes network, both chain keys, exact source and destination asset identities, and
+  the canonical provider slug. `parseLaneKey` validates the network and provider before a caller
+  treats the lane as executable, so two USDC representations never share a key.
 - The CCTP offsets, the SEP-23 version bytes, the note layout and the fee and decimal ceilings
   match the constants the contracts actually use.
 - Regenerating `src/abi` produces byte for byte what is committed.

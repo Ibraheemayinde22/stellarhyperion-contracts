@@ -27,6 +27,9 @@ export * from "./bytes.js";
 // The rails, and what is true about each one.
 export * from "./routes.js";
 
+// Canonical route/lane identities, including exact source and destination asset representations.
+export * from "./lanes.js";
+
 // The error vocabulary shared by both chains, with a sentence of help per error.
 export * from "./errors.js";
 

@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {AccessControl} from "openzeppelin/access/AccessControl.sol";
 import {IERC20} from "openzeppelin/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "openzeppelin/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {Pausable} from "openzeppelin/utils/Pausable.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
@@ -22,6 +23,7 @@ import {
     InvalidWindow,
     LimitNotRaised,
     MuxedNotSupported,
+    NoRefundCredit,
     NotRailReceiver,
     ProviderBudgetExceeded,
     RailNotConfigured,
@@ -94,6 +96,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     uint256 public constant MAX_CLAIMS_PER_BATCH = 50;
     /// @notice Maximum inbound amount representable at the router/provider boundary.
     uint256 public constant MAX_SUPPORTED_INBOUND_AMOUNT = type(uint128).max;
+    // Opt-in refunds must leave enough gas to record credit when a receiver consumes its stipend.
+    uint256 private constant REFUND_CALL_GAS = 30_000;
     using SafeERC20 for IERC20;
     using FlowGuard for FlowWindow;
 
@@ -178,6 +182,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     mapping(uint64 actionId => QueuedAction queued) private _actions;
     mapping(uint64 actionId => bool cancelled) private _cancelledActions;
 
+    /// @notice Native refunds that could not be delivered in opt-in credit mode.
+    mapping(address beneficiary => uint256 amount) public refundCredits;
+
     /// @param admin Holds every privileged power, all of them behind the timelock.
     /// @notice Wires up the router with its roles, its treasury, and its fee and timing limits.
     /// @param admin Holds every role that can widen what the bridge will do.
@@ -237,6 +244,57 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         whenNotPaused
         returns (uint64 nonce)
     {
+        return _bridgeOut(request);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    /// @dev Try the same native refund as the legacy entrypoint, with bounded callback gas.
+    /// Only a failed refund becomes credit, always owned by the caller.
+    function bridgeOutWithRefundCredit(OutboundRequest calldata request)
+        external
+        payable
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint64 nonce)
+    {
+        return _bridgeOut(request);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function withdrawRefundCredit() external override nonReentrant {
+        _withdrawRefundCredit(payable(msg.sender));
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function withdrawRefundCredit(address payable recipient) external override nonReentrant {
+        _withdrawRefundCredit(recipient);
+    }
+
+    function _withdrawRefundCredit(address payable recipient) private {
+        if (recipient == address(0)) revert ZeroAddress();
+        uint256 amount = refundCredits[msg.sender];
+        if (amount == 0) revert NoRefundCredit();
+        refundCredits[msg.sender] = 0;
+        (bool sent,) = recipient.call{value: amount}("");
+        if (!sent) revert RefundFailed();
+        emit RefundCreditWithdrawn(msg.sender, recipient, amount);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    /// @dev Preview before signing so the permit is bound to the exact gross debit. The preview
+    /// is repeated by `_bridgeOut`, which then charges the flow window immediately before funds
+    /// move. If the permit is expired, replayed, or signed for another spender or amount, the
+    /// token reverts and the whole dispatch is rolled back.
+    function bridgeOutWithPermit(
+        OutboundRequest calldata request,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable override nonReentrant whenNotPaused returns (uint64 nonce) {
+        (OutboundPlan memory plan,) = _previewOutbound(request);
+        IERC20Permit(request.token).permit(msg.sender, address(this), plan.gross, deadline, v, r, s);
         return _bridgeOut(request);
     }
 
@@ -303,9 +361,19 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
         // Rails quote destination gas optimistically and refund the difference. Keeping it would
         // be a second, undeclared fee that moves with a gas market the sender never looked at.
-        uint256 leftover = address(this).balance - balanceBefore;
-        if (leftover != 0) {
-            (bool sent,) = payable(msg.sender).call{value: leftover}("");
+        _refundNative(address(this).balance - balanceBefore);
+    }
+
+    function _refundNative(uint256 amount) private {
+        if (amount == 0) return;
+        if (msg.sig == this.bridgeOutWithRefundCredit.selector) {
+            (bool sent,) = payable(msg.sender).call{value: amount, gas: REFUND_CALL_GAS}("");
+            if (!sent) {
+                refundCredits[msg.sender] += amount;
+                emit RefundCreditRecorded(msg.sender, amount);
+            }
+        } else {
+            (bool sent,) = payable(msg.sender).call{value: amount}("");
             if (!sent) revert RefundFailed();
         }
     }

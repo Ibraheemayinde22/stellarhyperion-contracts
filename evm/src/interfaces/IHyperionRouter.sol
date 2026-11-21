@@ -196,6 +196,35 @@ interface IHyperionRouter {
     /// @param flowWindow How long a flow window now runs, in seconds.
     event ConfigChanged(address treasury, uint16 feeBps, uint64 timelockDelay, uint64 flowWindow);
 
+    /// @notice A native refund could not be delivered and was recorded for the sender.
+    /// @param beneficiary The caller whose direct native refund failed.
+    /// @param amount The retained native remainder.
+    event RefundCreditRecorded(address indexed beneficiary, uint256 amount);
+
+    /// @notice The beneficiary withdrew their native refund credit to their selected recipient.
+    /// @param beneficiary The original credit owner authorizing withdrawal.
+    /// @param recipient The native-currency recipient selected by that owner.
+    /// @param amount The credit paid out.
+    event RefundCreditWithdrawn(address indexed beneficiary, address indexed recipient, uint256 amount);
+
+    /// @notice Dispatch while recording an undeliverable native refund for the sender.
+    /// @dev This is opt-in. `bridgeOut` retains its legacy reverting-refund behavior.
+    /// @param request The unchanged token, amount, rail, destination, and slippage intent.
+    /// @return nonce The outbound nonce.
+    function bridgeOutWithRefundCredit(OutboundRequest calldata request)
+        external
+        payable
+        returns (uint64 nonce);
+
+    /// @notice Withdraw the caller's previously recorded native refund credit.
+    function withdrawRefundCredit() external;
+
+    /// @notice Withdraw the caller's credit to a recipient they authorize.
+    /// @dev Enables recovery for beneficiaries whose own receive function always rejects native currency.
+    /// A failed delivery reverts and preserves the caller's credit.
+    /// @param recipient A nonzero native-currency recipient selected by the original beneficiary.
+    function withdrawRefundCredit(address payable recipient) external;
+
     /// @notice Send `request.amount` of a token to another chain.
     /// @dev Pull, then fee, then floor, then hand off. The fee comes off the raw amount and the
     /// remainder is floored to what the destination can actually represent, in that order, so the
@@ -208,6 +237,24 @@ interface IHyperionRouter {
     /// @return nonce This router's own counter for the transfer, which is also what appears in the
     /// note the far side reads.
     function bridgeOut(OutboundRequest calldata request) external payable returns (uint64 nonce);
+
+    /// @notice Approve exactly this transfer with EIP-2612, then dispatch it.
+    /// @dev The permit value is the router's calculated gross debit (net amount plus fee),
+    /// never an allowance chosen by the caller. Tokens without EIP-2612 keep using `bridgeOut`
+    /// after an explicit approval.
+    /// @param request The token, amount, rail, destination, and slippage floor.
+    /// @param deadline The permit deadline enforced by the token.
+    /// @param v The ECDSA recovery byte for the permit signature.
+    /// @param r The first ECDSA signature word.
+    /// @param s The second ECDSA signature word.
+    /// @return nonce The outbound nonce.
+    function bridgeOutWithPermit(
+        OutboundRequest calldata request,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable returns (uint64 nonce);
 
     /// @notice Pay out a transfer that arrived over a rail.
     /// @dev Callable only by the contract registered as that rail's receiver, and only after the
