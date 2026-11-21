@@ -10,6 +10,7 @@ import {
     Destination,
     Origin,
     OutboundRequest,
+    OutboundRecord,
     PendingClaim,
     QueuedAction,
     RouteKind,
@@ -258,6 +259,10 @@ interface IHyperionRouter {
         bytes32 r,
         bytes32 s
     ) external payable returns (uint64 nonce);
+
+    /// @notice Read the provenance committed for a successful outbound dispatch.
+    /// @dev A missing nonce returns a zero-valued record. Reverted dispatches never create one.
+    function outboundRecord(uint64 nonce) external view returns (OutboundRecord memory record);
 
     /// @notice Pay out a transfer that arrived over a rail.
     /// @dev Callable only by the contract registered as that rail's receiver, and only after the
