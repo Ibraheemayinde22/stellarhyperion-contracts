@@ -16,3 +16,33 @@ mod quotes;
 mod stateful_model;
 mod storage_maintenance;
 mod trust_surface;
+
+use hyperion_core::{FaultStage, ProviderFaultController};
+
+/// Fixture-only controller shared by stateful Soroban rehearsals.
+///
+/// Keeping the seed and attempt counters here makes a failing dispatch/inbound sequence
+/// replayable without introducing fault state into the deployed router.
+pub(crate) struct ProviderFaultFixture {
+    controller: ProviderFaultController,
+}
+
+impl ProviderFaultFixture {
+    pub(crate) fn from_seed(seed: u64) -> Self {
+        Self {
+            controller: ProviderFaultController::from_seed(seed),
+        }
+    }
+
+    pub(crate) fn before_dispatch(&mut self) -> bool {
+        self.controller.next(FaultStage::Dispatch)
+    }
+
+    pub(crate) fn before_inbound(&mut self) -> bool {
+        self.controller.next(FaultStage::Inbound)
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.controller.reset();
+    }
+}

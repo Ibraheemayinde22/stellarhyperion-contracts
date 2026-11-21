@@ -461,6 +461,26 @@ describe("the documented inbound trust surface", () => {
   });
 });
 
+describe("the deterministic provider fault fixtures", () => {
+  it("keeps dispatch and inbound stages explicit on both local harnesses", () => {
+    const rust = read(join(coreSrc, "fault.rs"));
+    const routerTests = read(join(sorobanRouterSrc, "test", "mod.rs"));
+    const solidity = read(join(evmTest, "Fixture.sol"));
+    const rehearsal = read(resolve(packageRoot, "..", "..", "script", "anvil-e2e.sh"));
+
+    expect(rust).toMatch(/pub enum FaultStage\s*\{\s*Dispatch\s*=\s*0,\s*Inbound\s*=\s*1/s);
+    expect(rust).toMatch(/pub const fn from_seed\(seed: u64\)/);
+    expect(rust).toMatch(/pub fn next\(&mut self, stage: FaultStage\)/);
+    expect(routerTests).toMatch(/before_dispatch\(&mut self\)/);
+    expect(routerTests).toMatch(/before_inbound\(&mut self\)/);
+    expect(solidity).toMatch(/PROVIDER_STAGE_DISPATCH\s*=\s*0/);
+    expect(solidity).toMatch(/PROVIDER_STAGE_INBOUND\s*=\s*1/);
+    expect(solidity).toMatch(/function _nextProviderFault\(uint8 stage\)/);
+    expect(rehearsal).toMatch(/HYPERION_FAULT_SEED=\"\$\{HYPERION_FAULT_SEED:-156\}\"/);
+    expect(rehearsal).toMatch(/deterministic provider fault schedule/);
+  });
+});
+
 describe("the stateful router reference model parity", () => {
   it("shares operation words across chains while conserving balances and fixed-recipient liabilities", () => {
     const root = resolve(evmRoot, "..");
