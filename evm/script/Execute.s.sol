@@ -5,7 +5,9 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console} from "forge-std/console.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
-import {QueuedAction, RouteKind} from "../src/HyperionTypes.sol";
+import {QueuedAction, RouteKind, TokenConfig} from "../src/HyperionTypes.sol";
+import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
+import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
 
 import {DeployConfig} from "./DeployConfig.sol";
 
@@ -48,6 +50,7 @@ contract Execute is DeployConfig {
             _reportPending(router, ids, whats);
             return;
         }
+        _preflightProviders(router);
 
         uint256 executed;
         uint256 alreadyDone;
@@ -122,6 +125,32 @@ contract Execute is DeployConfig {
                 console.log("READY", id, what);
                 console.log("  expires at        ", action.expiresAt);
             }
+        }
+    }
+
+    /// @dev Provider links can change between phase one and phase two. Check them immediately
+    /// before the first broadcast so a stale peer or precision assumption cannot activate a
+    /// half-routable deployment.
+    function _preflightProviders(HyperionRouter router) private view {
+        TokenParams memory token = tokenParams();
+        TokenConfig memory config = router.tokenConfig(token.token);
+        require(config.registered && config.enabled, "token is not active");
+        require(config.decimals == token.decimals, "token precision changed");
+
+        address cctpAddress = router.adapter(RouteKind.Cctp);
+        require(cctpAddress != address(0), "CCTP adapter is not linked");
+        require(router.railReceiver(RouteKind.Cctp) == cctpAddress, "CCTP receiver is stale");
+        CctpAdapter cctp = CctpAdapter(payable(cctpAddress));
+        require(cctp.supportsChain(stellarChain()), "CCTP destination lane is unavailable");
+        require(cctp.USDC() == token.token, "CCTP token mapping changed");
+
+        if (wiresAxelar()) {
+            address axelarAddress = router.adapter(RouteKind.AxelarIts);
+            require(axelarAddress != address(0), "Axelar adapter is not linked");
+            require(router.railReceiver(RouteKind.AxelarIts) == axelarAddress, "Axelar receiver is stale");
+            AxelarItsAdapter axelar = AxelarItsAdapter(payable(axelarAddress));
+            require(axelar.supportsChain(stellarChain()), "Axelar destination peer is unavailable");
+            require(axelar.tokenIdOf(token.token) != bytes32(0), "Axelar token mapping is missing");
         }
     }
 
