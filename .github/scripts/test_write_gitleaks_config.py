@@ -27,7 +27,7 @@ class GitleaksConfigurationTests(unittest.TestCase):
         rule = value["rules"][0]
         self.assertEqual(set(rule), {"id", "allowlists"})
         self.assertEqual(rule["id"], "generic-api-key")
-        self.assertEqual(len(rule["allowlists"]), 2)
+        self.assertEqual(len(rule["allowlists"]), 3)
         for allowlist in rule["allowlists"]:
             self.assertEqual(allowlist["condition"], "AND")
             self.assertEqual(allowlist["regexTarget"], "secret")
@@ -95,6 +95,35 @@ class GitleaksConfigurationTests(unittest.TestCase):
                 self.assertEqual(self.scan({
                     config.FIXTURE_PATH: f'const strkey = "{public}";\n',
                 }), [])
+
+    def test_vendor_hash_exceptions_match_verified_source_bytes(self):
+        root = Path(__file__).resolve().parents[2]
+        manifest = json.loads((root / config.VENDOR_PROVENANCE_PATH).read_text())
+        actual = {
+            hashlib.sha256((root / "soroban/vendor/soroban-env-host" / path).read_bytes()).hexdigest()
+            for path, digest in manifest["file_sha256"].items()
+            if digest in config.PINNED_VENDOR_SOURCE_HASHES
+        }
+        self.assertEqual(actual, set(config.PINNED_VENDOR_SOURCE_HASHES))
+
+    def test_only_exact_vendor_hashes_in_the_exact_manifest_are_recognized(self):
+        content = "".join(f'"source_key": "{digest}",\n' for digest in config.PINNED_VENDOR_SOURCE_HASHES)
+        self.assertEqual(self.scan({config.VENDOR_PROVENANCE_PATH: content}), [])
+        for path in ("unreviewed.json", config.VENDOR_PROVENANCE_PATH + ".bak"):
+            with self.subTest(path=path):
+                self.assertEqual(len(self.scan({path: content})), len(config.PINNED_VENDOR_SOURCE_HASHES))
+
+    def test_secrets_and_other_hashes_beside_vendor_digests_still_fail(self):
+        seed = strkey(144, bytes(range(1, 33)))
+        generic = hashlib.sha256(b"synthetic scanner regression token").hexdigest()
+        content = (
+            f'"source_key": "{config.PINNED_VENDOR_SOURCE_HASHES[0]}",\n'
+            f'"api_token": "{generic}",\n'
+            f'"private_key": "{seed}"\n'
+        )
+        findings = self.scan({config.VENDOR_PROVENANCE_PATH: content})
+        self.assertEqual(len(findings), 2)
+        self.assertEqual({finding["StartLine"] for finding in findings}, {2, 3})
 
     def test_real_signing_seed_and_generic_token_remain_detected_in_fixture_path(self):
         seed = strkey(144, bytes(range(1, 33)))
