@@ -319,9 +319,9 @@ export interface MaximumSendResult {
 /**
  * Find the largest executable request with integer-only arithmetic.
  *
- * The search is monotonic: once the route exceeds its balance or virtual flow allowance, larger
- * requests cannot become executable. Dust is returned explicitly rather than silently added to a
- * request that would round differently on the destination.
+ * The search bounds the monotonic rounded net, then checks the positive-amount threshold.
+ * Tiny requests can round to zero even when larger requests are executable. Dust is returned
+ * explicitly rather than silently added to a request that would round differently at the destination.
  */
 export function maximumSend(request: MaximumSendRequest): MaximumSendResult {
   validatePlanningSnapshot(request.snapshot);
