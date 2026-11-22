@@ -39,6 +39,7 @@ import {
 import {
     ActionAuditStatus,
     ActionKind,
+    ActionStatusView,
     AddressKind,
     AdminAction,
     CancelReason,
@@ -398,7 +399,20 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         address feeToken,
         uint256 maxRelayerCharge
     ) external view override returns (bytes32) {
-        return OUTBOUND_PROVENANCE.hashTransferIntentWithRelayerFee(intent, feeToken, maxRelayerCharge);
+        address target = address(OUTBOUND_PROVENANCE);
+        // Forward this external method's identical selector and schema, including revert bytes.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            pop(intent)
+            pop(feeToken)
+            pop(maxRelayerCharge)
+            let result := mload(0x40)
+            calldatacopy(result, 0, calldatasize())
+            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
+            returndatacopy(result, 0, returndatasize())
+            if iszero(ok) { revert(result, returndatasize()) }
+            return(result, returndatasize())
+        }
     }
 
     function _bridgeOut(OutboundRequest memory request, address sender) private returns (uint64 nonce) {
@@ -748,18 +762,22 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         Destination calldata destination,
         uint8 destinationDecimals
     ) external view override returns (RouteQuoteV2 memory v) {
-        (bool ok, bytes memory result) = address(OUTBOUND_PROVENANCE)
-            .staticcall(
-                abi.encodeCall(
-                    OutboundProvenance.quoteV2, (route, token, amount, destination, destinationDecimals)
-                )
-            );
-        // Forward the immutable child's exact quote schema without a second struct codec.
+        address target = address(OUTBOUND_PROVENANCE);
+        // Forward this external method's identical selector and schema, including revert bytes.
         // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(v)
-            if iszero(ok) { revert(add(result, 32), mload(result)) }
-            return(add(result, 32), mload(result))
+            pop(route)
+            pop(token)
+            pop(amount)
+            pop(destination)
+            pop(destinationDecimals)
+            let result := mload(0x40)
+            calldatacopy(result, 0, calldatasize())
+            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
+            returndatacopy(result, 0, returndatasize())
+            if iszero(ok) { revert(result, returndatasize()) }
+            return(result, returndatasize())
         }
     }
 
@@ -770,16 +788,21 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         Destination calldata destination,
         uint8 destinationDecimals
     ) external view override returns (RouteQuote[] memory quotes) {
-        (bool ok, bytes memory result) = address(OUTBOUND_PROVENANCE)
-            .staticcall(
-                abi.encodeCall(OutboundProvenance.quoteAll, (token, amount, destination, destinationDecimals))
-            );
-        // The immutable child returns the exact legacy array ABI, including any revert bytes.
+        address target = address(OUTBOUND_PROVENANCE);
+        // Forward this external method's identical selector and schema, including revert bytes.
         // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(quotes)
-            if iszero(ok) { revert(add(result, 32), mload(result)) }
-            return(add(result, 32), mload(result))
+            pop(token)
+            pop(amount)
+            pop(destination)
+            pop(destinationDecimals)
+            let result := mload(0x40)
+            calldatacopy(result, 0, calldatasize())
+            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
+            returndatacopy(result, 0, returndatasize())
+            if iszero(ok) { revert(result, returndatasize()) }
+            return(result, returndatasize())
         }
     }
 
@@ -792,17 +815,21 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         view
         returns (AddressKind kind, bytes32 key, uint64 muxedId)
     {
-        (bool ok, bytes memory result) = address(OUTBOUND_PROVENANCE)
-            .staticcall(abi.encodeCall(OutboundProvenance.checkDestination, (strkey)));
-        // Forward the immutable pure parser's exact fixed tuple and errors without another codec.
-        // This method is external, so RETURN cannot terminate an internal Solidity caller.
+        address target = address(OUTBOUND_PROVENANCE);
+        // Forward this external method's identical selector and schema, including revert bytes.
         // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(kind)
             pop(key)
             pop(muxedId)
-            if iszero(ok) { revert(add(result, 32), mload(result)) }
-            return(add(result, 32), mload(result))
+            pop(strkey.offset)
+            pop(strkey.length)
+            let result := mload(0x40)
+            calldatacopy(result, 0, calldatasize())
+            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
+            returndatacopy(result, 0, returndatasize())
+            if iszero(ok) { revert(result, returndatasize()) }
+            return(result, returndatasize())
         }
     }
 
@@ -973,6 +1000,22 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     }
 
     /// @inheritdoc IHyperionRouter
+    function actionStatus(uint64 id) external view override returns (ActionStatusView memory) {
+        address target = address(OUTBOUND_PROVENANCE);
+        // Forward this external method's identical selector and schema, including revert bytes.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            pop(id)
+            let result := mload(0x40)
+            calldatacopy(result, 0, calldatasize())
+            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
+            returndatacopy(result, 0, returndatasize())
+            if iszero(ok) { revert(result, returndatasize()) }
+            return(result, returndatasize())
+        }
+    }
+
+    /// @inheritdoc IHyperionRouter
     function pendingClaim(uint64 id) external view override returns (PendingClaim memory) {
         return _claims[id];
     }
@@ -989,15 +1032,18 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     /// @inheritdoc IHyperionRouter
     function outboundRecord(uint64 nonce) external view override returns (OutboundRecord memory record) {
-        (bool ok, bytes memory result) = address(OUTBOUND_PROVENANCE)
-            .staticcall(abi.encodeCall(OutboundProvenance.outboundRecord, (nonce)));
-        // The immutable router-owned child returns this exact public ABI. Forwarding its bytes
-        // avoids a second dynamic-string decode and encode while preserving revert data.
+        address target = address(OUTBOUND_PROVENANCE);
+        // Forward this external method's identical selector and schema, including revert bytes.
         // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(record)
-            if iszero(ok) { revert(add(result, 32), mload(result)) }
-            return(add(result, 32), mload(result))
+            pop(nonce)
+            let result := mload(0x40)
+            calldatacopy(result, 0, calldatasize())
+            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
+            returndatacopy(result, 0, returndatasize())
+            if iszero(ok) { revert(result, returndatasize()) }
+            return(result, returndatasize())
         }
     }
 

@@ -73,7 +73,8 @@ pub use maintenance::{
     MAX_MAINTENANCE_BATCH,
 };
 pub use model::{
-    ChainClock, ModelError, ModelRouter, Operation, Rail, Trace, TraceStep, MODEL_MAX_CLAIMS,
+    timelock_boundary_cases, timelock_boundary_cases_for, ChainClock, ModelError, ModelRouter,
+    Operation, Rail, TimelockBoundaryCase, Trace, TraceStep, MODEL_MAX_CLAIMS,
 };
 pub use route::RouteKind;
 pub use strkey::StrkeyDestination;

@@ -16,6 +16,11 @@
 #
 # Usage: script/stellar/verify.sh
 source "$(dirname "$0")/lib.sh"
+if is_dry_run; then
+  command -v node >/dev/null || die "node is not on PATH"
+  node "$CONTRACTS_ROOT/script/stellar/unsigned-plan.mjs" verify || die "unsigned verify plan refused"
+  exit 0
+fi
 require_tools
 
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"

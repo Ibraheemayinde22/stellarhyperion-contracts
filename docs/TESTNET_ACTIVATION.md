@@ -77,6 +77,72 @@ Actionable warnings for consumers:
 
 Compatibility and migration: existing consumers that read only the active record are unaffected. Consumers that enumerate archive files must parse `status` and `successor` before use. Tools that previously accepted the archived router without checking status must be updated to refuse it; this is a breaking change for those tools and is listed here so it can be planned.
 
+## Dry-run deployment and activation plans
+
+Deployment and activation scripts expose `HYPERION_DRY_RUN=1` for a durable, unsigned plan:
+
+```bash
+HYPERION_DRY_RUN=1 script/stellar/deploy.sh
+HYPERION_DRY_RUN=1 script/stellar/link.sh
+HYPERION_DRY_RUN=1 script/stellar/execute.sh
+HYPERION_DRY_RUN=1 script/stellar/verify.sh
+HYPERION_DRY_RUN=1 HYPERION_RECORD=/tmp/phase1.json \
+  node script/stellar/write-record.mjs /tmp/phase1.plan.json
+```
+
+Dry-run mode validates required WASM files or deployment records, refuses unknown code identities,
+and emits ordered operations with `signed: false` and `submitted: false`. It never calls
+`stellar keys address`, reads secret material, signs, uploads, deploys, queues or executes.
+Execution plans preserve provider linking before router execution and mark every action as requiring
+the existing timelock maturity. The EVM verification script is development-only and can also use
+`HYPERION_DRY_RUN=1`; no live EVM activation is enabled by this plan.
+
+Supply reviewed lowercase SHA256 values in `ROUTER_HASH`, `CCTP_HASH` and `AXELAR_HASH`,
+or in the selected record's `wasmHashes`. `HYPERION_WASM_DIR` selects the actual artifact
+directory; the default is `soroban/target/wasm32v1-none/release`. Every required artifact must
+be a valid WASM within the unchanged 65,536-byte limit with the expected exported interface
+and contract specification. Deployment plans check all three artifacts. Record plans check
+the deployed router and adapters. The selected record must name exactly one matching network.
+
+`HYPERION_DEPLOYER`, `HYPERION_ADMIN`, `HYPERION_GUARDIAN` and `HYPERION_TREASURY` are
+public account addresses. Planning never resolves a wallet alias. Provider addresses require
+reviewed code identities: `HYPERION_CODE_IDENTITIES` names a public JSON file mapping contract
+IDs to SHA256 hashes. Records can retain these as `providerCodeHashes` and retain addresses
+as `providers.cctpTokenMessenger`, `providers.cctpMessageTransmitter` and `providers.axelarIts`.
+These are reviewed operator inputs, not fresh proof of live code. A separate live verification
+must compare current code and provider links before activation. Optional providers remain gated
+when absent from a deployment plan; records with deployed adapters require their identities.
+
+Link plans require `CCTP_PEER_DOMAIN`, `CCTP_DESTINATION_CALLER`, `CCTP_PEER_BURN_TOKEN`,
+`AXELAR_PEER_CHAIN`, `AXELAR_PEER_ADDRESS` and `AXELAR_TOKEN_ID` for the selected rails.
+Deploy output references such as `@router`, `@adapter-cctp`, and `@action.id[sequence]`
+represent outputs captured by earlier operations. Provider linking precedes route activation;
+admin handover executes last. Every execution remains subject to the existing timelock.
+
+Execute plans require full public queued action snapshots, either `queuedActionDetails` in the
+record or a JSON file selected by `HYPERION_QUEUED_ACTIONS`. Each entry contains exact `id`,
+`queued_at`, `eta`, `expires_at` and `action`, in the order of `queuedActionIds`. Use canonical
+decimal strings for u64 values above JavaScript's safe integer range. Missing, terminal,
+duplicate or inconsistent proposals block the plan. This phase-two planner accepts activation
+actions only; other governance actions use their dedicated reviewed tooling. Older records
+without snapshots require the public snapshot file; this does not change any on-chain format.
+
+Record writer planning additionally requires `HYPERION_SOURCE_COMMIT` (a reviewed full source
+revision) and an explicit public deployment ledger (`HYPERION_ROUTER_LEDGER`, `ROUTER_LEDGER`
+or `STELLAR_START_LEDGER`). It does not query Git or RPC and writes no deployment record.
+`QUEUE_DETAILS_JSON` can retain full public queue snapshots when writing a record.
+Historical archive records remain writable evidence; they remain ineligible for activation.
+
+EVM verification planning uses Foundry's boolean `HYPERION_DRY_RUN=true`. It validates the local
+compiler profile, selected record and public configuration before emitting its read plan.
+`HYPERION_ROUTER_ARTIFACT_HASH`, `HYPERION_CCTP_ARTIFACT_HASH` and optional
+`HYPERION_AXELAR_ARTIFACT_HASH` are reviewed Keccak256 hashes of the compiled creation bytecode.
+Provider identities use `CCTP_TOKEN_MESSENGER_CODE_HASH`, `CCTP_MESSAGE_TRANSMITTER_CODE_HASH`,
+and optional `AXELAR_ITS_CODE_HASH` and `AXELAR_GAS_SERVICE_CODE_HASH`. The plan reads no live
+contract or RPC and does not certify a deployment. EVM grants remain additive until an actor
+explicitly renounces its role; Soroban administration replaces the configured actor. Generated
+authority tests preserve these chain-specific policies without changing production permissions.
+
 ## Verified acceptance transfer
 
 A real CLI wallet signature through the frontend application helpers sent 0.1 USDC. Stellar confirmed source transaction `b95ca748421ea4774dea6a08edebc3ad3a301244034cd10f1209f3cea234862d`. The protocol fee was 0.0003 USDC; 0.0997 USDC arrived on Sepolia in transaction `0x1fdb81fcdec18071adbdf47e359f0b9e4adc6be685c1e3bfcfb39689485037b6`. Independent RPC reads confirmed the recipient token balance and successful receipt; the backend verified matching ITS/payment events and persisted delivered status. The live acceptance test passed.

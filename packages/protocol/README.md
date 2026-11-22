@@ -248,6 +248,35 @@ Compatibility is additive: no existing exported name changed its parameters or r
 behavioural change is the ambiguity rule above, which only differs for a registry or record that
 actually lists a duplicate symbol.
 
+### Route activation capabilities
+
+Registry membership and a deployment adapter/token route describe configuration, but neither one
+alone means that a route is activated. Deployment sets can carry a separate
+`routeCapabilities` record set, with schema revision `1`:
+
+```json
+{
+  "revision": 1,
+  "records": [
+    {
+      "revision": 1,
+      "chain": "stellar-testnet",
+      "symbol": "USDC",
+      "route": "cctp",
+      "status": "active",
+      "paidDispatch": true,
+      "recipientKinds": ["account", "contract", "muxed-account"]
+    }
+  ]
+}
+```
+
+`paidDispatch` and `recipientKinds` are explicit and require the record to be active before
+dispatch planning may use them. Unknown capability revisions, unknown rails or recipient kinds,
+duplicate identities and capabilities naming an unknown token fail the loader. The active
+deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail entries stay gated unless
+a reviewed, validated capability record names them active.
+
 ### Current deployment scope
 
 The active deployment is **Stellar Testnet, outbound ITS/CCTP**. EVM and other rail development

@@ -80,6 +80,106 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "actionStatus",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ActionStatusView",
+        "components": [
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum ActionStatus"
+          },
+          {
+            "name": "queued",
+            "type": "tuple",
+            "internalType": "struct QueuedAction",
+            "components": [
+              {
+                "name": "id",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "action",
+                "type": "tuple",
+                "internalType": "struct AdminAction",
+                "components": [
+                  {
+                    "name": "kind",
+                    "type": "uint8",
+                    "internalType": "enum ActionKind"
+                  },
+                  {
+                    "name": "route",
+                    "type": "uint8",
+                    "internalType": "enum RouteKind"
+                  },
+                  {
+                    "name": "subject",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "decimals",
+                    "type": "uint8",
+                    "internalType": "uint8"
+                  }
+                ]
+              },
+              {
+                "name": "queuedAt",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "eta",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "expiresAt",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "executed",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          },
+          {
+            "name": "cancelled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "payloadIdentity",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "adapter",
     "inputs": [
       {
