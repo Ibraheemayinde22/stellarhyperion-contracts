@@ -27,6 +27,7 @@ against itself.
 | `flow`        | Sliding flow windows, the same arithmetic both routers run                             |
 | `cctp`        | Reading CCTP V2 messages, which is all this side ever does with them                   |
 | `events`      | Typed, versioned inspection of one raw router event, Soroban XDR or EVM log            |
+| `wire-compat` | Wire layouts and error tables as data, and a breaking/compatible report between sets   |
 | `chains`      | Chains, rpc endpoints, explorers, CCTP domains, finality                               |
 | `quotes`      | Pricing a rail locally, so an app can render four of them while somebody types         |
 | `deployments` | Deployment records, and a loader that checks them instead of casting them              |
@@ -398,3 +399,78 @@ Supporting it means a new inspector version. Inspection reads history and does n
 route. The active deployment is still Stellar Testnet outbound ITS/CCTP. EVM and other rails remain
 gated until they are independently validated, and decoding an EVM log is not evidence that an EVM
 route is live.
+
+## Wire-format compatibility report
+
+`WIRE_SCHEMAS` registers every wire layout and error table this package implements, as plain data:
+
+| Schema              | What it is                                       |
+| ------------------- | ------------------------------------------------ |
+| `note.outbound@1`   | Stellar to EVM note                              |
+| `note.inbound@1`    | EVM to Stellar note                              |
+| `cctp.hook@1`       | CCTP hook data with its address-kind tag         |
+| `cctp.header@1`     | CCTP V2 message header                           |
+| `cctp.burn@1`       | CCTP V2 burn body                                |
+| `axelar.metadata@1` | Axelar ITS metadata envelope                     |
+| `address.strkey@1`  | SEP-23 version bytes, key, muxed id and checksum |
+| `errors.soroban@1`  | Soroban error numbers                            |
+| `errors.evm@1`      | EVM error selectors                              |
+
+`compareWireSchemaSets(baseline, candidate)` returns a report whose `result` is `identical`,
+`compatible` or `breaking`. Each decision in it names its rule, the `id@version` schema, the field
+or error, a path to the exact property (for example `note.outbound@1/fields/nonce/offset`), and
+the baseline and candidate values as canonical JSON. `formatCompatibilityReport` renders one line
+per decision for a PR description or a CI log.
+
+```ts
+const baseline = parseWireSchemaSet(
+  JSON.parse(readFileSync("testdata/wire-schemas-v1.json", "utf8")),
+);
+const report = compareWireSchemaSets(baseline, WIRE_SCHEMAS);
+if (report.result === "breaking") throw new Error(formatCompatibilityReport(report));
+```
+
+Within one schema version, any change a decoder can observe is **breaking**:
+
+- a changed field offset, length, encoding, constant (such as a version byte) or presence condition
+- a changed message size
+- an added or removed field
+- an added, removed or renumbered tag value, which includes address-kind tags and strkey version bytes
+- a removed schema
+- a Soroban error inserted, renumbered, removed or reassigned
+- an EVM selector or signature that changed or was removed
+
+The **compatible** changes are:
+
+- a new schema, or a new version of an existing one alongside the old (the note required version
+  is a floor, so adding a version never downgrades a peer)
+- a field or tag relabelled with identical bytes
+- an appended Soroban error number
+- a new EVM selector
+
+`parseWireSchemaSet` validates external schema-set JSON strictly. It throws a
+`WireSchemaFormatError` with the failing path for:
+
+- unknown properties
+- duplicate schemas, fields, labels or codes
+- references to later or non-integer fields
+- overlapping fixed fields
+- offsets and lengths outside `0..65535`
+- constants and tag values wider than their field
+- Soroban codes outside `1..2^32-1`
+- malformed selectors
+
+`readWireMessage(schema, bytes)` decodes bytes against one layout. Every `uint` comes back as a
+`bigint` at full width (up to `uint256`), and a refusal names the failing field. The tests use it
+to check that the registry matches the real codecs and returns the verdicts the shared
+version-one corpus records. The parity suite pins the registered CCTP and note offsets to the Rust
+constants.
+
+**Compatibility and migration.** This adds new exports only. No note, message, address or error
+encoding changes, so no contract or stored data needs migrating. `testdata/wire-schemas-v1.json` is
+the frozen version-one baseline, and it must keep comparing as `identical`. After a reviewed
+compatible change such as an appended error, regenerate it with
+`HYPERION_WRITE_WIRE_BASELINE=1 npx vitest run test/wire-compat.test.ts` and commit the result
+alongside the change. A breaking change needs a new schema version and a coordinated rollout
+across the contracts and the SDK. The active deployment is still Stellar Testnet outbound ITS/CCTP,
+and EVM and other rail schemas stay reference data until those rails are independently validated.

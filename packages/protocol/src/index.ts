@@ -51,6 +51,9 @@ export * from "./cctp.js";
 // Turning one raw router event (Soroban RPC XDR or an EVM log) into a typed, versioned record.
 export * from "./events.js";
 
+// The wire layouts and error tables as data, and a breaking-versus-compatible report between two sets.
+export * from "./wire-compat.js";
+
 // Chains, their rpc endpoints, their explorers and their CCTP domains.
 export * from "./chains.js";
 
