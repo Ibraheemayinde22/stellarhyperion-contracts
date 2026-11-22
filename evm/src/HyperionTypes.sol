@@ -198,22 +198,17 @@ struct QueuedAction {
     bool executed;
 }
 
-/// @dev Typed lifecycle view for an administrative timelock action.
-enum ActionStatus {
-    NotFound,
-    Pending,
-    Executable,
-    Expired,
-    Cancelled,
-    Executed
-}
-
-/// @dev Stable status read for migrations and indexers.
-struct ActionStatusView {
-    ActionStatus status;
-    QueuedAction queued;
+/// @dev A timelocked proposal to return only accidental, unencumbered ERC20 custody.
+struct QueuedTokenRecovery {
+    uint64 id;
+    address token;
+    address recipient;
+    uint256 amount;
+    uint64 queuedAt;
+    uint64 eta;
+    uint64 expiresAt;
+    bool executed;
     bool cancelled;
-    bytes32 payloadIdentity;
 }
 
 /// @dev What a route would do with a given amount right now, without doing it.
