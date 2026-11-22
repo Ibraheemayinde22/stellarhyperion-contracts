@@ -346,7 +346,7 @@ impl World {
             burn_token: ETH_USDC,
             mint_recipient: self.adapter_key(),
             amount,
-            message_sender: [0x5Eu8; 32],
+            message_sender: [0xE1u8; 32],
             hook,
         }
     }

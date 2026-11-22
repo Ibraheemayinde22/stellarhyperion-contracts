@@ -18,9 +18,10 @@ import {
     Unauthorized,
     UnexpectedRailContract,
     UnknownChain,
+    WrongDomain,
     ZeroAddress
 } from "../../src/HyperionErrors.sol";
-import {AddressKind, Destination, RouteKind} from "../../src/HyperionTypes.sol";
+import {AddressKind, Destination, PendingClaim, RouteKind} from "../../src/HyperionTypes.sol";
 import {CctpAdapter} from "../../src/adapters/CctpAdapter.sol";
 import {Fixture} from "../Fixture.sol";
 import {DeafRouter} from "../mocks/HostileCallers.sol";
@@ -89,6 +90,7 @@ contract CctpAdapterTest is Fixture {
     event PeerRotationApplied(string indexed chain, bytes32 oldPeer, bytes32 newPeer, uint64 overlapDeadline);
     event PeerRotationCancelled(string indexed chain, bytes32 cancelledPeer);
     event FinalityPolicyUsed(string chain, uint32 indexed domain, uint32 minFinalityThreshold);
+    event InboundLaneEnabled(uint32 indexed domain, bool enabled);
 
     function setUp() public override {
         super.setUp();
@@ -102,6 +104,11 @@ contract CctpAdapterTest is Fixture {
         vm.prank(admin);
         adapter.setRemoteSender(STELLAR_DOMAIN, MINT_RECIPIENT);
         _setRailReceiver(RouteKind.Cctp, address(adapter));
+    }
+
+    function _enableInbound() internal {
+        vm.prank(admin);
+        adapter.setInboundEnabled(STELLAR_DOMAIN, true);
     }
 
     // -------------------------------------------------------------------------------------
@@ -171,6 +178,7 @@ contract CctpAdapterTest is Fixture {
     }
 
     function test_receive_delivers_attested_usdc_and_records_fixed_recipient() public {
+        _enableInbound();
         bytes32 nonce = keccak256("cctp inbound 1");
         bytes memory message = _validMessage(nonce, MINT_RECIPIENT);
         uint64 claimId = adapter.receiveMessage(message, hex"51");
@@ -181,6 +189,7 @@ contract CctpAdapterTest is Fixture {
     }
 
     function test_receive_duplicate_message_is_refused() public {
+        _enableInbound();
         bytes32 nonce = keccak256("cctp duplicate");
         bytes memory message = _validMessage(nonce, MINT_RECIPIENT);
         adapter.receiveMessage(message, hex"51");
@@ -190,12 +199,14 @@ contract CctpAdapterTest is Fixture {
     }
 
     function test_receive_forged_remote_sender_is_refused() public {
+        _enableInbound();
         bytes memory message = _validMessage(keccak256("cctp forged"), bytes32(uint256(0xdead)));
         vm.expectRevert(UnexpectedRailContract.selector);
         adapter.receiveMessage(message, hex"51");
     }
 
     function test_receive_failed_payout_creates_fixed_recipient_claim() public {
+        _enableInbound();
         usdc.setBlocked(bob, true);
         bytes32 nonce = keccak256("cctp recipient failure");
 
@@ -209,11 +220,94 @@ contract CctpAdapterTest is Fixture {
     }
 
     function test_receive_mismatched_burn_token_is_refused() public {
+        _enableInbound();
         bytes32 nonce = keccak256("cctp mismatched token");
         bytes32 wrongToken = keccak256("not USDC");
         bytes memory message = _message(bob, 4242, nonce, MINT_RECIPIENT, wrongToken);
         vm.expectRevert(TokenNotMapped.selector);
         adapter.receiveMessage(message, hex"51");
+    }
+
+    function test_inbound_requires_an_explicit_validated_lane_enablement() public {
+        bytes memory message = _validMessage(keccak256("cctp inbound gated"), MINT_RECIPIENT);
+        assertFalse(adapter.inboundEnabled(STELLAR_DOMAIN));
+
+        vm.expectRevert(RailNotConfigured.selector);
+        adapter.receiveMessage(message, hex"51");
+
+        assertEq(transmitter.receiveCount(), 0);
+        assertEq(usdc.balanceOf(bob), 0);
+        assertEq(router.claimCount(), 0);
+    }
+
+    function test_inbound_enablement_requires_a_configured_remote_sender() public {
+        CctpAdapter fresh =
+            new CctpAdapter(address(router), address(messenger), address(transmitter), address(usdc), admin);
+        vm.prank(admin);
+        fresh.setLane(STELLAR, STELLAR_DOMAIN, MINT_RECIPIENT);
+
+        vm.prank(admin);
+        vm.expectRevert(RailNotConfigured.selector);
+        fresh.setInboundEnabled(STELLAR_DOMAIN, true);
+    }
+
+    function test_wrong_domain_and_remote_messenger_fixtures_never_reach_the_transmitter() public {
+        _enableInbound();
+        transmitter.setShouldRevert(true);
+        bytes memory wrongDomain = _validMessage(keccak256("cctp wrong domain"), MINT_RECIPIENT);
+        wrongDomain[11] = bytes1(uint8(2));
+
+        vm.expectRevert(WrongDomain.selector);
+        adapter.receiveMessage(wrongDomain, hex"51");
+        assertEq(transmitter.receiveCount(), 0);
+        assertEq(usdc.balanceOf(bob), 0);
+
+        bytes memory wrongMessenger =
+            _validMessage(keccak256("cctp wrong messenger"), bytes32(uint256(0xdead)));
+        vm.expectRevert(UnexpectedRailContract.selector);
+        adapter.receiveMessage(wrongMessenger, hex"51");
+        assertEq(transmitter.receiveCount(), 0);
+        assertEq(usdc.balanceOf(bob), 0);
+        assertEq(router.claimCount(), 0);
+    }
+
+    function test_rehearsal_burns_then_recovers_a_recipient_bound_inbound_claim() public {
+        _fund(AMOUNT);
+        vm.prank(address(router));
+        adapter.dispatch(address(usdc), AMOUNT, _dest(G_ADDR), NONCE);
+
+        MockTokenMessenger.Burn memory burn = messenger.lastBurn();
+        assertEq(burn.amount, AMOUNT);
+        assertEq(burn.destinationDomain, STELLAR_DOMAIN);
+        assertEq(burn.mintRecipient, MINT_RECIPIENT);
+        assertEq(burn.burnToken, address(usdc));
+        assertEq(burn.hookData, _hook(AddressKind.Account, G_KEY, 0));
+        assertEq(usdc.balanceOf(address(adapter)), 0);
+        assertEq(usdc.balanceOf(address(messenger)), AMOUNT);
+        assertEq(usdc.allowance(address(adapter), address(messenger)), 0);
+
+        _enableInbound();
+        usdc.setBlocked(bob, true);
+        bytes32 inboundNonce = keccak256("cctp rehearsal inbound");
+        bytes memory message = _validMessage(inboundNonce, MINT_RECIPIENT);
+        uint64 claimId = adapter.receiveMessage(message, hex"51");
+
+        assertEq(claimId, 1);
+        assertEq(usdc.balanceOf(address(adapter)), 0);
+        assertEq(usdc.balanceOf(address(router)), AMOUNT);
+        assertEq(router.claimCount(), 1);
+        assertEq(uint256(router.claimFailureReason(claimId)), 1);
+        PendingClaim memory claim = router.pendingClaim(claimId);
+        assertEq(claim.recipient, bob);
+        assertEq(claim.token, address(usdc));
+        assertEq(claim.amount, AMOUNT);
+        assertEq(claim.sourceNonce, 4242);
+
+        usdc.setBlocked(bob, false);
+        router.settleClaim(claimId);
+        assertEq(usdc.balanceOf(bob), AMOUNT);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(usdc.balanceOf(address(adapter)), 0);
     }
 
     function test_constructor_refuses_a_zero_router() public {

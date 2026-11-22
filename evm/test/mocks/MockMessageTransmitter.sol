@@ -10,6 +10,7 @@ contract MockMessageTransmitter is IMessageTransmitterV2 {
     address public immutable USDC;
     mapping(bytes32 id => bool seen) public processed;
     bool public shouldRevert;
+    uint256 public receiveCount;
 
     constructor(address usdc, uint32 domain) {
         USDC = usdc;
@@ -39,5 +40,6 @@ contract MockMessageTransmitter is IMessageTransmitterV2 {
 
         address recipient = address(bytes20(bytes32(message[184:216]) << 96));
         MockERC20(USDC).mint(recipient, amount);
+        ++receiveCount;
     }
 }

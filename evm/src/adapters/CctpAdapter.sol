@@ -43,8 +43,8 @@ import {StellarAddress} from "../libraries/StellarAddress.sol";
 ///
 /// This adapter supports outbound burns and a separately gated inbound receive boundary. Stellar
 /// to EVM deliveries require explicit local-domain, source-domain, remote-sender, mint-recipient,
-/// burn-token and hook configuration before they can enter the router. No lane configuration alone
-/// activates inbound trust.
+/// burn-token and hook configuration, plus an owner enablement for that validated inbound domain.
+/// No outbound lane configuration alone activates inbound trust.
 ///
 /// Going from EVM the mint recipient has to be Hyperion's adapter on Stellar instead, because
 /// CCTP's recipient field is thirty two flat bytes with nowhere to record whether they name a
@@ -169,6 +169,7 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
     mapping(uint32 domain => Lane sourceLane) private _sourceLanes;
     mapping(uint32 domain => string chain) private _sourceChain;
     mapping(uint32 domain => bytes32 sender) private _remoteSender;
+    mapping(uint32 domain => bool enabled) public inboundEnabled;
     mapping(bytes32 replayKey => bool processed) private _processed;
     mapping(string chain => PeerRotation) private _pendingRotations;
     mapping(string chain => HistoricalPeer) private _historicalPeers;
@@ -207,6 +208,9 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
 
     /// @notice Emitted when the configured CCTP message transmitter changes.
     event MessageTransmitterSet(address indexed transmitter);
+
+    /// @notice An inbound source lane was explicitly enabled or disabled.
+    event InboundLaneEnabled(uint32 indexed domain, bool enabled);
 
     constructor(
         address router,
@@ -343,6 +347,7 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         uint32 sourceDomain = _readUint32(message, 4);
         uint32 destinationDomain = _readUint32(message, 8);
         if (destinationDomain != MESSAGE_TRANSMITTER.localDomain()) revert WrongDomain();
+        if (!inboundEnabled[sourceDomain]) revert RailNotConfigured();
 
         bytes32 replayId = _readBytes32(message, 12);
         bytes32 headerSender = _readBytes32(message, 44);
@@ -452,6 +457,18 @@ contract CctpAdapter is IRailAdapter, Ownable2Step {
         if (!lane.configured) revert RailNotConfigured();
         if (remoteSender == bytes32(0)) revert ZeroAddress();
         _remoteSender[domain] = remoteSender;
+    }
+
+    /// @notice Explicitly enable inbound CCTP only after independently validating the EVM lane.
+    /// @dev Outbound lane setup does not imply inbound support or trust.
+    function setInboundEnabled(uint32 domain, bool enabled) external onlyOwner {
+        if (enabled) {
+            if (!_sourceLanes[domain].configured || _remoteSender[domain] == bytes32(0)) {
+                revert RailNotConfigured();
+            }
+        }
+        inboundEnabled[domain] = enabled;
+        emit InboundLaneEnabled(domain, enabled);
     }
 
     /// @notice Turn a configured destination on or off.
