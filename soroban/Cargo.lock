@@ -1080,6 +1080,8 @@ dependencies = [
 name = "hyperion-router"
 version = "0.1.0"
 dependencies = [
+ "hyperion-adapter-axelar",
+ "hyperion-adapter-cctp",
  "hyperion-core",
  "proptest",
  "soroban-sdk",

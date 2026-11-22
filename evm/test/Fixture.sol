@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {ActionKind, AdminAction, Destination, OutboundRequest, RouteKind} from "../src/HyperionTypes.sol";
+import {ITokenRecoveryManager} from "../src/interfaces/ITokenRecoveryManager.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockRailAdapter} from "./mocks/MockRailAdapter.sol";
 
@@ -25,6 +26,19 @@ import {MockRailAdapter} from "./mocks/MockRailAdapter.sol";
 /// warp and the execute out longhand in forty tests would bury the one line each test is actually
 /// about.
 contract Fixture is Test {
+    uint8 internal constant PROVIDER_STAGE_DISPATCH = 0;
+    uint8 internal constant PROVIDER_STAGE_INBOUND = 1;
+
+    struct ProviderFaultSchedule {
+        uint64 seed;
+        uint64 dispatchMask;
+        uint64 inboundMask;
+        uint64 dispatchAttempts;
+        uint64 inboundAttempts;
+    }
+
+    ProviderFaultSchedule internal providerFaults;
+
     // Real addresses, checksums and all. The muxed one wraps the account one with id 2^53 + 1,
     // which is past what a double can count to, so a codec that ever round trips through a float
     // fails here rather than in production.
@@ -58,6 +72,7 @@ contract Fixture is Test {
     address internal railReceiver = makeAddr("railReceiver");
 
     HyperionRouter internal router;
+    ITokenRecoveryManager internal recoveryManager;
     MockERC20 internal usdc;
 
     /// @dev Read once, here, rather than in each test that names a role. `expectRevert` watches
@@ -72,7 +87,12 @@ contract Fixture is Test {
     MockRailAdapter internal allbridgeRail;
 
     function setUp() public virtual {
+        _configureProviderFaults(156);
         router = new HyperionRouter(admin, guardian, treasury, FEE_BPS, TIMELOCK, FLOW_WINDOW);
+        address recoveryAddress =
+            address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"02")))));
+        recoveryManager = ITokenRecoveryManager(recoveryAddress);
+        assertEq(recoveryManager.ROUTER(), address(router));
         usdc = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
 
         adminRole = router.DEFAULT_ADMIN_ROLE();
@@ -107,6 +127,42 @@ contract Fixture is Test {
         usdc.mint(alice, 10_000_000e6);
         vm.prank(alice);
         usdc.approve(address(router), type(uint256).max);
+    }
+
+    /// @dev A compact, seed-backed controller for local provider-failure rehearsals. The masks
+    /// are recorded with the seed so a failed run can be replayed without relying on block time.
+    function _configureProviderFaults(uint64 seed) internal {
+        providerFaults = ProviderFaultSchedule({
+            seed: seed,
+            dispatchMask: _mixFaultSeed(seed ^ 0x4453504154434848),
+            inboundMask: _mixFaultSeed(seed ^ 0x494e424f554e4448),
+            dispatchAttempts: 0,
+            inboundAttempts: 0
+        });
+    }
+
+    function _mixFaultSeed(uint64 value) internal pure returns (uint64) {
+        unchecked {
+            value ^= value >> 30;
+            value *= 0xbf58476d1ce4e5b9;
+            value ^= value >> 27;
+            value *= 0x94d049bb133111eb;
+            return value ^ (value >> 31);
+        }
+    }
+
+    function _nextProviderFault(uint8 stage) internal returns (bool) {
+        uint64 attempt;
+        uint64 mask;
+        if (stage == PROVIDER_STAGE_DISPATCH) {
+            attempt = providerFaults.dispatchAttempts++;
+            mask = providerFaults.dispatchMask;
+        } else {
+            require(stage == PROVIDER_STAGE_INBOUND, "unknown provider stage");
+            attempt = providerFaults.inboundAttempts++;
+            mask = providerFaults.inboundMask;
+        }
+        return (mask & (uint64(1) << (attempt % 64))) != 0;
     }
 
     // -------------------------------------------------------------------------------------
@@ -246,18 +302,65 @@ contract Fixture is Test {
         request.token = address(usdc);
     }
 
-    /// @dev Snapshot of the balances a conservation invariant needs: what the router holds,
-    /// what the treasury holds and what the sender holds. Taken before and after an operation
-    /// so a test can assert that the three sum to the same total.
+    /// @dev Snapshot every account that can hold the test token during a local transfer.
+    /// Keeping the rail receiver and both mock rails in the set catches accidental parking or
+    /// double-crediting that a router/treasury/sender-only check would miss.
     struct BalanceSnapshot {
         uint256 router;
         uint256 treasury;
         uint256 sender;
+        uint256 recipient;
+        uint256 railReceiver;
+        uint256 cctpRail;
+        uint256 itsRail;
+        uint256 total;
+        uint256 senderNative;
+        uint256 recipientNative;
+        uint256 routerNative;
+        uint256 cctpRailNative;
+        uint256 itsRailNative;
+        uint256 totalNative;
     }
 
-    function _snapshot(address sender) internal view returns (BalanceSnapshot memory s) {
+    function _snapshot(address sender, address recipient) internal view returns (BalanceSnapshot memory s) {
         s.router = usdc.balanceOf(address(router));
         s.treasury = usdc.balanceOf(treasury);
         s.sender = usdc.balanceOf(sender);
+        s.recipient = usdc.balanceOf(recipient);
+        s.railReceiver = usdc.balanceOf(railReceiver);
+        s.cctpRail = usdc.balanceOf(address(cctpRail));
+        s.itsRail = usdc.balanceOf(address(itsRail));
+
+        s.senderNative = sender.balance;
+        s.recipientNative = recipient.balance;
+        s.routerNative = address(router).balance;
+        s.cctpRailNative = address(cctpRail).balance;
+        s.itsRailNative = address(itsRail).balance;
+        address[7] memory accounts =
+            [address(router), treasury, sender, recipient, railReceiver, address(cctpRail), address(itsRail)];
+        for (uint256 i; i < accounts.length; ++i) {
+            bool duplicate;
+            for (uint256 j; j < i; ++j) {
+                if (accounts[j] == accounts[i]) duplicate = true;
+            }
+            if (!duplicate) {
+                s.total += usdc.balanceOf(accounts[i]);
+                s.totalNative += accounts[i].balance;
+            }
+        }
+    }
+
+    /// @dev Assert conservation with an operation name that identifies the failing path.
+    function _assertConserved(
+        BalanceSnapshot memory before_,
+        BalanceSnapshot memory after_,
+        string memory operation
+    ) internal pure {
+        assertEq(after_.total, before_.total, string.concat(operation, ": token balance delta is non-zero"));
+        assertEq(
+            after_.totalNative,
+            before_.totalNative,
+            string.concat(operation, ": relay currency balance delta is non-zero")
+        );
     }
 }

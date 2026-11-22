@@ -36,6 +36,7 @@ import {
   type ProviderAddressPair,
 } from "./registry/assets.js";
 import type { ChainKey } from "./chains.js";
+import { MAX_WORD, boundedNumber, validatePlanningSnapshot } from "./quotes/validation.js";
 
 /**
  * Why a rail turned a quote down. Same integers as the Solidity enum and the Soroban one, in
@@ -310,6 +311,190 @@ export function planQuoteWithProviderAddresses(
     quote: planQuote(request, snapshot),
     providerAddresses,
   };
+}
+
+export interface MaximumSendRequest {
+  readonly route: RouteKind;
+  readonly balance: bigint;
+  readonly strkey: string;
+  readonly destinationDecimals: number;
+  readonly snapshot: RouterSnapshot;
+}
+
+export interface MaximumSendResult {
+  readonly executable: boolean;
+  /** Largest gross request that remains within balance, flow, and precision constraints. */
+  readonly requestAmount: bigint;
+  readonly quote: RouteQuote | null;
+  /** Source units retained because the destination cannot represent them exactly. */
+  readonly precisionDust: bigint;
+  /** Source units left after the suggested request. */
+  readonly balanceDust: bigint;
+  /** A blocker suitable for diagnostics when no executable request exists. */
+  readonly reason: QuoteBlocker;
+}
+
+/**
+ * Find the largest executable request with integer-only arithmetic.
+ *
+ * The search bounds the monotonic rounded net, then checks the positive-amount threshold.
+ * Tiny requests can round to zero even when larger requests are executable. Dust is returned
+ * explicitly rather than silently added to a request that would round differently at the destination.
+ */
+export function maximumSend(request: MaximumSendRequest): MaximumSendResult {
+  validatePlanningSnapshot(request.snapshot);
+  boundedNumber(request.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  if (!isRouteKind(request.route)) throw new TypeError("route is not supported");
+  if (typeof request.balance !== "bigint") throw new TypeError("balance must be a bigint");
+  if (request.balance <= 0n) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance > 0n ? request.balance : 0n,
+      reason: QuoteBlocker.AmountTooSmall,
+    };
+  }
+
+  const evaluate = (amount: bigint): RouteQuote =>
+    planQuote(
+      {
+        route: request.route,
+        amount,
+        strkey: request.strkey,
+        destinationDecimals: request.destinationDecimals,
+      },
+      request.snapshot,
+    );
+  const first = evaluate(1n);
+  if (
+    !first.available &&
+    first.reason !== QuoteBlocker.FlowLimitExceeded &&
+    first.reason !== QuoteBlocker.NotRepresentable &&
+    first.reason !== QuoteBlocker.AmountTooSmall
+  ) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance,
+      reason: first.reason,
+    };
+  }
+
+  let low = 0n;
+  let high = request.balance < MAX_QUOTE_AMOUNT ? request.balance : MAX_QUOTE_AMOUNT;
+  const flow = request.snapshot.flowAvailable[request.route] ?? 0n;
+  const conversionLimit =
+    request.destinationDecimals > request.snapshot.tokenDecimals
+      ? MAX_WORD / pow10(request.destinationDecimals - request.snapshot.tokenDecimals)
+      : MAX_WORD;
+  const netLimit = flow < conversionLimit ? flow : conversionLimit;
+  const feeBps = BigInt(request.snapshot.feeBps);
+  while (low < high) {
+    const candidate = low + (high - low + 1n) / 2n;
+    // Representability has a lower threshold, so availability itself is not monotonic.
+    // The rounded net is monotonic, including the zero plateau below that threshold.
+    const net = floorToRepresentable(
+      candidate - (candidate * feeBps) / BPS_DENOMINATOR,
+      request.snapshot.tokenDecimals,
+      request.destinationDecimals,
+    );
+    if (net <= netLimit) low = candidate;
+    else high = candidate - 1n;
+  }
+  const quote = evaluate(low);
+  if (!quote.available) {
+    return {
+      executable: false,
+      requestAmount: 0n,
+      quote: null,
+      precisionDust: 0n,
+      balanceDust: request.balance,
+      reason: flow === 0n ? QuoteBlocker.FlowLimitExceeded : quote.reason,
+    };
+  }
+  return {
+    executable: true,
+    requestAmount: low,
+    quote,
+    precisionDust: low - quote.grossAmount,
+    balanceDust: request.balance - low,
+    reason: QuoteBlocker.None,
+  };
+}
+
+export interface BoundedQuoteSearchRequest {
+  readonly balance: bigint;
+  readonly maxAmount: bigint;
+  readonly minDestinationAmount: bigint;
+  readonly strkey: string;
+  readonly destinationDecimals: number;
+  readonly snapshot: RouterSnapshot;
+  readonly allowedRoutes?: readonly RouteKind[];
+}
+
+export interface BoundedQuoteSearchResult {
+  readonly route: RouteKind;
+  readonly quote: RouteQuote | null;
+  readonly requestAmount: bigint;
+  readonly included: boolean;
+  readonly reason: QuoteBlocker | "RouteNotAllowed" | "DestinationMinimumNotMet";
+}
+
+/** Search every permitted route locally, with deterministic integer bounds and no network calls. */
+export function searchBoundedQuotes(
+  request: BoundedQuoteSearchRequest,
+): readonly BoundedQuoteSearchResult[] {
+  for (const field of ["balance", "maxAmount", "minDestinationAmount"] as const) {
+    if (typeof request[field] !== "bigint" || request[field] < 0n)
+      throw new TypeError(`${field} must be a non-negative bigint`);
+  }
+  if (
+    request.allowedRoutes !== undefined &&
+    (!Array.isArray(request.allowedRoutes) ||
+      request.allowedRoutes.some(
+        (route: unknown) => typeof route !== "number" || !isRouteKind(route),
+      ))
+  ) {
+    throw new TypeError("allowedRoutes must contain supported routes");
+  }
+  validatePlanningSnapshot(request.snapshot);
+  boundedNumber(request.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  const upperBound = request.balance < request.maxAmount ? request.balance : request.maxAmount;
+  return ROUTE_KINDS.map((route) => {
+    if (request.allowedRoutes && !request.allowedRoutes.includes(route)) {
+      return { route, quote: null, requestAmount: 0n, included: false, reason: "RouteNotAllowed" };
+    }
+    const maximum = maximumSend({
+      route,
+      balance: upperBound,
+      strkey: request.strkey,
+      destinationDecimals: request.destinationDecimals,
+      snapshot: request.snapshot,
+    });
+    if (!maximum.executable || maximum.quote === null) {
+      return { route, quote: null, requestAmount: 0n, included: false, reason: maximum.reason };
+    }
+    if (maximum.quote.destinationAmount < request.minDestinationAmount) {
+      return {
+        route,
+        quote: maximum.quote,
+        requestAmount: maximum.requestAmount,
+        included: false,
+        reason: "DestinationMinimumNotMet",
+      };
+    }
+    return {
+      route,
+      quote: maximum.quote,
+      requestAmount: maximum.requestAmount,
+      included: true,
+      reason: QuoteBlocker.None,
+    };
+  });
 }
 
 function blocked(base: RouteQuote, reason: QuoteBlocker): RouteQuote {
@@ -689,6 +874,7 @@ export const quoteAllRails = planQuotes;
 
 export * from "./quotes/types.js";
 export * from "./quotes/ladder.js";
+export * from "./quotes/snapshot.js";
 
 /**
  * A quote request that names the asset by identity rather than by ticker.

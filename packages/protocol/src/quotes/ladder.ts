@@ -16,6 +16,7 @@ import {
   type ProviderAddressPair,
 } from "../registry/assets.js";
 import type { ChainKey } from "../chains.js";
+import { boundedNumber, validatePlanningSnapshot } from "./validation.js";
 import {
   RAIL_DESTINATION_GAS_ESTIMATES,
   type BatchQuoteResult,
@@ -244,4 +245,47 @@ export function quoteBatchWithProviderAddresses(
     quotes: quoteBatch(tiers, params),
     providerAddresses: Object.freeze(providerAddresses),
   };
+}
+
+export interface SharedFlowBatchResult {
+  /** Results in input order. A blocked item does not consume virtual flow. */
+  readonly results: readonly BatchQuoteResult[];
+  /** Net amount consumed per rail by successful items in this plan. */
+  readonly consumedFlow: Readonly<Partial<Record<RouteKind, bigint>>>;
+  /** Remaining virtual headroom after successful items, without touching chain state. */
+  readonly remainingFlow: Readonly<Partial<Record<RouteKind, bigint>>>;
+}
+
+/**
+ * Plan sequential transfers against one virtual flow budget.
+ *
+ * Each item sees the headroom left by earlier successful items. A blocked item is excluded and
+ * rolls back nothing; only a result with a winning rail commits its net amount to the virtual
+ * budget. The caller can discard the returned plan without changing the live router.
+ */
+export function quoteBatchWithSharedFlow(
+  tiers: readonly bigint[],
+  params: QuoteParams,
+): SharedFlowBatchResult {
+  validatePlanningSnapshot(params.snapshot);
+  boundedNumber(params.destinationDecimals, MAX_DECIMALS, "destinationDecimals");
+  if (tiers.some((tier) => typeof tier !== "bigint"))
+    throw new TypeError("tiers must contain bigint amounts");
+  const remaining: Partial<Record<RouteKind, bigint>> = { ...params.snapshot.flowAvailable };
+  const consumed: Partial<Record<RouteKind, bigint>> = {};
+  const results: BatchQuoteResult[] = [];
+
+  for (const tier of tiers) {
+    const snapshot: typeof params.snapshot = { ...params.snapshot, flowAvailable: remaining };
+    const result = quoteBatch([tier], { ...params, snapshot })[0];
+    if (result === undefined) throw new Error("single-tier quote did not return a result");
+    results.push(result);
+    if (result.bestQuote === null || result.winningRail === null) continue;
+    const route = result.winningRail;
+    const next = (remaining[route] ?? 0n) - result.netAmount;
+    remaining[route] = next;
+    consumed[route] = (consumed[route] ?? 0n) + result.netAmount;
+  }
+
+  return { results, consumedFlow: consumed, remainingFlow: remaining };
 }

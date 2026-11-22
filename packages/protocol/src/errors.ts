@@ -87,6 +87,9 @@ export const EVM_ERROR_NAMES = [
   "RouteDisabled",
   "RouteIsPaused",
   "AdapterNotSet",
+  "AdapterCodeMissing",
+  "AdapterIdentityMismatch",
+  "UpgradeableAdapterUnsupported",
   "InvalidAmount",
   "AmountNotRepresentable",
   "DecimalOverflow",
@@ -135,6 +138,10 @@ export const EVM_ERROR_NAMES = [
   "NoRefundCredit",
   "ProviderBudgetExceeded",
   "AdapterMethodUnavailable",
+  "InvalidSignature",
+  "IntentExpired",
+  "IntentNonceMismatch",
+  "IntentDomainMismatch",
   "RotationAlreadyPending",
   "RotationNotPending",
   "RotationNotReady",
@@ -142,6 +149,12 @@ export const EVM_ERROR_NAMES = [
   "OldMessengerExpired",
   "TopUpIntentNotFound",
   "TopUpBindingMismatch",
+  "FeeTokenNotSupported",
+  "InvalidRelayerFee",
+
+  "TokenRecoveryForbidden",
+  "RecoveryExceedsSurplus",
+  "ClaimLiabilityInsufficient",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -218,6 +231,22 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
   },
   AdapterNotSet: {
     summary: "Nothing is wired up to carry that rail yet.",
+    fault: "config",
+    retryable: false,
+  },
+  AdapterCodeMissing: {
+    summary: "The proposed rail adapter has no deployed code. Review its deployment address.",
+    fault: "config",
+    retryable: false,
+  },
+  AdapterIdentityMismatch: {
+    summary: "The rail adapter no longer matches its reviewed code, router or route identity.",
+    fault: "config",
+    retryable: false,
+  },
+  UpgradeableAdapterUnsupported: {
+    summary:
+      "The rail adapter exposes an upgradeable implementation that this router does not accept.",
     fault: "config",
     retryable: false,
   },
@@ -493,8 +522,41 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     fault: "config",
     retryable: false,
   },
+  InvalidSignature: {
+    summary:
+      "The transfer signature does not authenticate the signed sender. Sign the reviewed intent again.",
+    fault: "input",
+    retryable: false,
+  },
+  IntentExpired: {
+    summary: "The signed transfer deadline has passed. Review and sign a new intent.",
+    fault: "input",
+    retryable: false,
+  },
+  IntentNonceMismatch: {
+    summary:
+      "The signed transfer nonce is no longer current. Check its outcome before signing again.",
+    fault: "input",
+    retryable: false,
+  },
+  IntentDomainMismatch: {
+    summary:
+      "The signed transfer belongs to a different chain or router. Review the destination deployment.",
+    fault: "input",
+    retryable: false,
+  },
   TopUpIntentNotFound: {
     summary: "This gas top-up does not match an outbound transfer recorded by the adapter.",
+    fault: "input",
+    retryable: false,
+  },
+  FeeTokenNotSupported: {
+    summary: "The signed relayer fee uses an asset that is not registered and enabled.",
+    fault: "config",
+    retryable: false,
+  },
+  InvalidRelayerFee: {
+    summary: "The relayer fee fields or token balance changes do not match the signed charge.",
     fault: "input",
     retryable: false,
   },
@@ -502,6 +564,21 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     summary:
       "The gas top-up changes the sender, destination, token, amount, or message already bound to this transfer.",
     fault: "input",
+    retryable: false,
+  },
+  TokenRecoveryForbidden: {
+    summary: "Registered tokens and addresses without token code cannot be recovered.",
+    fault: "input",
+    retryable: false,
+  },
+  RecoveryExceedsSurplus: {
+    summary: "The requested recovery exceeds the token balance left after outstanding claims.",
+    fault: "input",
+    retryable: false,
+  },
+  ClaimLiabilityInsufficient: {
+    summary: "Tracked claim liabilities cannot cover this settlement.",
+    fault: "config",
     retryable: false,
   },
   ExceedsRouteLimit: {

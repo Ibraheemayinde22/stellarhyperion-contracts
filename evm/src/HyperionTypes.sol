@@ -52,6 +52,37 @@ struct OutboundRequest {
     uint256 minDestinationAmount;
 }
 
+/// @dev The immutable provenance committed for a successful outbound dispatch.
+struct OutboundRecord {
+    uint64 nonce;
+    address sender;
+    address token;
+    uint256 grossAmount;
+    uint256 fee;
+    uint256 netAmount;
+    RouteKind route;
+    address adapter;
+    string destinationChain;
+    string destinationAddress;
+    bytes32 railRef;
+}
+
+/// @dev An EIP-712 authorization for one outbound transfer.
+struct TransferIntent {
+    address sender;
+    address token;
+    uint256 amount;
+    RouteKind route;
+    Destination destination;
+    uint8 destinationDecimals;
+    uint256 minDestinationAmount;
+    uint256 maxProviderBudget;
+    uint256 nonce;
+    uint256 deadline;
+    uint256 chainId;
+    address router;
+}
+
 /// @dev Everything the router knows about an asset it is willing to move.
 struct TokenConfig {
     bool registered;
@@ -61,13 +92,9 @@ struct TokenConfig {
     bool enabled;
 }
 
-/// @dev Notes on two structs that exist on the Stellar side and deliberately do not exist here.
-///
-/// `TransferRecord` and `InboundRecord` are stored contract state in the Soroban router, because
-/// Soroban events are not retained for long and an indexer that falls behind has nowhere else to
-/// look. On this chain a log is permanent and indexable by topic, so the same information is
-/// emitted and not written to storage. Paying sixty thousand gas per transfer to duplicate a log
-/// into a mapping nothing on chain ever reads would be a cost with no reader.
+/// @dev OutboundRecord is an append-only source provenance lookup for successful dispatches.
+/// It duplicates selected event fields for on-chain reconciliation and costs storage per transfer.
+/// Failed dispatches and failed refunds revert this record along with source accounting.
 
 /// @dev Funds that arrived but could not be handed over yet.
 ///
@@ -175,6 +202,19 @@ struct QueuedAction {
     /// executable forever.
     uint64 expiresAt;
     bool executed;
+}
+
+/// @dev A timelocked proposal to return only accidental, unencumbered ERC20 custody.
+struct QueuedTokenRecovery {
+    uint64 id;
+    address token;
+    address recipient;
+    uint256 amount;
+    uint64 queuedAt;
+    uint64 eta;
+    uint64 expiresAt;
+    bool executed;
+    bool cancelled;
 }
 
 /// @dev What a route would do with a given amount right now, without doing it.

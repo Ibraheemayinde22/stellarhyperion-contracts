@@ -287,6 +287,30 @@ fn actual_wasm_upgrade_preserves_state_and_failure_retains_executable() {
     );
     w.fund_user(HUNDRED * 10);
     let pending = parked(&w, 201);
+    let pending_claim = w.router().get_claim(&pending);
+    let mut claim_snapshots = std::vec![claim_snapshot(
+        &w.env,
+        &w.router_id,
+        &pending_claim.token,
+        &w.recipient,
+        pending,
+        "parked"
+    )];
+    let liability = w.router().claim_liability(&pending_claim.token).outstanding;
+    assert!(w.router().try_settle_claim(&w.user, &pending).is_err());
+    assert_eq!(w.router().get_claim(&pending), pending_claim);
+    assert_eq!(
+        w.router().claim_liability(&pending_claim.token).outstanding,
+        liability
+    );
+    claim_snapshots.push(claim_snapshot(
+        &w.env,
+        &w.router_id,
+        &pending_claim.token,
+        &w.recipient,
+        pending,
+        "settlement-failed",
+    ));
     let paid = settled(&w, 202);
     w.router().bridge_out(
         &w.user,
@@ -359,5 +383,97 @@ fn actual_wasm_upgrade_preserves_state_and_failure_retains_executable() {
         .router()
         .quote_routes_v2(&w.token_id, &HUNDRED, &EVM_DECIMALS)
         .is_empty());
+    claim_snapshots.push(claim_snapshot(
+        &w.env,
+        &w.router_id,
+        &pending_claim.token,
+        &w.recipient,
+        pending,
+        "executable-upgraded",
+    ));
+    // Persist a genuine SDK ledger snapshot, archive exactly the pending claim key, and
+    // restore only its TTL. This models RestoreFootprintOp while preserving payload bytes.
+    let mut restored = w.env.to_snapshot();
+    let claim_key: soroban_sdk::xdr::ScVal = w.env.as_contract(&w.router_id, || {
+        let val: Val = DataKey::Claim(pending).into_val(&w.env);
+        val.into_val(&w.env)
+    });
+    let sequence = restored.ledger.sequence_number;
+    let entry = restored.ledger.ledger_entries.iter_mut().find(|(key, _)| {
+        matches!(key.as_ref(), soroban_sdk::xdr::LedgerKey::ContractData(data) if data.key == claim_key)
+    }).expect("original pending claim ledger entry");
+    let original_payload = entry.1 .0.clone();
+    entry.1 .1 = Some(sequence - 1);
+    assert!(entry.1 .1.unwrap() < sequence);
+    entry.1 .1 = Some(sequence + storage::BUMP_TO);
+    assert_eq!(entry.1 .0, original_payload);
+    let env = soroban_sdk::Env::from_snapshot(restored);
+    env.mock_all_auths();
+    let router_id = rebind_address(&env, &w.router_id);
+    let token = rebind_address(&env, &pending_claim.token);
+    let recipient = rebind_address(&env, &w.recipient);
+    let caller = rebind_address(&env, &w.user);
+    // Native test-token functions are process-local; the router executable is retained as WASM.
+    env.register_at(&token, super::doubles::FailableToken, ());
+    assert_eq!(router_id.executable(), w.router_id.executable());
+    let client = crate::HyperionRouterClient::new(&env, &router_id);
+    let coins = super::doubles::FailableTokenClient::new(&env, &token);
+    assert_eq!(client.get_claim(&pending).recipient, recipient);
+    assert_eq!(client.get_claim(&pending).amount, pending_claim.amount);
+    assert_eq!(client.claim_liability(&token).outstanding, liability);
+    assert!(client.try_settle_claim(&caller, &pending).is_err());
+    assert_eq!(coins.balance(&recipient), 0);
+    claim_snapshots.push(claim_snapshot(
+        &env,
+        &router_id,
+        &token,
+        &recipient,
+        pending,
+        "archived-restored",
+    ));
+    coins.set_blocked(&recipient, &false);
+    client.settle_claim(&caller, &pending);
+    assert_eq!(coins.balance(&recipient), pending_claim.amount);
+    assert_eq!(client.claim_liability(&token).outstanding, 0);
+    claim_snapshots.push(claim_snapshot(
+        &env, &router_id, &token, &recipient, pending, "settled",
+    ));
+    assert_eq!(
+        client.try_settle_claim(&caller, &pending),
+        Err(Ok(HyperionError::ClaimAlreadySettled))
+    );
+    assert_eq!(coins.balance(&recipient), pending_claim.amount);
+    assert_eq!(coins.balance(&router_id), 0);
+    claim_snapshots.push(claim_snapshot(
+        &env,
+        &router_id,
+        &token,
+        &recipient,
+        pending,
+        "settle-retried",
+    ));
+    std::println!("CLAIM_LIFECYCLE_REPORT {{\"fixture\":\"actual-wasm-upgrade-and-ledger-restoration\",\"invariants\":{{\"liabilitiesSurviveInterruption\":true,\"restoredClaimKeepsRecipient\":true,\"repeatedSettlementPaysOnce\":true}},\"snapshots\":[{}]}}", claim_snapshots.join(","));
     std::println!("WASM_UPGRADE_REPORT intentionally_migrated=[executable,upgrade_queue,audit_events] unexpected_differences=[] failed_upgrade_retained_original=true");
+}
+
+fn address_text(address: &soroban_sdk::Address) -> std::string::String {
+    let mut raw = [0u8; 56];
+    address.to_string().copy_into_slice(&mut raw);
+    std::string::String::from(std::str::from_utf8(&raw).unwrap())
+}
+fn rebind_address(env: &soroban_sdk::Env, address: &soroban_sdk::Address) -> soroban_sdk::Address {
+    soroban_sdk::Address::from_string(&soroban_sdk::String::from_str(env, &address_text(address)))
+}
+fn claim_snapshot(
+    env: &soroban_sdk::Env,
+    router: &soroban_sdk::Address,
+    token: &soroban_sdk::Address,
+    recipient: &soroban_sdk::Address,
+    id: u64,
+    label: &str,
+) -> std::string::String {
+    let client = crate::HyperionRouterClient::new(env, router);
+    let coins = super::doubles::FailableTokenClient::new(env, token);
+    let claim = client.get_claim(&id);
+    std::format!("{{\"label\":\"{}\",\"schemaVersion\":{},\"liability\":\"{}\",\"payoutCount\":\"{}\",\"claim\":{{\"id\":\"{}\",\"token\":\"{}\",\"amount\":\"{}\",\"recipient\":\"{}\",\"sourceNonce\":\"{}\",\"settled\":{}}}}}", label, client.get_migration_status().current_version, client.claim_liability(token).outstanding, coins.balance(recipient) / claim.amount, claim.id, address_text(&claim.token), claim.amount, address_text(&claim.recipient), claim.source_nonce, claim.settled)
 }

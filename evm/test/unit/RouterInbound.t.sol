@@ -53,12 +53,15 @@ contract RouterInboundTest is Fixture {
     // -------------------------------------------------------------------------------------
 
     function test_a_delivery_pays_the_recipient_straight_away() public {
+        BalanceSnapshot memory before_ = _snapshot(alice, bob);
+
         vm.prank(railReceiver);
         uint64 claimId = router.bridgeIn(RouteKind.Cctp, address(usdc), DELIVERY, bob, _origin(MESSAGE_ID));
 
         assertEq(claimId, 0, "nothing was parked");
         assertEq(usdc.balanceOf(bob), DELIVERY);
         assertEq(usdc.balanceOf(address(router)), 0, "the router is not a vault");
+        _assertConserved(before_, _snapshot(alice, bob), "CCTP inbound delivery");
     }
 
     function test_a_delivery_says_so_in_the_log() public {
@@ -121,6 +124,35 @@ contract RouterInboundTest is Fixture {
         vm.prank(railReceiver);
         router.bridgeIn(RouteKind.Cctp, address(fot), DELIVERY, bob, _origin(MESSAGE_ID));
         assertEq(fot.balanceOf(bob), DELIVERY);
+    }
+
+    function test_short_inbound_custody_transfer_rolls_back_replay_and_cannot_park_a_claim() public {
+        FeeOnTransferToken fot = _hostileInbound();
+        fot.configure(address(router), 500, false, false);
+        bytes32 replayKey = keccak256(abi.encode(RouteKind.Cctp, MESSAGE_ID));
+
+        vm.prank(railReceiver);
+        vm.expectRevert(InvalidAmount.selector);
+        router.bridgeIn(RouteKind.Cctp, address(fot), DELIVERY, bob, _origin(MESSAGE_ID));
+
+        assertEq(fot.balanceOf(railReceiver), 1000e6);
+        assertEq(fot.balanceOf(address(router)), 0);
+        assertEq(fot.balanceOf(bob), 0);
+        assertEq(fot.balanceOf(address(0xdead)), 0);
+        assertEq(router.claimCount(), 0);
+        assertEq(recoveryManager.claimLiability(address(fot)), 0);
+        assertFalse(router.processed(replayKey));
+
+        fot.configure(bob, 0, false, false);
+        vm.prank(railReceiver);
+        uint64 claimId = router.bridgeIn(RouteKind.Cctp, address(fot), DELIVERY, bob, _origin(MESSAGE_ID));
+
+        assertEq(claimId, 0);
+        assertEq(fot.balanceOf(railReceiver), 1000e6 - DELIVERY);
+        assertEq(fot.balanceOf(address(router)), 0);
+        assertEq(fot.balanceOf(bob), DELIVERY);
+        assertEq(recoveryManager.claimLiability(address(fot)), 0);
+        assertTrue(router.processed(replayKey));
     }
 
     function test_a_false_return_after_moving_funds_cannot_create_an_unfunded_claim() public {

@@ -55,7 +55,6 @@ jobs:
             static.crates.io:443
             static.rust-lang.org:443
             binaries.soliditylang.org:443
-            solc-bin.ethereum.org:443
             pypi.org:443
             files.pythonhosted.org:443
             results-receiver.actions.githubusercontent.com:443
@@ -70,6 +69,19 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+
+      - name: Verify native host provenance and mutation regressions
+        # Check the pristine source tree before Cargo creates any build output. The verifier
+        # checks the archive checksum before reconstructing the reviewed patch and overlays.
+        working-directory: .
+        run: |
+          set -euo pipefail
+          export VENDOR_PROVENANCE_ARCHIVE="$RUNNER_TEMP/soroban-env-host-29.0.1.crate"
+          curl --fail --silent --show-error --location --retry 3 --max-time 60 --max-filesize 16777216 \
+            --output "$VENDOR_PROVENANCE_ARCHIVE" \
+            https://static.crates.io/crates/soroban-env-host/soroban-env-host-29.0.1.crate
+          python3 -B .github/scripts/verify_vendor_provenance.py --archive "$VENDOR_PROVENANCE_ARCHIVE"
+          python3 -B -m unittest discover -s .github/scripts -p test_verify_vendor_provenance.py -v
 
       - name: Install the toolchain the repository pins
         # No third party action for this. soroban/rust-toolchain.toml already names the channel,
@@ -134,6 +146,12 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+
+      - name: Install locked registry compiler dependencies
+        # Registry verification transpiles the selected committed protocol source.
+        # Each reusable job has its own checkout and needs its own dependencies.
+        working-directory: packages/protocol
+        run: npm ci --ignore-scripts
 
       - name: Test read-only RPC inspection, discovery and replay journal
         working-directory: .
