@@ -13,6 +13,8 @@ import {
     AdapterMethodUnavailable,
     AdapterNotSet,
     AmountNotRepresentable,
+    CircuitBreakerLatched,
+    CircuitBreakerNotTripped,
     ClaimAlreadySettled,
     ClaimNotFound,
     FeeTooHigh,
@@ -20,6 +22,7 @@ import {
     InvalidDecimals,
     InvalidDestination,
     InvalidLimit,
+    InvalidThreshold,
     InvalidWindow,
     LimitNotRaised,
     MuxedNotSupported,
@@ -122,6 +125,15 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @notice Maximum length in bytes of a timelock cancellation reason note.
     uint256 public constant MAX_REASON_LEN = 128;
 
+    // `ActionKind` field usage as bit masks. A long `||` ladder compiles to a chain of
+    // comparisons on every queue and execute; one shift and an AND does the same job in less
+    // deployed bytecode, which this contract is close enough to its ceiling to care about.
+    uint16 private constant _USES_ROUTE = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 9);
+    uint16 private constant _USES_SUBJECT = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 7)
+        | (1 << 8) | (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14);
+    uint16 private constant _USES_AMOUNT =
+        (1 << 0) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 13);
+
     /// @notice The shortest flow window a limit can be measured over, in seconds.
     uint64 public constant MIN_FLOW_WINDOW = 5 minutes;
 
@@ -160,6 +172,16 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     mapping(bytes32 tokenAndRoute => uint256 limit) private _routeFlowLimit;
     mapping(bytes32 tokenAndRoute => bool isSet) private _routeFlowLimitSet;
     mapping(bytes32 tokenAndRoute => FlowWindow window) private _flow;
+
+    /// @dev The emergency breaker is token-wide rather than per rail: the risk it exists for is
+    /// the asset itself misbehaving, and splitting the signal across four counters would let an
+    /// attacker spread the same exposure over every rail and trip none of them.
+    struct BreakerState {
+        uint256 threshold;
+        bool tripped;
+        FlowWindow flow;
+    }
+    mapping(address token => BreakerState state) private _breakers;
 
     /// @notice Whether a rail message has already been delivered, keyed on rail and message id.
     /// @dev Keyed on the rail's own message id at full width. Squeezing a thirty two byte
@@ -385,6 +407,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         FlowWindow memory flow;
         (plan, flow) = _previewOutbound(request);
         _flow[_flowKey(request.token, request.route)] = flow;
+        _consumeBreaker(request.token, plan.net);
     }
 
     function _previewOutbound(OutboundRequest calldata request)
@@ -415,6 +438,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             revert SlippageExceeded(request.minDestinationAmount, landing);
         }
 
+        // Checked before the ordinary route limit so an emergency stop reports itself as one.
+        // The breaker observes the same net amount the route flow limit does: what crosses, not
+        // the fee that stays on this chain.
+        _requireBreakerOpen(request.token, net);
+
         // The flow limit is charged against what crosses, not against what the sender handed
         // over. The fee never leaves this chain, so it is not cross-chain exposure and counting
         // it would tighten the limit by a number nobody picked.
@@ -428,6 +456,46 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (adapterAddress == address(0)) revert AdapterNotSet();
 
         plan = OutboundPlan({fee: fee, net: net, gross: fee + net, adapterAddress: adapterAddress});
+    }
+
+    /// @dev Whether `net` is refused right now, plus the numbers an operator needs to see why.
+    /// The threshold is a hard rolling cap: no single transfer can carry a token past it between
+    /// this check and the write in `_consumeBreaker`.
+    function _breakerBlocked(address token, uint256 net)
+        private
+        view
+        returns (bool blocked, uint256 observed, uint256 threshold)
+    {
+        BreakerState storage breaker = _breakers[token];
+        threshold = breaker.threshold;
+        observed = breaker.flow.effectiveConsumed(uint64(block.timestamp), flowWindow);
+        if (breaker.tripped) return (true, observed, threshold);
+        blocked = threshold != 0 && (observed >= threshold || net > threshold - observed);
+    }
+
+    function _requireBreakerOpen(address token, uint256 net) private view {
+        (bool blocked, uint256 observed, uint256 threshold) = _breakerBlocked(token, net);
+        if (blocked) revert CircuitBreakerLatched(token, observed, threshold);
+    }
+
+    function _latchBreaker(address token, uint256 observed, uint256 threshold) private {
+        BreakerState storage breaker = _breakers[token];
+        if (breaker.tripped) return;
+        breaker.tripped = true;
+        emit CircuitBreakerTripped(token, observed, threshold);
+    }
+
+    /// @dev Charge the token-wide breaker window, and latch it once the threshold is reached.
+    /// A transfer that would cross the threshold is refused by `_requireBreakerOpen`, so the
+    /// window can only land exactly on it, never past it.
+    function _consumeBreaker(address token, uint256 net) private {
+        BreakerState storage breaker = _breakers[token];
+        uint256 threshold = breaker.threshold;
+        if (threshold == 0) return;
+        uint64 timestamp = uint64(block.timestamp);
+        breaker.flow = breaker.flow.consume(threshold, net, timestamp, flowWindow);
+        uint256 observed = breaker.flow.effectiveConsumed(timestamp, flowWindow);
+        if (observed >= threshold) _latchBreaker(token, observed, threshold);
     }
 
     /// @dev The log is the only record this chain keeps of a departure, so it carries every field
@@ -724,6 +792,12 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         uint256 net = AmountMath.floorToRepresentable(netRaw, cfg.decimals, destinationDecimals);
         if (net == 0) return _blocked(q, QuoteBlocker.NotRepresentable);
 
+        // The emergency breaker is a token-wide answer, so it is reported before the per-rail
+        // headroom. A quote that would cross the threshold says so now rather than promising a
+        // departure that dispatch will refuse.
+        (bool breakerBlocked,,) = _breakerBlocked(token, net);
+        if (breakerBlocked) return _blocked(q, QuoteBlocker.CircuitBreakerTripped);
+
         uint256 headroom = flowAvailable(token, route);
         q.flowAvailable = headroom;
         if (net > headroom) return _blocked(q, QuoteBlocker.FlowLimitExceeded);
@@ -833,6 +907,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         cfg.flowLimit = limit;
         emit FlowLimitLowered(token, msg.sender, limit);
         emit TokenRegistered(token, cfg);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function circuitBreaker(address token) public view override returns (uint256 threshold, bool tripped) {
+        (tripped,, threshold) = _breakerBlocked(token, 0);
     }
 
     // -------------------------------------------------------------------------------------
@@ -1035,18 +1114,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// nothing to do with a rail.
     function _validateAction(AdminAction memory action) private view {
         ActionKind kind = action.kind;
-
-        bool usesRoute = kind == ActionKind.SetAdapter || kind == ActionKind.SetRailReceiver
-            || kind == ActionKind.EnableRoute || kind == ActionKind.SetRouteFlowLimit;
-        bool usesSubject = kind == ActionKind.SetTreasury || kind == ActionKind.SetAdmin
-            || kind == ActionKind.SetGuardian || kind == ActionKind.SetAdapter
-            || kind == ActionKind.SetRailReceiver || kind == ActionKind.RegisterToken
-            || kind == ActionKind.RaiseTokenFlowLimit || kind == ActionKind.SetRouteFlowLimit
-            || kind == ActionKind.SetTokenEnabled;
-        bool usesAmount = kind == ActionKind.SetFeeBps || kind == ActionKind.EnableRoute
-            || kind == ActionKind.RegisterToken || kind == ActionKind.RaiseTokenFlowLimit
-            || kind == ActionKind.SetRouteFlowLimit || kind == ActionKind.SetTimelockDelay
-            || kind == ActionKind.SetFlowWindow || kind == ActionKind.SetTokenEnabled;
+        uint16 kindBit = uint16(1) << uint8(kind);
+        bool usesRoute = (_USES_ROUTE & kindBit) != 0;
+        bool usesSubject = (_USES_SUBJECT & kindBit) != 0;
+        bool usesAmount = (_USES_AMOUNT & kindBit) != 0;
         bool usesDecimals = kind == ActionKind.RegisterToken;
 
         if (!usesRoute && action.route != RouteKind.Cctp) revert ActionFieldNotEmpty();
@@ -1063,6 +1134,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         }
         if (kind == ActionKind.RegisterToken) {
             if (action.decimals > AmountMath.MAX_DECIMALS) revert InvalidDecimals();
+            // A re-registration that narrows the ordinary ceiling below an existing breaker
+            // would leave the emergency bound above the limit it is meant to sit beneath.
+            if (_breakers[action.subject].threshold > action.amount) revert InvalidThreshold();
             (bool okDec, bytes memory retDec) =
                 action.subject.staticcall(abi.encodeWithSignature("decimals()"));
             if (!okDec || retDec.length != 32 || abi.decode(retDec, (uint8)) != action.decimals) {
@@ -1079,6 +1153,18 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             if (!cfg.registered) revert TokenNotRegistered();
             if (action.amount <= cfg.flowLimit) revert LimitNotRaised();
         }
+        if (kind == ActionKind.SetTokenCircuitBreakerThreshold) {
+            if (action.amount == 0) revert InvalidThreshold();
+            // A fresh deployment queues registration and the breaker together. Registration then
+            // refuses any ceiling that would leave the breaker above the ordinary limit.
+            TokenConfig memory cfg = _tokens[action.subject];
+            if (cfg.registered && action.amount > cfg.flowLimit) revert InvalidThreshold();
+        }
+        if (kind == ActionKind.ResetTokenCircuitBreaker) {
+            if (!_tokens[action.subject].registered) revert TokenNotRegistered();
+            (bool tripped,,) = _breakerBlocked(action.subject, 0);
+            if (!tripped) revert CircuitBreakerNotTripped();
+        }
         if (kind == ActionKind.SetTimelockDelay) {
             if (action.amount < MIN_TIMELOCK_DELAY || action.amount > MAX_TIMELOCK_DELAY) {
                 revert TimelockDelayOutOfRange();
@@ -1091,7 +1177,6 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     function _applyAction(AdminAction memory action) private {
         ActionKind kind = action.kind;
-
         if (kind == ActionKind.SetFeeBps) {
             feeBps = uint16(action.amount);
         } else if (kind == ActionKind.SetTreasury) {
@@ -1132,6 +1217,17 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             bytes32 key = _flowKey(action.subject, action.route);
             _routeFlowLimit[key] = action.amount;
             _routeFlowLimitSet[key] = true;
+            return;
+        } else if (kind == ActionKind.SetTokenCircuitBreakerThreshold) {
+            BreakerState storage breaker = _breakers[action.subject];
+            breaker.threshold = action.amount;
+            uint256 observed = breaker.flow.effectiveConsumed(uint64(block.timestamp), flowWindow);
+            if (observed >= action.amount) _latchBreaker(action.subject, observed, action.amount);
+            return;
+        } else if (kind == ActionKind.ResetTokenCircuitBreaker) {
+            BreakerState storage breaker = _breakers[action.subject];
+            breaker.tripped = false;
+            delete breaker.flow;
             return;
         } else if (kind == ActionKind.SetTimelockDelay) {
             timelockDelay = uint64(action.amount);

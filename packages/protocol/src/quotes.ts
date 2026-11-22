@@ -54,6 +54,7 @@ export const QuoteBlocker = {
   MuxedNotSupported: 9,
   InvalidDestination: 10,
   ChainNotSupported: 11,
+  CircuitBreakerTripped: 12,
 } as const;
 
 export type QuoteBlocker = (typeof QuoteBlocker)[keyof typeof QuoteBlocker];
@@ -149,6 +150,13 @@ const COPY: Record<QuoteBlocker, BlockerCopy> = {
     owner: "rail",
     transient: false,
   },
+  [QuoteBlocker.CircuitBreakerTripped]: {
+    label: "Asset emergency stop",
+    detail:
+      "This asset's token-wide emergency threshold has been reached, or this transfer would cross it. Departures for this asset are stopped until an operator resets the breaker; arrivals and existing claims still work.",
+    owner: "operator",
+    transient: true,
+  },
 };
 
 export const BLOCKER_COPY: Readonly<Record<QuoteBlocker, BlockerCopy>> = Object.freeze(COPY);
@@ -205,6 +213,16 @@ export interface RouterSnapshot {
   readonly flowAvailable: Partial<Record<RouteKind, bigint>>;
   /** Per rail, whether the adapter says it can reach the destination chain. */
   readonly chainSupported: Partial<Record<RouteKind, boolean>>;
+  /**
+   * Token-wide emergency breaker latch. Optional so existing snapshots keep their meaning; a
+   * missing value is treated as not tripped.
+   */
+  readonly circuitBreakerTripped?: boolean;
+  /**
+   * Headroom under the token-wide emergency threshold, in source base units. Optional for the
+   * same reason; when present, a quote that would cross it reports `CircuitBreakerTripped`.
+   */
+  readonly circuitBreakerAvailable?: bigint;
 }
 
 export interface QuoteRequest {
@@ -351,6 +369,13 @@ export function planQuote(request: QuoteRequest, snapshot: RouterSnapshot): Rout
 
   const net = floorToRepresentable(netRaw, snapshot.tokenDecimals, destinationDecimals);
   if (net === 0n) return blocked(base, QuoteBlocker.NotRepresentable);
+
+  if (snapshot.circuitBreakerTripped === true) {
+    return blocked(base, QuoteBlocker.CircuitBreakerTripped);
+  }
+  if (snapshot.circuitBreakerAvailable !== undefined && net > snapshot.circuitBreakerAvailable) {
+    return blocked(base, QuoteBlocker.CircuitBreakerTripped);
+  }
 
   const headroom = snapshot.flowAvailable[route] ?? 0n;
   const withFlow: RouteQuote = { ...base, flowAvailable: headroom };

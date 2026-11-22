@@ -569,6 +569,30 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "circuitBreaker",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "threshold",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "tripped",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "claimCount",
     "inputs": [],
     "outputs": [
@@ -2089,6 +2113,31 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "event",
+    "name": "CircuitBreakerTripped",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "observedAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "threshold",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ClaimParked",
     "inputs": [
       {
@@ -2565,6 +2614,32 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "error",
+    "name": "CircuitBreakerLatched",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "observedAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "threshold",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "CircuitBreakerNotTripped",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ClaimAlreadySettled",
     "inputs": []
   },
@@ -2627,6 +2702,11 @@ export const hyperionRouterAbi = [
   {
     "type": "error",
     "name": "InvalidLimit",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidThreshold",
     "inputs": []
   },
   {

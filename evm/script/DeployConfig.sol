@@ -50,6 +50,8 @@ abstract contract DeployConfig is Script {
         address token;
         uint8 decimals;
         uint256 flowLimit;
+        /// Token-wide emergency ceiling. Bounded by `flowLimit`; a tighter value is the point.
+        uint256 breakerThreshold;
         string symbol;
     }
 
@@ -89,10 +91,14 @@ abstract contract DeployConfig is Script {
     /// router, which is a different operation with a different review, and pretending otherwise
     /// by looping here would hide that.
     function tokenParams() internal view returns (TokenParams memory params) {
+        uint256 flowLimit = vm.envUint("HYPERION_TOKEN_FLOW_LIMIT");
         params = TokenParams({
             token: vm.envAddress("HYPERION_TOKEN"),
             decimals: uint8(vm.envUint("HYPERION_TOKEN_DECIMALS")),
-            flowLimit: vm.envUint("HYPERION_TOKEN_FLOW_LIMIT"),
+            flowLimit: flowLimit,
+            // Half the ordinary ceiling unless stated. The breaker is meant to be the tighter
+            // boundary; a deployment that wants it equal to the flow limit can say so.
+            breakerThreshold: vm.envOr("HYPERION_TOKEN_BREAKER_THRESHOLD", flowLimit / 2),
             symbol: vm.envOr("HYPERION_TOKEN_SYMBOL", string("USDC"))
         });
     }

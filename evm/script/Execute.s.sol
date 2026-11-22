@@ -116,6 +116,9 @@ contract Execute is DeployConfig {
         console.log("  token enabled     ", router.tokenConfig(token.token).enabled);
         console.log("  token decimals    ", router.tokenConfig(token.token).decimals);
         console.log("  token flow limit  ", router.tokenConfig(token.token).flowLimit);
+        (uint256 breakerThreshold, bool breakerTripped) = router.circuitBreaker(token.token);
+        console.log("  breaker threshold ", breakerThreshold);
+        console.log("  breaker tripped   ", breakerTripped);
         console.log("  flow available    ", router.flowAvailable(token.token, RouteKind.Cctp));
 
         bool live = router.routeEnabled(RouteKind.Cctp) && router.tokenConfig(token.token).enabled

@@ -35,6 +35,12 @@ error InvalidLimit();
 error InvalidWindow();
 error LimitNotRaised();
 
+// Per-token emergency circuit breaker. Separate vocabulary from the ordinary flow limit so an
+// operator can tell a throughput refusal from an emergency stop in a revert trace.
+error CircuitBreakerLatched(address token, uint256 observedAmount, uint256 threshold);
+error CircuitBreakerNotTripped();
+error InvalidThreshold();
+
 // Destinations.
 error InvalidDestination();
 error ZeroAddressKey();

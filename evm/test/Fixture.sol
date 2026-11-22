@@ -45,6 +45,9 @@ contract Fixture is Test {
     uint8 internal constant USDC_DECIMALS = 6;
     uint8 internal constant STELLAR_DECIMALS = 7;
     uint256 internal constant FLOW_LIMIT = 1_000_000e6;
+    /// @dev The fixture's breaker sits at the ordinary token ceiling so existing tests are not
+    /// silently squeezed; the breaker suite lowers it per test to exercise the tighter boundary.
+    uint256 internal constant BREAKER_THRESHOLD = FLOW_LIMIT;
 
     address internal admin = makeAddr("admin");
     address internal guardian = makeAddr("guardian");
@@ -96,6 +99,7 @@ contract Fixture is Test {
         _enableRoute(RouteKind.Allbridge, true);
 
         _registerToken(address(usdc), USDC_DECIMALS, FLOW_LIMIT);
+        _setBreakerThreshold(address(usdc), BREAKER_THRESHOLD);
         _setRailReceiver(RouteKind.Cctp, railReceiver);
         assertEq(router.adapter(RouteKind.Cctp), address(cctpRail));
         assertEq(router.railReceiver(RouteKind.Cctp), railReceiver);
@@ -177,6 +181,19 @@ contract Fixture is Test {
         AdminAction memory action = _empty(ActionKind.SetTokenEnabled);
         action.subject = token;
         action.amount = on ? 1 : 0;
+        _run(action);
+    }
+
+    function _setBreakerThreshold(address token, uint256 threshold) internal {
+        AdminAction memory action = _empty(ActionKind.SetTokenCircuitBreakerThreshold);
+        action.subject = token;
+        action.amount = threshold;
+        _run(action);
+    }
+
+    function _resetBreaker(address token) internal {
+        AdminAction memory action = _empty(ActionKind.ResetTokenCircuitBreaker);
+        action.subject = token;
         _run(action);
     }
 
