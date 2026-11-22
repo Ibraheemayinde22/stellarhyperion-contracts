@@ -38,6 +38,12 @@ error InvalidLimit();
 error InvalidWindow();
 error LimitNotRaised();
 
+// Per-token emergency circuit breaker. Separate vocabulary from the ordinary flow limit so an
+// operator can tell a throughput refusal from an emergency stop in a revert trace.
+error CircuitBreakerLatched(address token, uint256 observedAmount, uint256 threshold);
+error CircuitBreakerNotTripped();
+error InvalidThreshold();
+
 // Destinations.
 error InvalidDestination();
 error ZeroAddressKey();
@@ -123,3 +129,12 @@ error RecoveryExceedsSurplus();
 
 /// @notice Tracked claim liabilities cannot cover a claim being settled.
 error ClaimLiabilityInsufficient();
+// Outbound preconditions, batching, and destination flow controls.
+/// @notice The reviewed outbound configuration no longer matches the current quote.
+error FingerprintMismatch();
+/// @notice The caller's outbound deadline has passed.
+error RequestExpired();
+/// @notice The outbound batch exceeds its item or aggregate amount bound.
+error BatchLimitExceeded();
+/// @notice The destination's outbound flow window cannot accept this transfer.
+error DestinationFlowLimitExceeded();

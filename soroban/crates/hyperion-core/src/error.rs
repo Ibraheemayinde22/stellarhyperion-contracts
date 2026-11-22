@@ -116,4 +116,12 @@ pub enum HyperionError {
     OldMessengerExpired = 54,
     // A dispatch request or message names a token mapping generation that is no longer active.
     StaleMapping = 55,
+    /// The quote configuration (adapter, fee, precision) changed since reviewed.
+    FingerprintMismatch = 55,
+    /// The request expired before execution.
+    RequestExpired = 56,
+    /// The batch size or aggregate transfer amount exceeds configured bounds.
+    BatchLimitExceeded = 57,
+    /// The transfer amount exceeds the destination-specific flow limit for this window.
+    DestinationFlowLimitExceeded = 58,
 }
