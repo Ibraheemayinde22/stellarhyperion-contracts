@@ -181,6 +181,7 @@ contract OutboundProvenance is RouterActionValidator {
         } catch (bytes memory failure) {
             if (failure.length < 4) return AdapterMethodUnavailable.selector;
             bytes4 selector;
+            // solhint-disable-next-line no-inline-assembly
             assembly ("memory-safe") {
                 selector := mload(add(failure, 32))
             }
