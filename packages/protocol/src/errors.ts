@@ -101,6 +101,9 @@ export const EVM_ERROR_NAMES = [
   "InvalidLimit",
   "InvalidWindow",
   "LimitNotRaised",
+  "CircuitBreakerLatched",
+  "CircuitBreakerNotTripped",
+  "InvalidThreshold",
   "InvalidDestination",
   "ZeroAddressKey",
   "MuxedNotSupported",
@@ -457,6 +460,23 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
   LimitNotRaised: {
     summary:
       "That action would lower a limit, and limits only go up without a timelock. Lowering one waits.",
+    fault: "config",
+    retryable: false,
+  },
+  CircuitBreakerLatched: {
+    summary:
+      "This asset's token-wide emergency threshold has been reached, or this transfer would cross it. Departures for this asset are stopped until an operator resets the breaker; arrivals and existing claims still work.",
+    fault: "limit",
+    retryable: true,
+  },
+  CircuitBreakerNotTripped: {
+    summary: "That asset's emergency breaker is not tripped, so there is nothing to reset.",
+    fault: "config",
+    retryable: false,
+  },
+  InvalidThreshold: {
+    summary:
+      "An emergency threshold has to be above zero and no higher than the asset's ordinary flow limit.",
     fault: "config",
     retryable: false,
   },

@@ -68,6 +68,7 @@ contract Deploy is DeployConfig {
         console.log("timelock delay (s)  ", params.timelockDelay);
         console.log("flow window (s)     ", params.flowWindow);
         console.log("asset               ", token.token);
+        console.log("breaker threshold   ", token.breakerThreshold);
         console.log("wiring axelar       ", axelarToo);
 
         vm.startBroadcast();
@@ -125,6 +126,20 @@ contract Deploy is DeployConfig {
                 decimals: token.decimals
             }),
             string.concat("register ", token.symbol)
+        );
+
+        // Queued immediately after registration and executed in that order. A fresh router has
+        // no token yet, so the router defers the upper-bound check to execution, where the
+        // registration above has already landed.
+        _queue(
+            AdminAction({
+                kind: ActionKind.SetTokenCircuitBreakerThreshold,
+                route: RouteKind.Cctp,
+                subject: token.token,
+                amount: token.breakerThreshold,
+                decimals: 0
+            }),
+            string.concat("set ", token.symbol, " circuit breaker")
         );
 
         _queue(_routeAction(ActionKind.SetAdapter, RouteKind.Cctp, address(cctp), 0), "set cctp adapter");
@@ -260,6 +275,7 @@ contract Deploy is DeployConfig {
         vm.serializeAddress(key, "token", token.token);
         vm.serializeUint(key, "tokenDecimals", token.decimals);
         vm.serializeUint(key, "tokenFlowLimit", token.flowLimit);
+        vm.serializeUint(key, "tokenBreakerThreshold", token.breakerThreshold);
 
         uint256[] memory ids = new uint256[](queued.length);
         string[] memory whats = new string[](queued.length);
