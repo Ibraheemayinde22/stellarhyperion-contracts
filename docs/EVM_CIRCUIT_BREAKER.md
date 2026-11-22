@@ -33,11 +33,12 @@ cumulative trip and a reviewed way to re-arm it.
 - The departure that reaches the threshold exactly completes, then latches the breaker and emits
   `CircuitBreakerTripped(token, observedAmount, threshold)`.
 - Once latched, every new departure for that token is refused, whichever rail is selected.
-- `circuitBreaker(token)` returns `(threshold, tripped)`. The threshold is zero when no breaker has
-  been configured for that token.
+- `circuitBreaker(token)` returns `(threshold, tripped)`; the router view reads the immutable
+  provenance child that owns the breaker state. The threshold is zero when no breaker has been
+  configured for that token.
 - `quote` reports `CircuitBreakerTripped` while the breaker is latched, and the
   `CircuitBreakerTripped(token, observedAmount, threshold)` event records the numbers at latch
-  time.
+  time. The event is emitted by the provenance child, which will be the log's address.
 - Arrivals are not affected. `bridgeIn` never consults the breaker, because the counterpart has
   already been burned or locked on the far side.
 - Parked claims are not affected. `settleClaim` and `settleClaims` pay the recipient fixed when the
@@ -83,9 +84,10 @@ app should not promise a time.
 - **Additive ABI.** One view is added: `circuitBreaker(address)`. `TokenConfig` and its existing
   getter are unchanged. The rest of the interface change is two action kinds, one quote blocker
   and three error names.
-- **Additive storage.** The breaker uses one new token-keyed mapping. No existing storage slot,
-  token configuration or per-route flow record is reused or reordered, so an upgrade path that
-  preserves existing storage remains possible. No upgrade is performed by this change.
+- **No router storage change.** Breaker state lives in the immutable provenance child that the
+  router already deploys and trusts for quotes, action validation and outbound records. The router
+  storage layout, token configuration and per-route flow records are untouched, so an upgrade path
+  that preserves existing storage remains possible. No upgrade is performed by this change.
 - **Additive action kinds.** `SetTokenCircuitBreakerThreshold` and `ResetTokenCircuitBreaker` are
   appended to `ActionKind`. Existing action integers keep their meaning.
 - **Additive error names.** `CircuitBreakerLatched`, `CircuitBreakerNotTripped` and
@@ -101,8 +103,9 @@ app should not promise a time.
 
 ```bash
 cd evm && forge fmt --check
-cd evm && FOUNDRY_PROFILE=ci forge test
+cd evm && forge test --match-path test/unit/RouterCircuitBreaker.t.sol
 cd packages/protocol && npm run check
+script/anvil-e2e.sh
 ```
 
 The breaker suite is `evm/test/unit/RouterCircuitBreaker.t.sol`. It covers the configuration

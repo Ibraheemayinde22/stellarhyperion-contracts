@@ -5,7 +5,11 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console} from "forge-std/console.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
-import {QueuedAction, RouteKind} from "../src/HyperionTypes.sol";
+import {ActionKind, QueuedAction, RouteKind, TokenConfig} from "../src/HyperionTypes.sol";
+import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
+import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
+
+import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
 import {DeployConfig} from "./DeployConfig.sol";
 
@@ -36,6 +40,12 @@ contract Execute is DeployConfig {
         uint256[] memory ids = record.readUintArray(".queuedActionIds");
         string[] memory whats = record.readStringArray(".queuedActions");
 
+        require(record.readUint(".chainId") == block.chainid, "record chain id differs from RPC");
+        require(routerAddress.code.length != 0, "record router has no code");
+        require(ids.length > 0 && ids.length <= 64, "invalid deployment action count");
+        for (uint256 i; i < ids.length; ++i) {
+            require(ids[i] > 0 && ids[i] <= type(uint64).max, "action id exceeds uint64");
+        }
         HyperionRouter router = HyperionRouter(payable(routerAddress));
 
         console.log("record              ", path);
@@ -44,10 +54,15 @@ contract Execute is DeployConfig {
         console.log("now                 ", block.timestamp);
         console.log("");
 
+        if (vm.envOr("HYPERION_REPORT_ONLY", false)) {
+            _reportPending(router, ids, whats);
+            return;
+        }
+        _preflightProviders(router, record);
+
         uint256 executed;
         uint256 alreadyDone;
 
-        vm.startBroadcast();
         for (uint256 i = 0; i < ids.length; ++i) {
             uint64 id = uint64(ids[i]);
             string memory what = i < whats.length ? whats[i] : "unnamed";
@@ -77,25 +92,128 @@ contract Execute is DeployConfig {
                 revert("queued action expired; requeue it before executing");
             }
 
+            if (action.action.kind == ActionKind.EnableRoute && action.action.amount != 0) {
+                _preflightActivation(router, action.action.route, record);
+            }
+            vm.startBroadcast();
             router.executeAction(id);
+            vm.stopBroadcast();
             executed += 1;
             console.log("executed", id, what);
         }
-        vm.stopBroadcast();
-
         console.log("");
         console.log("executed this run   ", executed);
         console.log("already done        ", alreadyDone);
 
-        _verify(router);
+        _verify(router, record);
+    }
+
+    /// @notice Deterministic read-only schedule report. It never starts a broadcast or changes
+    /// state, and it uses the router's current timestamps rather than the deployment record's
+    /// planned times.
+    function _reportPending(HyperionRouter router, uint256[] memory ids, string[] memory whats) private view {
+        for (uint256 i = 0; i < ids.length; ++i) {
+            uint64 id = uint64(ids[i]);
+            string memory what = i < whats.length ? whats[i] : "unnamed";
+            QueuedAction memory action = router.queuedAction(id);
+            if (action.id == 0) {
+                console.log("EXCLUDED missing-or-cancelled", id, what);
+            } else if (action.executed) {
+                console.log("EXCLUDED executed", id, what);
+            } else if (block.timestamp > action.expiresAt) {
+                console.log("EXCLUDED expired", id, what);
+                console.log("  expired at        ", action.expiresAt);
+            } else if (block.timestamp < action.eta) {
+                console.log("PENDING", id, what);
+                console.log("  ready at          ", action.eta);
+                console.log("  seconds remaining ", action.eta - block.timestamp);
+                console.log("  expires at        ", action.expiresAt);
+            } else {
+                console.log("READY", id, what);
+                console.log("  expires at        ", action.expiresAt);
+            }
+        }
+    }
+
+    /// @dev Validate phase-one provider intent before signing without demanding queued router
+    /// prerequisites. Token registration and pointer equality are checked at EnableRoute.
+    function _preflightProviders(HyperionRouter router, string memory record) private view {
+        address token = record.readAddress(".token");
+        require(token.code.length != 0, "record token has no code");
+        require(
+            IERC20Metadata(token).decimals() == record.readUint(".tokenDecimals"), "token precision changed"
+        );
+        string memory chain = record.readString(".stellarChain");
+        CctpAdapter cctp = CctpAdapter(payable(record.readAddress(".cctpAdapter")));
+        require(address(cctp).code.length != 0, "record CCTP adapter has no code");
+        require(
+            cctp.ROUTER() == address(router) && cctp.route() == RouteKind.Cctp, "CCTP router or route differs"
+        );
+        require(cctp.USDC() == token, "CCTP token mapping changed");
+        require(
+            address(cctp.TOKEN_MESSENGER()) == record.readAddress(".cctpTokenMessenger"),
+            "CCTP messenger differs"
+        );
+        CctpAdapter.Lane memory lane = cctp.laneOf(chain);
+        require(
+            lane.configured && lane.enabled && lane.domain == STELLAR_CCTP_DOMAIN,
+            "CCTP destination lane is unavailable"
+        );
+        require(lane.mintRecipient == record.readBytes32(".stellarRailRecipient"), "CCTP recipient differs");
+        if (vm.keyExistsJson(record, ".axelarAdapter")) {
+            AxelarItsAdapter axelar = AxelarItsAdapter(payable(record.readAddress(".axelarAdapter")));
+            require(address(axelar).code.length != 0, "record Axelar adapter has no code");
+            require(
+                axelar.ROUTER() == address(router) && axelar.route() == RouteKind.AxelarIts,
+                "Axelar router or route differs"
+            );
+            require(address(axelar.ITS()) == record.readAddress(".axelarIts"), "Axelar ITS differs");
+            require(
+                address(axelar.GAS_SERVICE()) == record.readAddress(".axelarGasService"),
+                "Axelar gas service differs"
+            );
+            require(
+                axelar.tokenIdOf(token) == record.readBytes32(".axelarTokenId"),
+                "Axelar token mapping differs"
+            );
+            AxelarItsAdapter.Peer memory peer = axelar.peerOf(chain);
+            require(peer.configured && peer.enabled, "Axelar destination peer is unavailable");
+            require(
+                keccak256(bytes(peer.axelarChain))
+                    == keccak256(bytes(record.readString(".axelarStellarChain"))),
+                "Axelar chain name differs"
+            );
+            require(keccak256(peer.peer) == keccak256(stellarAxelarPeer()), "Axelar peer address differs");
+        }
+    }
+
+    function _preflightActivation(HyperionRouter router, RouteKind route, string memory json) private view {
+        _preflightProviders(router, json);
+        address token = json.readAddress(".token");
+        TokenConfig memory config = router.tokenConfig(token);
+        require(config.registered && config.enabled, "queued token registration has not completed");
+        require(config.decimals == json.readUint(".tokenDecimals"), "registered token precision differs");
+        require(config.flowLimit == json.readUint(".tokenFlowLimit"), "registered token flow limit differs");
+        address adapterAddress;
+        if (route == RouteKind.Cctp) {
+            adapterAddress = json.readAddress(".cctpAdapter");
+        } else if (route == RouteKind.AxelarIts && vm.keyExistsJson(json, ".axelarAdapter")) {
+            adapterAddress = json.readAddress(".axelarAdapter");
+        } else {
+            revert("record does not name this activation route");
+        }
+        require(router.adapter(route) == adapterAddress, "queued adapter configuration has not completed");
+        require(
+            router.railReceiver(route) == adapterAddress, "queued receiver configuration has not completed"
+        );
     }
 
     /// @dev Read the router back rather than trusting that the transactions above did what they
     /// said. The actions were validated on the way in and again on the way out, so this is not
     /// looking for a contract bug; it is looking for a record that described a different router,
     /// or a run that somebody interrupted and restarted against the wrong file.
-    function _verify(HyperionRouter router) private view {
-        TokenParams memory token = tokenParams();
+    function _verify(HyperionRouter router, string memory record) private view {
+        address token = record.readAddress(".token");
 
         console.log("");
         console.log("Reading the router back:");
@@ -106,22 +224,22 @@ contract Execute is DeployConfig {
         console.log("  cctp receiver     ", router.railReceiver(RouteKind.Cctp));
         console.log("  cctp enabled      ", router.routeEnabled(RouteKind.Cctp));
 
-        if (wiresAxelar()) {
+        if (vm.keyExistsJson(record, ".axelarAdapter")) {
             console.log("  axelar adapter    ", router.adapter(RouteKind.AxelarIts));
             console.log("  axelar receiver   ", router.railReceiver(RouteKind.AxelarIts));
             console.log("  axelar enabled    ", router.routeEnabled(RouteKind.AxelarIts));
         }
 
-        console.log("  token registered  ", router.tokenConfig(token.token).registered);
-        console.log("  token enabled     ", router.tokenConfig(token.token).enabled);
-        console.log("  token decimals    ", router.tokenConfig(token.token).decimals);
-        console.log("  token flow limit  ", router.tokenConfig(token.token).flowLimit);
-        (uint256 breakerThreshold, bool breakerTripped) = router.circuitBreaker(token.token);
+        console.log("  token registered  ", router.tokenConfig(token).registered);
+        console.log("  token enabled     ", router.tokenConfig(token).enabled);
+        console.log("  token decimals    ", router.tokenConfig(token).decimals);
+        console.log("  token flow limit  ", router.tokenConfig(token).flowLimit);
+        (uint256 breakerThreshold, bool breakerTripped) = router.circuitBreaker(token);
         console.log("  breaker threshold ", breakerThreshold);
         console.log("  breaker tripped   ", breakerTripped);
-        console.log("  flow available    ", router.flowAvailable(token.token, RouteKind.Cctp));
+        console.log("  flow available    ", router.flowAvailable(token, RouteKind.Cctp));
 
-        bool live = router.routeEnabled(RouteKind.Cctp) && router.tokenConfig(token.token).enabled
+        bool live = router.routeEnabled(RouteKind.Cctp) && router.tokenConfig(token).enabled
             && router.adapter(RouteKind.Cctp) != address(0) && !router.paused();
         console.log("");
         console.log(live ? "CCTP is routable." : "CCTP is NOT routable. Something above is wrong.");

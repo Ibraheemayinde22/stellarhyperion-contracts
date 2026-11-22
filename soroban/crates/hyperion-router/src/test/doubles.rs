@@ -37,6 +37,8 @@ enum RailKey {
     Router,
     Last,
     Count,
+    FailDispatch,
+    FailInbound,
 }
 
 #[contracterror]
@@ -45,6 +47,7 @@ enum RailKey {
 pub enum RailError {
     NotRouter = 1,
     NoDispatch = 2,
+    Injected = 3,
 }
 
 /// One inbound message, in the shape a rail adapter hands it over.
@@ -75,6 +78,15 @@ impl MockRail {
         env.storage().instance().set(&RailKey::Router, &router);
     }
 
+    pub fn set_faults(env: Env, dispatch: bool, inbound: bool) {
+        env.storage()
+            .instance()
+            .set(&RailKey::FailDispatch, &dispatch);
+        env.storage()
+            .instance()
+            .set(&RailKey::FailInbound, &inbound);
+    }
+
     pub fn dispatch(
         env: Env,
         caller: Address,
@@ -88,6 +100,14 @@ impl MockRail {
         let router: Address = env.storage().instance().get(&RailKey::Router).unwrap();
         if caller != router {
             return Err(RailError::NotRouter);
+        }
+        if env
+            .storage()
+            .instance()
+            .get(&RailKey::FailDispatch)
+            .unwrap_or(false)
+        {
+            return Err(RailError::Injected);
         }
         let record = DispatchRecord {
             caller,
@@ -155,7 +175,19 @@ impl MockRail {
         );
 
         match outcome {
-            Ok(Ok(claim_id)) => Ok(claim_id),
+            Ok(Ok(claim_id)) => {
+                // Fault after the nested payout/replay writes proves the whole provider
+                // invocation rolls back atomically, rather than only refusing before work.
+                if env
+                    .storage()
+                    .instance()
+                    .get(&RailKey::FailInbound)
+                    .unwrap_or(false)
+                {
+                    env.panic_with_error(HyperionError::InvalidLimit);
+                }
+                Ok(claim_id)
+            }
             Err(Ok(err)) => Err(err),
             // Anything else means the router did not get far enough to name a reason, which on
             // this path is the token itself refusing the pull. Let it abort loudly.

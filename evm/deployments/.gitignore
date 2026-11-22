@@ -3,3 +3,4 @@
 local-*.json
 evm-31337-*.json
 evm-1337-*.json
+unit-execution-record.json

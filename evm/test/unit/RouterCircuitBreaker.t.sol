@@ -130,7 +130,8 @@ contract RouterCircuitBreakerTest is Fixture {
     function test_the_departure_that_reaches_the_threshold_latches_it() public {
         _setBreakerThreshold(address(usdc), 999e6);
 
-        vm.expectEmit(true, true, true, true, address(router));
+        // The immutable provenance child owns breaker state, so it is the emitter here.
+        vm.expectEmit(true, true, true, true);
         emit IHyperionRouter.CircuitBreakerTripped(address(usdc), 999e6, 999e6);
         vm.prank(alice);
         router.bridgeOut(_usdcRequest(1000e6));
