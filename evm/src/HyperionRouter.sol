@@ -21,25 +21,20 @@ import {
     InvalidRelayerFee,
     InvalidWindow,
     LimitNotRaised,
-    MuxedNotSupported,
     NoRefundCredit,
     NotRailReceiver,
     ProviderBudgetExceeded,
     RecipientNotReady,
     RefundFailed,
     ReplayedMessage,
-    RouteDisabled,
-    RouteIsPaused,
     StaleMapping,
     TimelockAlreadyExecuted,
     TimelockDelayOutOfRange,
     TimelockExpired,
     TimelockNotQueued,
     TimelockNotReady,
-    TokenDisabled,
     TokenNotRegistered,
     Unauthorized,
-    UnknownChain,
     ZeroAddress
 } from "./HyperionErrors.sol";
 import {
@@ -70,7 +65,6 @@ import {IRailAdapter} from "./interfaces/IRailAdapter.sol";
 import {ITokenRecoveryManager} from "./interfaces/ITokenRecoveryManager.sol";
 import {AmountMath} from "./libraries/AmountMath.sol";
 import {FlowGuard, FlowWindow} from "./libraries/FlowGuard.sol";
-import {RouteMeta} from "./libraries/RouteMeta.sol";
 
 /// @title Hyperion, the EVM side
 /// @author dotmantissa
@@ -504,35 +498,21 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         FlowWindow memory flow;
         (plan, flow) = _previewOutbound(request);
         _flow[_flowKey(request.token, request.route)] = flow;
+        OUTBOUND_PROVENANCE.consumeBreaker(request.token, plan.net);
     }
 
     function _previewOutbound(OutboundRequest memory request)
         private
         view
-        returns (OutboundPlan memory plan, FlowWindow memory flow)
+        returns (OutboundPlan memory, FlowWindow memory flow)
     {
-        if (request.amount == 0) revert InvalidAmount();
-        if (routePaused[request.route]) revert RouteIsPaused(request.route);
-        if (!routeEnabled[request.route]) revert RouteDisabled();
-        if (bytes(request.destination.chain).length == 0) revert UnknownChain();
-
-        (AddressKind kind,,) = OUTBOUND_PROVENANCE.checkDestination(request.destination.strkey);
-        if (kind == AddressKind.MuxedAccount && !RouteMeta.carriesPayload(request.route)) {
-            revert MuxedNotSupported();
-        }
-
-        TokenConfig memory cfg = _tokens[request.token];
-        if (!cfg.registered) revert TokenNotRegistered();
-        if (!cfg.enabled) revert TokenDisabled();
         if (
             request.route == RouteKind.Cctp
                 && (request.destination.mappingRevision == 0
                     || request.destination.remoteDecimals != request.destinationDecimals)
         ) revert StaleMapping();
 
-        (uint256 fee, uint256 net) = OUTBOUND_PROVENANCE.outboundAmounts(
-            request.amount, feeBps, cfg.decimals, request.destinationDecimals, request.minDestinationAmount
-        );
+        (uint256 fee, uint256 net, address adapterAddress) = OUTBOUND_PROVENANCE.previewOutbound(request);
 
         // The flow limit is charged against what crosses, not against what the sender handed
         // over. The fee never leaves this chain, so it is not cross-chain exposure and counting
@@ -543,11 +523,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             _effectiveFlowLimit(request.token, request.route), net, uint64(block.timestamp), flowWindow
         );
 
-        address adapterAddress = _adapters[request.route];
-        if (adapterAddress == address(0)) revert AdapterNotSet();
-        if (adapterAddress.codehash != adapterCodeHash[request.route]) revert AdapterIdentityMismatch();
-
-        plan = OutboundPlan({fee: fee, net: net, gross: fee + net, adapterAddress: adapterAddress});
+        return (OutboundPlan({fee: fee, net: net, gross: fee + net, adapterAddress: adapterAddress}), flow);
     }
 
     /// @dev The log and read-only provenance describe the same authenticated departure, carrying every field
@@ -887,6 +863,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         emit TokenRegistered(token, cfg);
     }
 
+    /// @inheritdoc IHyperionRouter
+    function circuitBreaker(address token) external view override returns (uint256, bool) {
+        return OUTBOUND_PROVENANCE.circuitBreaker(token);
+    }
+
     // -------------------------------------------------------------------------------------
     // Everything else, on a clock
     // -------------------------------------------------------------------------------------
@@ -1101,7 +1082,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     function _applyAction(AdminAction memory action) private {
         ActionKind kind = action.kind;
-
+        if (kind >= ActionKind.SetTokenCircuitBreakerThreshold) {
+            OUTBOUND_PROVENANCE.configureBreaker(action);
+            return;
+        }
         if (kind == ActionKind.SetFeeBps) {
             feeBps = uint16(action.amount);
         } else if (kind == ActionKind.SetTreasury) {

@@ -74,6 +74,10 @@ export const SOROBAN_ERROR_NAMES = [
   "RotationNotReady",
   "MessengerUnchanged",
   "OldMessengerExpired",
+  "FingerprintMismatch",
+  "RequestExpired",
+  "BatchLimitExceeded",
+  "DestinationFlowLimitExceeded",
   "StaleMapping",
 ] as const;
 
@@ -102,6 +106,9 @@ export const EVM_ERROR_NAMES = [
   "InvalidLimit",
   "InvalidWindow",
   "LimitNotRaised",
+  "CircuitBreakerLatched",
+  "CircuitBreakerNotTripped",
+  "InvalidThreshold",
   "InvalidDestination",
   "ZeroAddressKey",
   "MuxedNotSupported",
@@ -150,10 +157,13 @@ export const EVM_ERROR_NAMES = [
   "TopUpBindingMismatch",
   "FeeTokenNotSupported",
   "InvalidRelayerFee",
-
   "TokenRecoveryForbidden",
   "RecoveryExceedsSurplus",
   "ClaimLiabilityInsufficient",
+  "FingerprintMismatch",
+  "RequestExpired",
+  "BatchLimitExceeded",
+  "DestinationFlowLimitExceeded",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -467,6 +477,23 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     fault: "config",
     retryable: false,
   },
+  CircuitBreakerLatched: {
+    summary:
+      "This asset's emergency breaker is latched, or this transfer exceeds its remaining headroom. A latched breaker requires a reviewed reset; otherwise reduce the amount or wait for rolling headroom. Arrivals and existing claims still work.",
+    fault: "limit",
+    retryable: true,
+  },
+  CircuitBreakerNotTripped: {
+    summary: "That asset's emergency breaker is not tripped, so there is nothing to reset.",
+    fault: "config",
+    retryable: false,
+  },
+  InvalidThreshold: {
+    summary:
+      "An emergency threshold has to be above zero and no higher than the asset's ordinary flow limit.",
+    fault: "config",
+    retryable: false,
+  },
   TimelockAlreadyExecuted: {
     summary: "That admin action already ran.",
     fault: "timing",
@@ -597,6 +624,27 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     summary: "The in-flight message names a retired messenger whose acceptance window has closed.",
     fault: "timing",
     retryable: false,
+  },
+  FingerprintMismatch: {
+    summary:
+      "The route configuration, adapter, fee, or token precision changed since the quote was reviewed.",
+    fault: "config",
+    retryable: true,
+  },
+  RequestExpired: {
+    summary: "The request expired before execution.",
+    fault: "timing",
+    retryable: false,
+  },
+  BatchLimitExceeded: {
+    summary: "The batch transfer exceeds the item count or total amount bounds.",
+    fault: "limit",
+    retryable: false,
+  },
+  DestinationFlowLimitExceeded: {
+    summary: "The transfer exceeds the destination-specific volume ceiling for the current window.",
+    fault: "limit",
+    retryable: true,
   },
 };
 
