@@ -9,7 +9,9 @@ mod setup;
 mod admin;
 mod benchmarks;
 mod capabilities;
+mod codec_parity;
 mod discovery;
+mod event_codec_parity;
 mod event_fixtures;
 mod hostile_boundaries;
 mod inbound;
@@ -50,3 +52,5 @@ impl ProviderFaultFixture {
         self.controller.reset();
     }
 }
+
+mod outbound_policy_regression;
