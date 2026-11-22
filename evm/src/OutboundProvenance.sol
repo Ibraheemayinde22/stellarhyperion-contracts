@@ -201,13 +201,13 @@ contract OutboundProvenance is RouterActionValidator {
         IRouterQuoteState target = IRouterQuoteState(ROUTER);
         if (target.paused()) revert Pausable.EnforcedPause();
 
-        (, uint256 net, address adapterAddress) = previewOutbound(request);
+        (, uint256 net, address adapterAddress) = this.previewOutbound(request);
         uint256 available = target.flowAvailable(request.token, request.route);
         if (net > available) revert FlowLimitExceeded(net, available);
 
         try IRailAdapter(adapterAddress).checkDispatch(request.token, net, request.destination) {}
         catch (bytes memory failure) {
-            rethrowAdapterFailure(failure);
+            this.rethrowAdapterFailure(failure);
         }
     }
 
