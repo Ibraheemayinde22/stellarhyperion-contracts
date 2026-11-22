@@ -21,7 +21,10 @@ mod types;
 #[cfg(test)]
 mod test;
 
-pub use adapter::{PaidRailAdapter, PaidRailAdapterClient, RailAdapter, RailAdapterClient};
+pub use adapter::{
+    CctpRailAdapter, CctpRailAdapterClient, PaidRailAdapter, PaidRailAdapterClient, RailAdapter,
+    RailAdapterClient,
+};
 pub use storage::DataKey;
 pub use timelock::{GRACE_PERIOD, MAX_TIMELOCK_DELAY, MIN_TIMELOCK_DELAY};
 pub use types::{
@@ -1135,14 +1138,28 @@ fn bounded_plan(
         return Err(HyperionError::InvalidAmount);
     }
     let plan = plan_outbound(env, request, gas_amount)?;
-    match RailAdapterClient::new(env, &plan.adapter_addr).try_check_dispatch(
-        &env.current_contract_address(),
-        &request.token,
-        &plan.net,
-        &request.destination.chain,
-        &request.destination.address,
-        &gas_amount,
-    ) {
+    let dispatch_check = if request.route == RouteKind::Cctp {
+        adapter::CctpRailAdapterClient::new(env, &plan.adapter_addr).try_check_dispatch_revision(
+            &env.current_contract_address(),
+            &request.token,
+            &plan.net,
+            &request.destination.chain,
+            &request.destination.address,
+            &request.destination.mapping_revision,
+            &request.destination_decimals,
+            &gas_amount,
+        )
+    } else {
+        RailAdapterClient::new(env, &plan.adapter_addr).try_check_dispatch(
+            &env.current_contract_address(),
+            &request.token,
+            &plan.net,
+            &request.destination.chain,
+            &request.destination.address,
+            &gas_amount,
+        )
+    };
+    match dispatch_check {
         Ok(Ok(())) => Ok(plan),
         Err(Ok(error)) if error.is_type(soroban_sdk::xdr::ScErrorType::Contract) => {
             match error.get_code() {
@@ -1156,6 +1173,7 @@ fn bounded_plan(
                 19 => Err(HyperionError::UnknownChain),
                 39 => Err(HyperionError::TokenNotMapped),
                 44 => Err(HyperionError::UnsupportedRoute),
+                55 => Err(HyperionError::StaleMapping),
                 _ => Err(HyperionError::AdapterMethodUnavailable),
             }
         }
@@ -1182,6 +1200,7 @@ fn bridge_out_inner(
         token,
         route,
         destination,
+        destination_decimals,
         ..
     } = request;
     storage::set_flow_window(&env, &token, route, &updated);
@@ -1203,16 +1222,31 @@ fn bridge_out_inner(
         if fee > 0 {
             transfer_exact(&client, &sender, &treasury, fee, false)?;
         }
-        adapter::PaidRailAdapterClient::new(&env, &adapter_addr).dispatch_from(
-            &this,
-            &sender,
-            &token,
-            &net,
-            &destination.chain,
-            &destination.address,
-            &nonce,
-            &gas,
-        );
+        if route == RouteKind::Cctp {
+            adapter::CctpRailAdapterClient::new(&env, &adapter_addr).dispatch_from_revision(
+                &this,
+                &sender,
+                &token,
+                &net,
+                &destination.chain,
+                &destination.address,
+                &nonce,
+                &destination.mapping_revision,
+                &destination_decimals,
+                &gas,
+            );
+        } else {
+            adapter::PaidRailAdapterClient::new(&env, &adapter_addr).dispatch_from(
+                &this,
+                &sender,
+                &token,
+                &net,
+                &destination.chain,
+                &destination.address,
+                &nonce,
+                &gas,
+            );
+        }
     } else {
         let before_this = client.balance(&this);
         transfer_exact(&client, &sender, &this, gross, false)?;
@@ -1226,14 +1260,27 @@ fn bridge_out_inner(
             return Err(HyperionError::InvalidAmount);
         }
 
-        RailAdapterClient::new(&env, &adapter_addr).dispatch(
-            &this,
-            &token,
-            &net,
-            &destination.chain,
-            &destination.address,
-            &nonce,
-        );
+        if route == RouteKind::Cctp {
+            adapter::CctpRailAdapterClient::new(&env, &adapter_addr).dispatch_revision(
+                &this,
+                &token,
+                &net,
+                &destination.chain,
+                &destination.address,
+                &destination.mapping_revision,
+                &destination_decimals,
+                &nonce,
+            );
+        } else {
+            RailAdapterClient::new(&env, &adapter_addr).dispatch(
+                &this,
+                &token,
+                &net,
+                &destination.chain,
+                &destination.address,
+                &nonce,
+            );
+        }
     }
 
     assert_exact_transfer(client.balance(&sender), sender_before, expected_debit)?;

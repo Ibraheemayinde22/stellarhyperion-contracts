@@ -451,14 +451,14 @@ contract AxelarItsAdapter is IRailAdapter, IInterchainTokenExecutable, Ownable2S
                 amount,
                 recipient,
                 Origin({
-                    chain: chain,
-                    nonce: sourceNonce,
-                    // Axelar's command id is unique per delivery and is what its own replay protection
-                    // is keyed on, so the router keys its replay guard on the same thing rather than
-                    // on a nonce the far side chose.
-                    messageId: commandId,
-                    sender: keccak256(sourceAddress)
-                })
+                chain: chain,
+                nonce: sourceNonce,
+                // Axelar's command id is unique per delivery and is what its own replay protection
+                // is keyed on, so the router keys its replay guard on the same thing rather than
+                // on a nonce the far side chose.
+                messageId: commandId,
+                sender: keccak256(sourceAddress)
+            })
             );
         // An approval that outlives the call it was for is an approval somebody eventually finds.
         IERC20(token).forceApprove(ROUTER, 0);

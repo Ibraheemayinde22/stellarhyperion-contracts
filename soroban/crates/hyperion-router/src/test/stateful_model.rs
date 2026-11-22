@@ -75,6 +75,7 @@ impl Driver {
                         destination: Destination {
                             chain: self.w.ethereum(),
                             address: evm_destination(&self.w.env, 1),
+                            mapping_revision: 0,
                         },
                         destination_decimals: 6,
                         min_destination_amount: 0,

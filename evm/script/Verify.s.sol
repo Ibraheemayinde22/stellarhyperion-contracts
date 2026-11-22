@@ -77,6 +77,10 @@ contract Verify is DeployConfig {
         _expectUint("cctp lane domain", lane.domain, STELLAR_CCTP_DOMAIN);
         bytes32 recordedRecipient = record.readBytes32(".stellarRailRecipient");
         _expectBytes32("cctp mint recipient", lane.mintRecipient, recordedRecipient);
+        _expectBytes32("cctp remote token", lane.remoteToken, record.readBytes32(".stellarCctpToken"));
+        _expectUint("cctp mapping revision", lane.mappingRevision, record.readUint(".cctpMappingRevision"));
+        _expectUint("cctp local decimals", lane.localDecimals, record.readUint(".cctpLocalDecimals"));
+        _expectUint("cctp remote decimals", lane.remoteDecimals, record.readUint(".cctpRemoteDecimals"));
 
         address token = record.readAddress(".token");
         _expectTrue("token registered", router.tokenConfig(token).registered);

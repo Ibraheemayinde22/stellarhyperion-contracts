@@ -30,6 +30,7 @@ import {
     ReplayedMessage,
     RouteDisabled,
     RouteIsPaused,
+    StaleMapping,
     TimelockAlreadyExecuted,
     TimelockDelayOutOfRange,
     TimelockExpired,
@@ -411,7 +412,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         OutboundPlan memory plan = _planOutbound(request);
         // The legacy wrapper retains its historical path; bounded and signed entrypoints run the
         // adapter's local validation before any token movement.
-        if (msg.sig != this.bridgeOut.selector) _checkAdapterDispatch(request, plan);
+        if (request.route == RouteKind.Cctp || msg.sig != this.bridgeOut.selector) {
+            _checkAdapterDispatch(request, plan);
+        }
 
         _collectOutboundTokens(request.token, sender, plan);
 
@@ -521,6 +524,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         TokenConfig memory cfg = _tokens[request.token];
         if (!cfg.registered) revert TokenNotRegistered();
         if (!cfg.enabled) revert TokenDisabled();
+        if (
+            request.route == RouteKind.Cctp
+                && (request.destination.mappingRevision == 0
+                    || request.destination.remoteDecimals != request.destinationDecimals)
+        ) revert StaleMapping();
 
         (uint256 fee, uint256 net) = OUTBOUND_PROVENANCE.outboundAmounts(
             request.amount, feeBps, cfg.decimals, request.destinationDecimals, request.minDestinationAmount

@@ -28,8 +28,9 @@ import { TokenMappingConflict } from "../src/tokenMapping.js";
 import { AddressKind } from "../src/addresses.js";
 import {
   BURN_MESSAGE_VERSION,
+  CCTP_HOOK_VERSION,
+  CCTP_OUTBOUND_NOTE_LEN,
   FINALITY_THRESHOLD_FINALIZED,
-  HOOK_VERSION,
   MESSAGE_VERSION,
   STELLAR_DOMAIN,
 } from "../src/cctp.js";
@@ -617,7 +618,7 @@ describe("the constants both chains agree on", () => {
     expect(source).toMatch(/VERSION_MUXED[^=]*=\s*12\s*<<\s*3/);
   });
 
-  it("has the same CCTP offsets and constants in the Rust", () => {
+  it("has the same CCTP offsets and revision-bound wire formats across Rust and Solidity", () => {
     const source = read(join(coreSrc, "cctp.rs"));
     const expectConst = (name: string, value: number): void => {
       const match = new RegExp(`${name}\\s*:\\s*[a-z0-9]+\\s*=\\s*(\\d+)`).exec(source);
@@ -628,9 +629,16 @@ describe("the constants both chains agree on", () => {
     expectConst("MESSAGE_VERSION", MESSAGE_VERSION);
     expectConst("BURN_MESSAGE_VERSION", BURN_MESSAGE_VERSION);
     expectConst("FINALITY_THRESHOLD_FINALIZED", FINALITY_THRESHOLD_FINALIZED);
-    expectConst("HOOK_VERSION", HOOK_VERSION);
+    expectConst("HOOK_VERSION", CCTP_HOOK_VERSION);
+    expectConst("CCTP_OUTBOUND_NOTE_LEN", CCTP_OUTBOUND_NOTE_LEN);
     expectConst("MSG_BODY", 148);
     expectConst("BURN_HOOK_DATA", 228);
+
+    const solidity = read(join(evmRoot, "src", "libraries", "HyperionNotes.sol"));
+    expect(solidity).toMatch(new RegExp(`CCTP_HOOK_VERSION\\s*=\\s*${String(CCTP_HOOK_VERSION)}`));
+    expect(solidity).toMatch(
+      new RegExp(`CCTP_OUTBOUND_NOTE_LEN\\s*=\\s*${String(CCTP_OUTBOUND_NOTE_LEN)}`),
+    );
   });
 
   it("has the same note layout in the Rust", () => {
