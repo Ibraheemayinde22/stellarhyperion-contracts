@@ -65,12 +65,14 @@ contract RouterAdminTest is Fixture {
         vm.warp(pending.queued.expiresAt + 1);
         assertEq(uint256(router.actionStatus(id).status), uint256(ActionStatus.Expired));
 
+        vm.prank(admin);
         uint64 freshId = router.queueAction(action);
         vm.warp(block.timestamp + TIMELOCK + 1);
         vm.prank(admin);
         router.executeAction(freshId);
         assertEq(uint256(router.actionStatus(freshId).status), uint256(ActionStatus.Executed));
 
+        vm.prank(admin);
         uint64 cancelledId = router.queueAction(action);
         vm.prank(guardian);
         router.cancelAction(cancelledId);
