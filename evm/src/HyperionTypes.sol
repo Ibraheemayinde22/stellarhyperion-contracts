@@ -198,6 +198,24 @@ struct QueuedAction {
     bool executed;
 }
 
+/// @dev Lifecycle status exposed for a queued administrative action.
+enum ActionStatus {
+    NotFound,
+    Pending,
+    Executable,
+    Executed,
+    Expired,
+    Cancelled
+}
+
+/// @dev Typed action state plus the exact payload identity retained for review.
+struct ActionStatusView {
+    ActionStatus status;
+    QueuedAction queued;
+    bool cancelled;
+    bytes32 payloadIdentity;
+}
+
 /// @dev A timelocked proposal to return only accidental, unencumbered ERC20 custody.
 struct QueuedTokenRecovery {
     uint64 id;
