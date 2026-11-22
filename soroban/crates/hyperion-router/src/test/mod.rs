@@ -10,6 +10,7 @@ mod admin;
 mod benchmarks;
 mod capabilities;
 mod discovery;
+mod event_fixtures;
 mod hostile_boundaries;
 mod inbound;
 mod maintenance;

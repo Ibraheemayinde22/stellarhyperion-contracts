@@ -26,6 +26,7 @@ against itself.
 | `amounts`     | Fees, decimal conversion, and formatting that never touches a float                    |
 | `flow`        | Sliding flow windows, the same arithmetic both routers run                             |
 | `cctp`        | Reading CCTP V2 messages, which is all this side ever does with them                   |
+| `events`      | Typed, versioned inspection of one raw router event, Soroban XDR or EVM log            |
 | `chains`      | Chains, rpc endpoints, explorers, CCTP domains, finality                               |
 | `quotes`      | Pricing a rail locally, so an app can render four of them while somebody types         |
 | `deployments` | Deployment records, and a loader that checks them instead of casting them              |
@@ -346,3 +347,54 @@ pairs and malformed values raise `ProviderAddressError` with the failing field p
 token addresses, chain identities, and precision are never inferred from or replaced by provider
 overrides. Older deployment records remain valid because the field is optional. Adding overrides
 is therefore data-only and requires no schema-version change.
+
+## Inspecting raw router events
+
+`inspectSorobanRouterEvent` takes one entry of a Stellar RPC `getEvents` response: base64 XDR
+`topic` and `value`, plus `type`, `contractId` and `inSuccessfulContractCall` when present.
+`inspectEvmRouterEvent` takes one log in the `eth_getLogs`/viem shape (`address`, `topics`, `data`,
+`removed`). Both return `{ ok: true, event }` or `{ ok: false, name, diagnostics }`. They need no
+database, no XDR library and no ABI decoder, and keep no state between calls.
+
+```ts
+const result = inspectSorobanRouterEvent(rpcEvent, { router: ROUTER_CONTRACT_ID });
+if (result.ok && result.event.payout.kind === "router-paid-recipient") {
+  // The router reported paying this recipient in a successful call. Finality is still yours to check.
+}
+```
+
+The inspected events are `BridgeOut`, `BridgeIn`, `ClaimParked`, `ClaimSettled`,
+`ClaimPayoutFailure` (version 1) and, on Soroban, `ReplayRecorded` (version 1).
+
+- **Integers stay exact.** Nonces, claim ids and amounts are `bigint` at the declared width: `u64`,
+  `i128` and `uint256`. The fixtures cover `u64::MAX`, `i128::MAX` and `2^256 - 1`.
+- **Diagnostics are precise.** Each refusal has a `code` (`MalformedEncoding`, `NotRouterEvent`,
+  `UnknownEvent`, `UninspectedEvent`, `UnsupportedEventVersion`, `SchemaMismatch`,
+  `ValueOutOfRange`, `InconsistentRecord`, `UnexpectedEmitter` or `NotCommitted`), a `path`
+  (`topic[2]`, `value.transfer.fee`, `data[0x80]`) and a `detail`. Byte-level failures include the
+  offset. A `claim_failure_v2` topic or a replay record `version` other than 1 is
+  `UnsupportedEventVersion` and is never decoded on a guess. Unknown, missing or mistyped fields
+  are refused rather than ignored.
+- **Nothing is mislabelled as a payout.** `payout` is `router-paid-recipient` only for a Soroban
+  `BridgeIn` with `delivered: true` or a `ClaimSettled` on either chain, and only when
+  `options.router` was supplied and matched the emitter. Otherwise it is `unverified-emitter`.
+  `BridgeOut` is a rail dispatch, `ReplayRecorded` is a processed message id, and `ClaimParked` and
+  `ClaimPayoutFailure` are outstanding claims. None of these is a payout. An **EVM `BridgeIn` is
+  never payout evidence**, because the EVM router emits it for parked deliveries as well. The
+  outcome is the presence or absence of a `ClaimParked` in the same transaction. A Soroban
+  `BridgeIn` carries no message id; join it to the `ReplayRecorded` from the same call. A removed
+  EVM log or an event from a failed Soroban call is `NotCommitted`.
+
+EVM addresses are returned as lowercase hex, because checksumming needs keccak and the package has
+no runtime dependencies. Event selectors are fixed constants (`EVM_ROUTER_EVENT_SELECTORS`). The
+test suite recomputes them with viem and checks each signature against the generated router ABI.
+The Soroban fixtures in `testdata/router-events-soroban.json` are the real host's encodings. They
+are captured by a router test that fails if the committed file drifts.
+
+**Compatibility and migration.** This adds new exports only. No contract, event layout, ABI, wire
+format or deployment record changes, and no migration is needed. Because the inspector is strict, a
+future event layout or version shows up as a named refusal rather than a silently wrong record.
+Supporting it means a new inspector version. Inspection reads history and does not activate any
+route. The active deployment is still Stellar Testnet outbound ITS/CCTP. EVM and other rails remain
+gated until they are independently validated, and decoding an EVM log is not evidence that an EVM
+route is live.

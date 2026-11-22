@@ -48,6 +48,9 @@ export * from "./flow.js";
 // Reading CCTP V2 messages, which is all this side ever does with them.
 export * from "./cctp.js";
 
+// Turning one raw router event (Soroban RPC XDR or an EVM log) into a typed, versioned record.
+export * from "./events.js";
+
 // Chains, their rpc endpoints, their explorers and their CCTP domains.
 export * from "./chains.js";
 
