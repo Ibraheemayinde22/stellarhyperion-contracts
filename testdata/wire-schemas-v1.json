@@ -577,6 +577,22 @@
         {
           "name": "OldMessengerExpired",
           "code": 54
+        },
+        {
+          "name": "FingerprintMismatch",
+          "code": 55
+        },
+        {
+          "name": "RequestExpired",
+          "code": 56
+        },
+        {
+          "name": "BatchLimitExceeded",
+          "code": 57
+        },
+        {
+          "name": "DestinationFlowLimitExceeded",
+          "code": 58
         }
       ]
     },
