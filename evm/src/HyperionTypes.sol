@@ -37,6 +37,10 @@ struct Destination {
     string chain;
     /// Fifty six characters starting with G or C, or sixty nine starting with M.
     string strkey;
+    /// Mapping generation explicitly accepted by the sender for CCTP.
+    uint32 mappingRevision;
+    /// Decimal precision of the destination token mapping; zero for other routes.
+    uint8 remoteDecimals;
 }
 
 /// @dev A request to send funds out of this chain.

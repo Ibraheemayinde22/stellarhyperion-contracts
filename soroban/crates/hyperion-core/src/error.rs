@@ -114,4 +114,6 @@ pub enum HyperionError {
     MessengerUnchanged = 53,
     // A message from the retired old messenger arrived outside the overlap acceptance window.
     OldMessengerExpired = 54,
+    // A dispatch request or message names a token mapping generation that is no longer active.
+    StaleMapping = 55,
 }

@@ -73,6 +73,7 @@ error RecipientNotReady();
 error TokenNotRegistered();
 error TokenDisabled();
 error TokenNotMapped();
+error StaleMapping();
 error RailNotConfigured();
 error AlreadyConfigured();
 error ProtectedAsset();

@@ -143,6 +143,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -206,6 +216,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -279,6 +299,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -372,6 +402,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -455,6 +495,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -523,6 +573,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -698,6 +758,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -813,6 +883,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -906,6 +986,16 @@ export const hyperionRouterInterfaceAbi = [
                 "name": "strkey",
                 "type": "string",
                 "internalType": "string"
+              },
+              {
+                "name": "mappingRevision",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "remoteDecimals",
+                "type": "uint8",
+                "internalType": "uint8"
               }
             ]
           },
@@ -1315,6 +1405,16 @@ export const hyperionRouterInterfaceAbi = [
             "name": "strkey",
             "type": "string",
             "internalType": "string"
+          },
+          {
+            "name": "mappingRevision",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "remoteDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
           }
         ]
       },
@@ -1413,6 +1513,16 @@ export const hyperionRouterInterfaceAbi = [
             "name": "strkey",
             "type": "string",
             "internalType": "string"
+          },
+          {
+            "name": "mappingRevision",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "remoteDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
           }
         ]
       },
@@ -1516,6 +1626,16 @@ export const hyperionRouterInterfaceAbi = [
             "name": "strkey",
             "type": "string",
             "internalType": "string"
+          },
+          {
+            "name": "mappingRevision",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "remoteDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
           }
         ]
       },
