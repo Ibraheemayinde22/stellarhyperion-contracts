@@ -764,6 +764,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
                     OutboundProvenance.quoteV2, (route, token, amount, destination, destinationDecimals)
                 )
             );
+        // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(v)
             if iszero(ok) { revert(add(result, 32), mload(result)) }
