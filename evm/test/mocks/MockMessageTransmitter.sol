@@ -11,10 +11,18 @@ contract MockMessageTransmitter is IMessageTransmitterV2 {
     mapping(bytes32 id => bool seen) public processed;
     bool public shouldRevert;
     uint256 public receiveCount;
+    uint8 public fault;
+    uint256 public calls;
+    bool public reentryRejected;
+    bytes4 public reentryError;
 
     constructor(address usdc, uint32 domain) {
         USDC = usdc;
         localDomain = domain;
+    }
+
+    function setFault(uint8 value) external {
+        fault = value;
     }
 
     function setShouldRevert(bool value) external {
@@ -25,7 +33,7 @@ contract MockMessageTransmitter is IMessageTransmitterV2 {
         localDomain = domain;
     }
 
-    function receiveMessage(bytes calldata message, bytes calldata) external override {
+    function receiveMessage(bytes calldata message, bytes calldata) external override returns (bool) {
         if (shouldRevert) revert("MockMessageTransmitter: invalid attestation");
         if (message.length < 148 + 228) revert("MockMessageTransmitter: malformed");
 
@@ -37,9 +45,35 @@ contract MockMessageTransmitter is IMessageTransmitterV2 {
             amount = (amount << 8) | uint8(message[216 + i]);
         }
         processed[replayId] = true;
+        ++calls;
 
         address recipient = address(bytes20(bytes32(message[184:216]) << 96));
         MockERC20(USDC).mint(recipient, amount);
         ++receiveCount;
+        if (fault == 3) --amount;
+        if (fault == 4) ++amount;
+        if (fault != 5) MockERC20(USDC).mint(recipient, amount);
+        if (fault == 1) revert("provider failed after mint");
+        if (fault == 2) return false;
+        if (fault == 6 || fault == 7) {
+            (bool ok, bytes memory reason) =
+                msg.sender.call(abi.encodeWithSignature("receiveMessage(bytes,bytes)", message, hex"51"));
+            reentryRejected = !ok;
+            // Intentionally keep only the first four revert bytes: the ABI error selector.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            reentryError = bytes4(reason);
+            if (fault == 7) require(ok, "nested receive rejected");
+        }
+        if (fault == 8) _malformedReturn();
+        return true;
+    }
+
+    function _malformedReturn() private pure {
+        // Intentionally return a noncanonical bool from the hostile provider fixture.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            mstore(0, 2)
+            return(0, 32)
+        }
     }
 }

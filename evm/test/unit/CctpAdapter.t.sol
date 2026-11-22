@@ -103,6 +103,19 @@ contract CctpAdapterTest is Fixture {
         adapter.setLane(STELLAR, STELLAR_DOMAIN, MINT_RECIPIENT);
         vm.prank(admin);
         adapter.setRemoteSender(STELLAR_DOMAIN, MINT_RECIPIENT);
+        adapter = new CctpAdapter(address(router), address(messenger), address(usdc), admin);
+
+        vm.startPrank(admin);
+        adapter.setMessageTransmitter(address(transmitter));
+        adapter.setInboundLane(
+            STELLAR_DOMAIN,
+            STELLAR,
+            keccak256("remote Circle TokenMessenger"),
+            MINT_RECIPIENT,
+            keccak256("remote USDC")
+        );
+        adapter.setLane(STELLAR, STELLAR_DOMAIN, MINT_RECIPIENT);
+        vm.stopPrank();
         _setRailReceiver(RouteKind.Cctp, address(adapter));
     }
 
@@ -175,6 +188,32 @@ contract CctpAdapterTest is Fixture {
 
     function _validMessage(bytes32 nonce, bytes32 sender) internal view returns (bytes memory) {
         return _message(bob, 4242, nonce, sender, bytes32(uint256(uint160(address(usdc)))));
+        bytes memory header = abi.encodePacked(
+            uint32(1),
+            uint32(27),
+            uint32(1),
+            nonce,
+            keccak256("remote Circle TokenMessenger"),
+            bytes32(uint256(uint160(address(messenger)))),
+            bytes32(0),
+            uint32(2000),
+            uint32(2000)
+        );
+        bytes memory burn = abi.encodePacked(
+            uint32(1),
+            burnToken,
+            bytes32(uint256(uint160(address(adapter)))),
+            uint256(AMOUNT),
+            sender,
+            uint256(0),
+            uint256(0),
+            uint256(0)
+        );
+        return bytes.concat(header, burn, abi.encodePacked(uint8(1), bytes20(recipient), sourceNonce));
+    }
+
+    function _validMessage(bytes32 nonce, bytes32 sender) internal view returns (bytes memory) {
+        return _message(bob, 4242, nonce, sender, keccak256("remote USDC"));
     }
 
     function test_receive_delivers_attested_usdc_and_records_fixed_recipient() public {
@@ -312,17 +351,17 @@ contract CctpAdapterTest is Fixture {
 
     function test_constructor_refuses_a_zero_router() public {
         vm.expectRevert(ZeroAddress.selector);
-        new CctpAdapter(address(0), address(messenger), address(transmitter), address(usdc), admin);
+        new CctpAdapter(address(0), address(messenger), address(usdc), admin);
     }
 
     function test_constructor_refuses_a_zero_token_messenger() public {
         vm.expectRevert(ZeroAddress.selector);
-        new CctpAdapter(address(router), address(0), address(transmitter), address(usdc), admin);
+        new CctpAdapter(address(router), address(0), address(usdc), admin);
     }
 
     function test_constructor_refuses_a_zero_usdc() public {
         vm.expectRevert(ZeroAddress.selector);
-        new CctpAdapter(address(router), address(messenger), address(transmitter), address(0), admin);
+        new CctpAdapter(address(router), address(messenger), address(0), admin);
     }
 
     function test_route_is_cctp() public view {
@@ -371,6 +410,7 @@ contract CctpAdapterTest is Fixture {
     function test_set_lane_says_so_twice_because_two_things_happened() public {
         CctpAdapter fresh =
             new CctpAdapter(address(router), address(messenger), address(transmitter), address(usdc), admin);
+        CctpAdapter fresh = new CctpAdapter(address(router), address(messenger), address(usdc), admin);
 
         vm.expectEmit(true, true, true, true, address(fresh));
         emit LaneConfigured("solana", 5, MINT_RECIPIENT);
@@ -696,6 +736,7 @@ contract CctpAdapterTest is Fixture {
         DeafRouter deaf = new DeafRouter();
         CctpAdapter orphan =
             new CctpAdapter(address(deaf), address(messenger), address(transmitter), address(usdc), admin);
+        CctpAdapter orphan = new CctpAdapter(address(deaf), address(messenger), address(usdc), admin);
         vm.prank(admin);
         orphan.setLane(STELLAR, STELLAR_DOMAIN, MINT_RECIPIENT);
 
@@ -818,9 +859,7 @@ contract CctpAdapterTest is Fixture {
     function test_approval_cleanup_failure_rolls_back_burn_and_allows_retry() public {
         for (uint8 mode = 1; mode <= 3; ++mode) {
             InconsistentApprovalToken asset = new InconsistentApprovalToken();
-            CctpAdapter fresh = new CctpAdapter(
-                address(router), address(messenger), address(transmitter), address(asset), admin
-            );
+            CctpAdapter fresh = new CctpAdapter(address(router), address(messenger), address(asset), admin);
             vm.prank(admin);
             fresh.setLane(STELLAR, STELLAR_DOMAIN, MINT_RECIPIENT);
             asset.mint(address(fresh), AMOUNT);
