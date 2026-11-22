@@ -69,12 +69,6 @@ interface IRouterQuoteState is IRouterActionState {
     function intentNonce(address sender) external view returns (uint256);
     /// @notice Decode and validate the destination using the router's unchanged pure ABI.
     function checkDestination(string calldata strkey) external view returns (AddressKind, bytes32, uint64);
-    /// @notice Check outbound admission through the router's unchanged validation path.
-    function checkOutbound(
-        OutboundRequest calldata request,
-        uint256 providerPayment,
-        uint256 maxProviderBudget
-    ) external view;
 }
 
 /// @title Append-only provenance owned by the router that deploys it
@@ -178,7 +172,7 @@ contract OutboundProvenance is RouterActionValidator {
         uint256 providerPayment,
         uint256 maxProviderBudget
     ) external view returns (bytes4) {
-        try IRouterQuoteState(ROUTER).checkOutbound(request, providerPayment, maxProviderBudget) {
+        try this.checkOutbound(request, providerPayment, maxProviderBudget) {
             return bytes4(0);
         } catch (bytes memory failure) {
             if (failure.length < 4) return AdapterMethodUnavailable.selector;

@@ -407,7 +407,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         OutboundPlan memory plan = _planOutbound(request);
         // The legacy wrapper retains its historical path; bounded and signed entrypoints run the
         // adapter's local validation before any token movement.
-        if (msg.sig != this.bridgeOut.selector) _checkAdapterDispatch(request, plan);
+        if (msg.sig != this.bridgeOut.selector) {
+            OUTBOUND_PROVENANCE.checkOutbound(request, msg.value, msg.value);
+        }
 
         _collectOutboundTokens(request.token, sender, plan);
 
