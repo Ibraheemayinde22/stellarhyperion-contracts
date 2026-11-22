@@ -59,6 +59,8 @@ export * from "./chains.js";
 
 // Pricing a route locally so an app can render four of them while somebody types.
 export * from "./quotes.js";
+// Why a local quote came out the way it did: checks with their owning policy, and exact derivations.
+export * from "./quotes/explain.js";
 export * from "./route-health.js";
 
 // Reading a token registration diagnostic, which both chains answer in the same shape.

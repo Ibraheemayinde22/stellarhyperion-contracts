@@ -66,6 +66,56 @@ Existing `QuoteRequest` and quote results remain compatible; consumers opting in
 must provide the explicit reserve unit and migrate UI copy to distinguish a destination-token
 reserve from gas units.
 
+## Quote explanation tree
+
+`explainQuote(request, snapshot)` returns the quote `planQuote` would return, plus a
+machine-readable account of why it came out that way. `explainQuotes(request, snapshot)` does this
+for every rail and adds the ranking `bestQuote` applied.
+
+```ts
+const { quote, blockedBy, groups } = explainQuote(request, snapshot);
+if (blockedBy !== null) {
+  // e.g. { id: "flow.headroom", kind: "router-policy", source: "snapshot.flowAvailable[route]", ... }
+}
+```
+
+**Checks.** The tree lists every check in the router's own order, grouped as `route`,
+`destination`, `token`, `amount` and `flow`. Each check is `pass`, `blocked` or `not-reached`, and
+records the value it read. A blocked rail points at its `QUOTE_POLICIES` entry. That entry gives
+the `QuoteBlocker`, the kind of owner (`router-policy`, `rail-capability`, `sender-input` or
+`protocol-bound`), the exact source field (for example `snapshot.routeEnabled[route]` or
+`ROUTE_META[route].carriesPayload`), how it changes on chain, and who can fix it (`fixableBy`,
+which is the same as `BLOCKER_COPY`).
+
+**Derivations.** Each derivation has a formula, exact `bigint` inputs and a value:
+
+- `amount.fee`
+- `amount.net-before-precision`
+- `amount.precision-floor`, with its divisor
+- `amount.dust`, which stays with the sender
+- `flow.available` and `flow.remaining`
+- `settlement.gross`, `settlement.retained` and `settlement.destination`
+
+**Exactness.** The explanation recomputes every value and then compares itself with `planQuote`
+field by field. It throws rather than describe a different quote. The tests hold it to
+`fee + netBeforePrecision = amount`, `net + dust = netBeforePrecision` and `gross + retained = amount`
+across a seeded sweep and at `MAX_QUOTE_AMOUNT` with precisions from 0 to 38.
+
+**Ranking.** The ranking marks each rail as the winner, blocked (with its policy), lower on
+destination amount, or a tie broken by the canonical asset, by attestation wait, or by keeping the
+earlier rail.
+
+**Determinism.** The explanation reads only its arguments, with no network, clock or randomness.
+`serializeQuoteExplanation` writes stable JSON with bigints as decimal strings. A malformed request,
+or a snapshot outside the bounded planners' limits, throws a `TypeError` or `RangeError` that names
+the field.
+
+**Compatibility and migration.** This adds new exports only: `RouteQuote`, `planQuote` and the
+other planners are unchanged, so existing callers need nothing. The explanation describes local
+arithmetic and configured capability. It is not a live price, a chain confirmation or permission to
+dispatch. The active deployment is still Stellar Testnet outbound ITS/CCTP. EVM-source and other
+rails remain gated until they are independently validated, whatever their explanation says.
+
 ## Snapshot persistence and bounded planning
 
 `serializeQuoteSnapshot` and `parseQuoteSnapshot` preserve bigint amounts as canonical decimal
