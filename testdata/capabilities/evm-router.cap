@@ -38,6 +38,7 @@ method cancelAction
 method cancelActionWithReason
 method checkDestination
 method checkOutbound
+method circuitBreaker
 method claimCount
 method claimFailureReason
 method completeTokenRecovery

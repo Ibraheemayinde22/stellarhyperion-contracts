@@ -2,8 +2,11 @@
 pragma solidity 0.8.28;
 
 import {
+    AdapterIdentityMismatch,
     AdapterMethodUnavailable,
+    AdapterNotSet,
     AmountNotRepresentable,
+    CircuitBreakerLatched,
     FeeTokenNotSupported,
     IntentDomainMismatch,
     IntentExpired,
@@ -15,8 +18,12 @@ import {
     MuxedNotSupported,
     ProviderBudgetExceeded,
     RailNotConfigured,
+    RouteDisabled,
+    RouteIsPaused,
     SlippageExceeded,
+    TokenDisabled,
     TokenNotMapped,
+    TokenNotRegistered,
     Unauthorized,
     UnknownChain,
     ZeroAddressKey
@@ -25,6 +32,7 @@ import {
     AddressKind,
     Destination,
     OutboundRecord,
+    OutboundRequest,
     QuoteBlocker,
     RouteKind,
     RouteQuote,
@@ -49,6 +57,8 @@ interface IRouterQuoteState is IRouterActionState {
     function routeEnabled(RouteKind route) external view returns (bool);
     /// @notice The configured outbound adapter.
     function adapter(RouteKind route) external view returns (address);
+    /// @notice The code hash recorded when the adapter was activated.
+    function adapterCodeHash(RouteKind route) external view returns (bytes32);
     /// @notice The declared source protocol fee.
     function feeBps() external view returns (uint16);
     /// @notice Unconsumed cross-chain flow allowance.
@@ -104,13 +114,54 @@ contract OutboundProvenance is RouterActionValidator {
         uint8 sourceDecimals,
         uint8 destinationDecimals,
         uint256 minimum
-    ) external pure returns (uint256 fee, uint256 net) {
+    ) public pure returns (uint256 fee, uint256 net) {
         uint256 netRaw;
         (netRaw, fee) = AmountMath.applyFee(amount, feeBps);
         net = AmountMath.floorToRepresentable(netRaw, sourceDecimals, destinationDecimals);
         if (net == 0) revert AmountNotRepresentable();
         uint256 landing = AmountMath.convertDecimalsExact(net, sourceDecimals, destinationDecimals);
         if (landing < minimum) revert SlippageExceeded(minimum, landing);
+    }
+
+    /// @notice Validate and price one departure without moving funds or charging flow.
+    /// @dev The router keeps the flow write and breaker charge, so this stays a view.
+    function previewOutbound(OutboundRequest calldata request)
+        external
+        view
+        returns (uint256 fee, uint256 net, address adapterAddress)
+    {
+        IRouterQuoteState target = IRouterQuoteState(ROUTER);
+        if (request.amount == 0) revert InvalidAmount();
+        if (target.routePaused(request.route)) revert RouteIsPaused(request.route);
+        if (!target.routeEnabled(request.route)) revert RouteDisabled();
+        if (bytes(request.destination.chain).length == 0) revert UnknownChain();
+
+        (AddressKind kind,,) = StellarAddress.parse(request.destination.strkey);
+        if (kind == AddressKind.MuxedAccount && !RouteMeta.carriesPayload(request.route)) {
+            revert MuxedNotSupported();
+        }
+
+        TokenConfig memory cfg = target.tokenConfig(request.token);
+        if (!cfg.registered) revert TokenNotRegistered();
+        if (!cfg.enabled) revert TokenDisabled();
+
+        (fee, net) = outboundAmounts(
+            request.amount,
+            target.feeBps(),
+            cfg.decimals,
+            request.destinationDecimals,
+            request.minDestinationAmount
+        );
+
+        (bool blocked, uint256 observed, uint256 threshold) =
+            _breakerBlocked(request.token, net, target.flowWindow());
+        if (blocked) revert CircuitBreakerLatched(request.token, observed, threshold);
+
+        adapterAddress = target.adapter(request.route);
+        if (adapterAddress == address(0)) revert AdapterNotSet();
+        if (adapterAddress.codehash != target.adapterCodeHash(request.route)) {
+            revert AdapterIdentityMismatch();
+        }
     }
 
     /// @notice Quote all four rails in their unchanged enum order.
@@ -325,6 +376,10 @@ contract OutboundProvenance is RouterActionValidator {
 
         uint256 net = AmountMath.floorToRepresentable(netRaw, cfg.decimals, destinationDecimals);
         if (net == 0) return _blocked(q, QuoteBlocker.NotRepresentable);
+
+        // The token-wide breaker answers before the per-rail headroom.
+        (bool breakerLatched,,) = _breakerBlocked(token, net, target.flowWindow());
+        if (breakerLatched) return _blocked(q, QuoteBlocker.CircuitBreakerTripped);
 
         uint256 headroom = target.flowAvailable(token, route);
         q.flowAvailable = headroom;

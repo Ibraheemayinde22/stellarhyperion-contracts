@@ -165,7 +165,13 @@ enum ActionKind {
     /// while an incident is running. Retiring an asset for good is a different decision, it
     /// waits out the timelock like every other one, and it should say so plainly to anybody
     /// reading a failed quote.
-    SetTokenEnabled
+    SetTokenEnabled,
+    /// Set or replace a token's emergency breaker threshold. Timelocked because it can widen the
+    /// amount that may leave before the breaker latches.
+    SetTokenCircuitBreakerThreshold,
+    /// Re-arm a tripped breaker without changing its threshold. Timelocked so a reset is a
+    /// reviewed decision rather than an operator reflex.
+    ResetTokenCircuitBreaker
 }
 
 /// @dev One administrative change, in a shape a reviewer can read as fast as the contract can.
@@ -277,7 +283,8 @@ enum QuoteBlocker {
     NotRepresentable,
     MuxedNotSupported,
     InvalidDestination,
-    ChainNotSupported
+    ChainNotSupported,
+    CircuitBreakerTripped
 }
 
 // Additive V2 result: the legacy RouteQuote tuple and its selectors remain unchanged.

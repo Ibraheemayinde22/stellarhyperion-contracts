@@ -894,6 +894,30 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "function",
+    "name": "circuitBreaker",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "claimCount",
     "inputs": [],
     "outputs": [
@@ -2779,6 +2803,31 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "event",
+    "name": "CircuitBreakerTripped",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "observedAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "threshold",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ClaimParked",
     "inputs": [
       {
@@ -3372,11 +3421,6 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "error",
-    "name": "MuxedNotSupported",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "NoRefundCredit",
     "inputs": []
   },
@@ -3409,22 +3453,6 @@ export const hyperionRouterAbi = [
     "type": "error",
     "name": "ReplayedMessage",
     "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "RouteDisabled",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "RouteIsPaused",
-    "inputs": [
-      {
-        "name": "route",
-        "type": "uint8",
-        "internalType": "enum RouteKind"
-      }
-    ]
   },
   {
     "type": "error",
@@ -3476,22 +3504,12 @@ export const hyperionRouterAbi = [
   },
   {
     "type": "error",
-    "name": "TokenDisabled",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "TokenNotRegistered",
     "inputs": []
   },
   {
     "type": "error",
     "name": "Unauthorized",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "UnknownChain",
     "inputs": []
   },
   {
