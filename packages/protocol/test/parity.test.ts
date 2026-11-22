@@ -525,6 +525,48 @@ describe("the deterministic provider fault fixtures", () => {
   });
 });
 
+describe("the hostile Soroban token and receiver fixtures", () => {
+  const variants = (source: string, name: string): string[] => {
+    const body = new RegExp(`pub enum ${name}\\s*\\{([^}]*)\\}`, "s").exec(source)?.[1] ?? "";
+    return [...body.matchAll(/^\s*([A-Z]\w*)\s*[,(]/gm)].map((m) => m[1]!);
+  };
+
+  it("documents every fixture mode the Soroban source declares, and no others", () => {
+    const fixtures = read(join(sorobanRouterSrc, "test", "hostile.rs"));
+    const doc = read(join(repoRoot, "docs", "HOSTILE_FIXTURES.md"));
+    for (const [name, expected] of [
+      [
+        "Hostility",
+        ["Honest", "Frozen", "ShortCredit", "ExtraDebit", "RequireCosigner", "Reenter"],
+      ],
+      [
+        "ReceiverMode",
+        ["Honest", "SkipAuthorization", "AuthorizeAmount", "ReplayInSameInvocation"],
+      ],
+      ["Reentry", ["SettleClaim", "BridgeOut"]],
+    ] as const) {
+      expect(variants(fixtures, name), name).toEqual(expected);
+      for (const variant of expected) expect(doc, `${name}::${variant}`).toContain(`\`${variant}`);
+    }
+    // Determinism is a documented property; the fixture must not consult ledger time or a PRNG.
+    expect(fixtures).not.toMatch(/ledger\(\)|prng\(\)/);
+    expect(read(join(repoRoot, "docs", "README.md"))).toContain("HOSTILE_FIXTURES.md");
+  });
+
+  it("keeps the boundary suite on the real router entry points and the shared rollback books", () => {
+    const suite = read(join(sorobanRouterSrc, "test", "hostile_boundaries.rs"));
+    const modules = read(join(sorobanRouterSrc, "test", "mod.rs"));
+    expect(modules).toMatch(/^mod hostile;$/m);
+    expect(modules).toMatch(/^mod hostile_boundaries;$/m);
+    for (const call of ["try_bridge_out(", "try_deliver(", "try_settle_claim(", "set_auths(&[])"]) {
+      expect(suite, call).toContain(call);
+    }
+    for (const field of ["treasury", "nonce", "dispatches", "flow", "claims", "outstanding"]) {
+      expect(suite, field).toMatch(new RegExp(`^\\s*${field}: `, "m"));
+    }
+  });
+});
+
 describe("the stateful router reference model parity", () => {
   it("shares operation words across chains while conserving balances and fixed-recipient liabilities", () => {
     const root = resolve(evmRoot, "..");

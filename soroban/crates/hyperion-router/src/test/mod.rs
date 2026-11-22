@@ -3,12 +3,14 @@
 mod capability;
 
 mod doubles;
+mod hostile;
 mod setup;
 
 mod admin;
 mod benchmarks;
 mod capabilities;
 mod discovery;
+mod hostile_boundaries;
 mod inbound;
 mod maintenance;
 mod operations;
