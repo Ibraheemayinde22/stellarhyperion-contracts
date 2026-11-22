@@ -80,12 +80,18 @@ if (blockedBy !== null) {
 ```
 
 **Checks.** The tree lists every check in the router's own order, grouped as `route`,
-`destination`, `token`, `amount` and `flow`. Each check is `pass`, `blocked` or `not-reached`, and
-records the value it read. A blocked rail points at its `QUOTE_POLICIES` entry. That entry gives
-the `QuoteBlocker`, the kind of owner (`router-policy`, `rail-capability`, `sender-input` or
-`protocol-bound`), the exact source field (for example `snapshot.routeEnabled[route]` or
-`ROUTE_META[route].carriesPayload`), how it changes on chain, and who can fix it (`fixableBy`,
-which is the same as `BLOCKER_COPY`).
+`destination`, `token`, `amount`, `breaker` and `flow`. Each check is `pass`, `blocked` or
+`not-reached`, and records the value it read. A blocked rail points at its `QUOTE_POLICIES` entry.
+That entry gives the `QuoteBlocker`, the kind of owner (`router-policy`, `rail-capability`,
+`sender-input` or `protocol-bound`), the exact source field (for example
+`snapshot.routeEnabled[route]` or `ROUTE_META[route].carriesPayload`), how it changes on chain, and
+who can fix it (`fixableBy`, which is the same as `BLOCKER_COPY`).
+
+The `breaker` group mirrors the token-wide emergency circuit breaker. `breaker.latched` reads
+`snapshot.circuitBreakerTripped`, and `breaker.headroom` compares the net amount with
+`snapshot.circuitBreakerAvailable`. Both fields are optional, and an absent field passes, which is
+how `planQuote` reads them. When a field is present, it must be a boolean or a non-negative
+`uint256` respectively.
 
 **Derivations.** Each derivation has a formula, exact `bigint` inputs and a value:
 

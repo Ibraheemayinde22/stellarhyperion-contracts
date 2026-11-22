@@ -146,6 +146,7 @@ describe("explaining an available quote", () => {
       ["destination", "pass"],
       ["token", "pass"],
       ["amount", "computed"],
+      ["breaker", "pass"],
       ["flow", "computed"],
       ["settlement", "computed"],
     ]);
@@ -205,6 +206,13 @@ describe("explaining a blocked quote", () => {
       "amount.decimals",
     ],
     ["floors to zero", { amount: 9n }, { feeBps: 0 }, "amount.representable"],
+    ["breaker latched", {}, { circuitBreakerTripped: true }, "breaker.latched"],
+    [
+      "over the breaker threshold",
+      {},
+      { circuitBreakerAvailable: 997_000_119n },
+      "breaker.headroom",
+    ],
     ["over the flow window", {}, { flowAvailable: all(997_000_119n) }, "flow.headroom"],
     ["flow absent from snapshot", {}, { flowAvailable: {} }, "flow.headroom"],
   ];
@@ -252,6 +260,8 @@ describe("explaining a blocked quote", () => {
       "route.adapter",
       "token.registered",
       "token.enabled",
+      "breaker.latched",
+      "breaker.headroom",
       "flow.headroom",
     ]);
     expect(kinds("rail-capability")).toEqual(["destination.muxed-payload", "destination.chain"]);
@@ -332,6 +342,8 @@ describe("determinism and parity with planQuote", () => {
         tokenDecimals: Number(next(6n)) % (MAX_DECIMALS + 1),
         tokenEnabled: next(6n) !== 0n,
         flowAvailable: all(next(next(1n) === 0n ? 40n : 130n)),
+        ...(next(4n) === 0n ? { circuitBreakerTripped: true } : {}),
+        ...(next(2n) === 0n ? { circuitBreakerAvailable: next(next(1n) === 0n ? 40n : 130n) } : {}),
       });
       assertExact(explainQuote(req, snap), req, snap);
     }
@@ -342,7 +354,7 @@ describe("determinism and parity with planQuote", () => {
     expect(serializeQuoteExplanation(explainQuote(request(), snapshot()))).toBe(text);
     const parsed = JSON.parse(text) as { quote: { netAmount: string }; groups: unknown[] };
     expect(parsed.quote.netAmount).toBe("997000120");
-    expect(parsed.groups).toHaveLength(6);
+    expect(parsed.groups).toHaveLength(7);
     expect(text).not.toMatch(/\d+n\b/);
   });
 
@@ -390,5 +402,8 @@ describe("refusing malformed input", () => {
     bad({ ...snapshot(), flowAvailable: { "0": -1n } }, /snapshot.flowAvailable.0/);
     bad({ ...snapshot(), flowAvailable: { "0": 1 << 30 } }, /snapshot.flowAvailable.0/);
     bad({ ...snapshot(), flowAvailable: { "0": 1n << 256n } }, /snapshot.flowAvailable.0/);
+    bad({ ...snapshot(), circuitBreakerTripped: "yes" }, /snapshot.circuitBreakerTripped/);
+    bad({ ...snapshot(), circuitBreakerAvailable: 5 }, /snapshot.circuitBreakerAvailable/);
+    bad({ ...snapshot(), circuitBreakerAvailable: -1n }, /snapshot.circuitBreakerAvailable/);
   });
 });

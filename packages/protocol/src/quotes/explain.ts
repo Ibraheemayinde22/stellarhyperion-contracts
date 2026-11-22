@@ -25,7 +25,7 @@ import { ROUTE_KINDS, carriesPayload, isRouteKind } from "../routes.js";
 import type { RouteKind } from "../routes.js";
 import { BLOCKER_COPY, MAX_QUOTE_AMOUNT, QuoteBlocker, bestQuote, planQuote } from "../quotes.js";
 import type { BlockerOwner, QuoteRequest, RouteQuote, RouterSnapshot } from "../quotes.js";
-import { validatePlanningSnapshot } from "./validation.js";
+import { MAX_WORD, validatePlanningSnapshot } from "./validation.js";
 
 export const QUOTE_EXPLANATION_VERSION = 1 as const;
 
@@ -48,6 +48,8 @@ export const QUOTE_CHECK_IDS = [
   "amount.net-positive",
   "amount.decimals",
   "amount.representable",
+  "breaker.latched",
+  "breaker.headroom",
   "flow.headroom",
 ] as const;
 export type QuoteCheckId = (typeof QUOTE_CHECK_IDS)[number];
@@ -175,6 +177,20 @@ export const QUOTE_POLICIES: Readonly<Record<QuoteCheckId, QuotePolicy>> = Objec
     "request.amount, request.destinationDecimals",
     "send at least one destination base unit after the fee",
   ),
+  "breaker.latched": policy(
+    "breaker.latched",
+    "router-policy",
+    QuoteBlocker.CircuitBreakerTripped,
+    "snapshot.circuitBreakerTripped",
+    "token-wide emergency latch; operator reset",
+  ),
+  "breaker.headroom": policy(
+    "breaker.headroom",
+    "router-policy",
+    QuoteBlocker.CircuitBreakerTripped,
+    "snapshot.circuitBreakerAvailable",
+    "token-wide emergency threshold; absent means not reported",
+  ),
   "flow.headroom": policy(
     "flow.headroom",
     "router-policy",
@@ -223,7 +239,7 @@ export interface DerivationNode {
 
 export interface GroupNode {
   readonly kind: "group";
-  readonly id: "route" | "destination" | "token" | "amount" | "flow" | "settlement";
+  readonly id: "route" | "destination" | "token" | "amount" | "breaker" | "flow" | "settlement";
   readonly status: ExplanationStatus;
   readonly children: readonly (CheckNode | DerivationNode)[];
 }
@@ -355,6 +371,23 @@ function validateRequest(request: QuoteRequest): void {
   }
 }
 
+/** The breaker fields are optional and outside the shared planning bounds, so check them here. */
+function validateBreaker(snapshot: RouterSnapshot): void {
+  const tripped: unknown = snapshot.circuitBreakerTripped;
+  if (tripped !== undefined && typeof tripped !== "boolean") {
+    throw new TypeError("snapshot.circuitBreakerTripped must be a boolean when present");
+  }
+  const available: unknown = snapshot.circuitBreakerAvailable;
+  if (
+    available !== undefined &&
+    (typeof available !== "bigint" || available < 0n || available > MAX_WORD)
+  ) {
+    throw new TypeError(
+      "snapshot.circuitBreakerAvailable must be a non-negative uint256 when present",
+    );
+  }
+}
+
 // ------------------------------------------------------------------------------------------------
 // Explaining one rail
 // ------------------------------------------------------------------------------------------------
@@ -369,6 +402,7 @@ function validateRequest(request: QuoteRequest): void {
 export function explainQuote(request: QuoteRequest, snapshot: RouterSnapshot): QuoteExplanation {
   validateRequest(request);
   validatePlanningSnapshot(snapshot);
+  validateBreaker(snapshot);
   const { route, amount, strkey, destinationDecimals } = request;
   const sourceDecimals = snapshot.tokenDecimals;
   const b = new Builder();
@@ -476,6 +510,20 @@ export function explainQuote(request: QuoteRequest, snapshot: RouterSnapshot): Q
     () => net ?? 0n,
   );
 
+  // The token-wide emergency breaker. Both fields are optional; absent means not tripped and not
+  // reported, which is how planQuote reads them.
+  const breakerAvailable = snapshot.circuitBreakerAvailable;
+  b.check(
+    "breaker.latched",
+    () => snapshot.circuitBreakerTripped !== true,
+    () => snapshot.circuitBreakerTripped === true,
+  );
+  b.check(
+    "breaker.headroom",
+    () => breakerAvailable === undefined || (net ?? 0n) <= breakerAvailable,
+    () => breakerAvailable ?? "not reported",
+  );
+
   // The router reports headroom from this point on, including when the flow check itself fails.
   const headroom = snapshot.flowAvailable[route] ?? 0n;
   const flowReached = !b.blocked;
@@ -545,6 +593,7 @@ export function explainQuote(request: QuoteRequest, snapshot: RouterSnapshot): Q
         "amount.dust",
         "amount.representable",
       ]),
+      b.group("breaker", ["breaker.latched", "breaker.headroom"]),
       b.group("flow", ["flow.available", "flow.headroom", "flow.remaining"]),
       b.group("settlement", ["settlement.gross", "settlement.retained", "settlement.destination"]),
     ],

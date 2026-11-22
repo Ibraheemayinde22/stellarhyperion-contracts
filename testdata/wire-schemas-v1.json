@@ -633,9 +633,24 @@
           "signature": "AmountNotRepresentable()"
         },
         {
+          "name": "CircuitBreakerLatched",
+          "code": "0x6099982e",
+          "signature": "CircuitBreakerLatched(address,uint256,uint256)"
+        },
+        {
+          "name": "CircuitBreakerNotTripped",
+          "code": "0x359a93f8",
+          "signature": "CircuitBreakerNotTripped()"
+        },
+        {
           "name": "ClaimAlreadySettled",
           "code": "0x44b39ad8",
           "signature": "ClaimAlreadySettled()"
+        },
+        {
+          "name": "ClaimLiabilityInsufficient",
+          "code": "0xc3f35927",
+          "signature": "ClaimLiabilityInsufficient()"
         },
         {
           "name": "ClaimNotFound",
@@ -718,6 +733,11 @@
           "signature": "InvalidSignature()"
         },
         {
+          "name": "InvalidThreshold",
+          "code": "0xaabd5a09",
+          "signature": "InvalidThreshold()"
+        },
+        {
           "name": "InvalidWindow",
           "code": "0x392334ed",
           "signature": "InvalidWindow()"
@@ -781,6 +801,11 @@
           "name": "RecipientNotReady",
           "code": "0x78c488a4",
           "signature": "RecipientNotReady()"
+        },
+        {
+          "name": "RecoveryExceedsSurplus",
+          "code": "0x73c48d61",
+          "signature": "RecoveryExceedsSurplus()"
         },
         {
           "name": "ReentrancyGuardReentrantCall",
@@ -856,6 +881,11 @@
           "name": "TokenNotRegistered",
           "code": "0x259ba1ad",
           "signature": "TokenNotRegistered()"
+        },
+        {
+          "name": "TokenRecoveryForbidden",
+          "code": "0xbe3a7f80",
+          "signature": "TokenRecoveryForbidden()"
         },
         {
           "name": "TopUpBindingMismatch",
