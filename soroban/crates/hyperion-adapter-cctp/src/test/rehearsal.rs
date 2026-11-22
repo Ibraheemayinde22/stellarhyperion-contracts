@@ -2,6 +2,7 @@
 
 use hyperion_core::{
     cctp::{BurnMessage, CctpMessage, CctpOutboundNote},
+    cctp::{BurnMessage, CctpMessage},
     HyperionError, RouteKind,
 };
 use hyperion_router::{Destination, OutboundRequest};
@@ -49,6 +50,7 @@ fn cctp_rehearsal_checks_burn_mint_movement_and_recipient_bound_claim_recovery()
     assert_eq!(outbound_note.mapping_revision, 1);
     assert_eq!(outbound_note.recipient, evm_recipient(&world));
     assert_eq!(outbound_note.router_nonce, 1);
+    assert!(!burn.had_hook);
     assert_eq!(world.token().balance(&world.user), user_before - HUNDRED);
     assert_eq!(world.token().balance(&world.adapter_id), 0);
     assert_eq!(world.token().balance(&world.router_id), 0);
