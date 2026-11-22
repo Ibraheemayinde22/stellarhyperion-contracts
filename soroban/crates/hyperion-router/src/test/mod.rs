@@ -3,6 +3,7 @@
 mod capability;
 
 mod doubles;
+mod hostile;
 mod setup;
 
 mod admin;
@@ -11,6 +12,8 @@ mod capabilities;
 mod codec_parity;
 mod discovery;
 mod event_codec_parity;
+mod event_fixtures;
+mod hostile_boundaries;
 mod inbound;
 mod maintenance;
 mod operations;
