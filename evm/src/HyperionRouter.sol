@@ -496,7 +496,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     function _planOutbound(OutboundRequest memory request) private returns (OutboundPlan memory plan) {
         FlowWindow memory flow;
         (plan, flow) = _previewOutbound(request);
-        _flow[_flowKey(request.token, request.route)] = flow;
+        _flow[keccak256(abi.encode(request.token, request.route))] = flow;
         OUTBOUND_PROVENANCE.consumeBreaker(request.token, plan.net);
     }
 
@@ -510,8 +510,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         // The flow limit is charged against what crosses, not against what the sender handed
         // over. The fee never leaves this chain, so it is not cross-chain exposure and counting
         // it would tighten the limit by a number nobody picked.
-        flow = _flow[_flowKey(
-                request.token, request.route
+        flow = _flow[keccak256(
+                abi.encode(request.token, request.route)
             )].consume(
             _effectiveFlowLimit(request.token, request.route), net, uint64(block.timestamp), flowWindow
         );
@@ -691,10 +691,18 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         uint256 providerPayment,
         uint256 maxProviderBudget
     ) external view override returns (bytes4 blocker) {
-        try this.checkOutbound(request, providerPayment, maxProviderBudget) {
-            return bytes4(0);
-        } catch (bytes memory failure) {
-            return _errorSelector(failure);
+        (bool ok, bytes memory result) = address(OUTBOUND_PROVENANCE)
+            .staticcall(
+                abi.encodeCall(
+                    OutboundProvenance.explainOutbound, (request, providerPayment, maxProviderBudget)
+                )
+            );
+        // Forward the immutable child's exact quote schema without a second struct codec.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            pop(blocker)
+            if iszero(ok) { revert(add(result, 32), mload(result)) }
+            return(add(result, 32), mload(result))
         }
     }
 
@@ -756,8 +764,6 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
                     OutboundProvenance.quoteV2, (route, token, amount, destination, destinationDecimals)
                 )
             );
-        // Forward the immutable child's exact quote schema without a second struct codec.
-        // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(v)
             if iszero(ok) { revert(add(result, 32), mload(result)) }
@@ -1030,7 +1036,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     /// @inheritdoc IHyperionRouter
     function flowAvailable(address token, RouteKind route) public view override returns (uint256) {
-        bytes32 key = _flowKey(token, route);
+        bytes32 key = keccak256(abi.encode(token, route));
         return _flow[key].available(_effectiveFlowLimit(token, route), uint64(block.timestamp), flowWindow);
     }
 
@@ -1048,12 +1054,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     // Internals
     // -------------------------------------------------------------------------------------
 
-    function _flowKey(address token, RouteKind route) private pure returns (bytes32) {
-        return keccak256(abi.encode(token, route));
-    }
-
     function _effectiveFlowLimit(address token, RouteKind route) private view returns (uint256) {
-        bytes32 key = _flowKey(token, route);
+        bytes32 key = keccak256(abi.encode(token, route));
         if (_routeFlowLimitSet[key]) return _routeFlowLimit[key];
         return _tokens[token].flowLimit;
     }
@@ -1138,7 +1140,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             emit TokenRegistered(action.subject, cfg);
             return;
         } else if (kind == ActionKind.SetRouteFlowLimit) {
-            bytes32 key = _flowKey(action.subject, action.route);
+            bytes32 key = keccak256(abi.encode(action.subject, action.route));
             _routeFlowLimit[key] = action.amount;
             _routeFlowLimitSet[key] = true;
             return;
