@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {ActionKind, AdminAction, Destination, OutboundRequest, RouteKind} from "../src/HyperionTypes.sol";
+import {ITokenRecoveryManager} from "../src/interfaces/ITokenRecoveryManager.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockRailAdapter} from "./mocks/MockRailAdapter.sol";
 
@@ -58,6 +59,9 @@ contract Fixture is Test {
     uint8 internal constant USDC_DECIMALS = 6;
     uint8 internal constant STELLAR_DECIMALS = 7;
     uint256 internal constant FLOW_LIMIT = 1_000_000e6;
+    /// @dev The fixture's breaker sits at the ordinary token ceiling so existing tests are not
+    /// silently squeezed; the breaker suite lowers it per test to exercise the tighter boundary.
+    uint256 internal constant BREAKER_THRESHOLD = FLOW_LIMIT;
 
     address internal admin = makeAddr("admin");
     address internal guardian = makeAddr("guardian");
@@ -68,6 +72,7 @@ contract Fixture is Test {
     address internal railReceiver = makeAddr("railReceiver");
 
     HyperionRouter internal router;
+    ITokenRecoveryManager internal recoveryManager;
     MockERC20 internal usdc;
 
     /// @dev Read once, here, rather than in each test that names a role. `expectRevert` watches
@@ -84,6 +89,10 @@ contract Fixture is Test {
     function setUp() public virtual {
         _configureProviderFaults(156);
         router = new HyperionRouter(admin, guardian, treasury, FEE_BPS, TIMELOCK, FLOW_WINDOW);
+        address recoveryAddress =
+            address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"02")))));
+        recoveryManager = ITokenRecoveryManager(recoveryAddress);
+        assertEq(recoveryManager.ROUTER(), address(router));
         usdc = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
 
         adminRole = router.DEFAULT_ADMIN_ROLE();
@@ -110,6 +119,7 @@ contract Fixture is Test {
         _enableRoute(RouteKind.Allbridge, true);
 
         _registerToken(address(usdc), USDC_DECIMALS, FLOW_LIMIT);
+        _setBreakerThreshold(address(usdc), BREAKER_THRESHOLD);
         _setRailReceiver(RouteKind.Cctp, railReceiver);
         assertEq(router.adapter(RouteKind.Cctp), address(cctpRail));
         assertEq(router.railReceiver(RouteKind.Cctp), railReceiver);
@@ -227,6 +237,19 @@ contract Fixture is Test {
         AdminAction memory action = _empty(ActionKind.SetTokenEnabled);
         action.subject = token;
         action.amount = on ? 1 : 0;
+        _run(action);
+    }
+
+    function _setBreakerThreshold(address token, uint256 threshold) internal {
+        AdminAction memory action = _empty(ActionKind.SetTokenCircuitBreakerThreshold);
+        action.subject = token;
+        action.amount = threshold;
+        _run(action);
+    }
+
+    function _resetBreaker(address token) internal {
+        AdminAction memory action = _empty(ActionKind.ResetTokenCircuitBreaker);
+        action.subject = token;
         _run(action);
     }
 

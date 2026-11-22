@@ -21,24 +21,19 @@ import {
     InvalidRelayerFee,
     InvalidWindow,
     LimitNotRaised,
-    MuxedNotSupported,
     NoRefundCredit,
     NotRailReceiver,
     ProviderBudgetExceeded,
     RecipientNotReady,
     RefundFailed,
     ReplayedMessage,
-    RouteDisabled,
-    RouteIsPaused,
     TimelockAlreadyExecuted,
     TimelockDelayOutOfRange,
     TimelockExpired,
     TimelockNotQueued,
     TimelockNotReady,
-    TokenDisabled,
     TokenNotRegistered,
     Unauthorized,
-    UnknownChain,
     ZeroAddress
 } from "./HyperionErrors.sol";
 import {
@@ -62,12 +57,13 @@ import {
     TransferIntent
 } from "./HyperionTypes.sol";
 import {OutboundProvenance} from "./OutboundProvenance.sol";
+import {TokenRecoveryManager} from "./TokenRecoveryManager.sol";
 import {IAxelarItsIntentAdapter} from "./interfaces/IAxelarItsIntentAdapter.sol";
 import {IHyperionRouter} from "./interfaces/IHyperionRouter.sol";
 import {IRailAdapter} from "./interfaces/IRailAdapter.sol";
+import {ITokenRecoveryManager} from "./interfaces/ITokenRecoveryManager.sol";
 import {AmountMath} from "./libraries/AmountMath.sol";
 import {FlowGuard, FlowWindow} from "./libraries/FlowGuard.sol";
-import {RouteMeta} from "./libraries/RouteMeta.sol";
 
 /// @title Hyperion, the EVM side
 /// @author dotmantissa
@@ -113,7 +109,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     /// @notice How long a matured action stays executable before it expires.
     /// @dev A change approved in March and executed in November is a change nobody reviewed.
-    uint64 public constant GRACE_PERIOD = 7 days;
+    uint64 public constant override GRACE_PERIOD = 7 days;
 
     /// @notice Maximum length in bytes of a timelock cancellation reason note.
     uint256 public constant MAX_REASON_LEN = 128;
@@ -131,7 +127,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     uint16 public feeBps;
 
     /// @notice How long a privileged change has to wait before it may be applied.
-    uint64 public timelockDelay;
+    uint64 public override timelockDelay;
 
     /// @notice How long a flow window runs, in seconds.
     uint64 public flowWindow;
@@ -200,6 +196,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @notice Native refunds that could not be delivered in opt-in credit mode.
     mapping(address beneficiary => uint256 amount) public refundCredits;
 
+    ITokenRecoveryManager private immutable TOKEN_RECOVERY_MANAGER;
+
     /// @param admin Holds every privileged power, all of them behind the timelock.
     /// @notice Wires up the router with its roles, its treasury, and its fee and timing limits.
     /// @param admin Holds every role that can widen what the bridge will do.
@@ -224,6 +222,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (flowWindow_ < MIN_FLOW_WINDOW || flowWindow_ > MAX_FLOW_WINDOW) revert InvalidWindow();
 
         OUTBOUND_PROVENANCE = new OutboundProvenance();
+        TOKEN_RECOVERY_MANAGER = ITokenRecoveryManager(address(new TokenRecoveryManager(address(this))));
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         if (guardian_ != address(0)) _grantRole(GUARDIAN_ROLE, guardian_);
 
@@ -496,30 +495,15 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         FlowWindow memory flow;
         (plan, flow) = _previewOutbound(request);
         _flow[_flowKey(request.token, request.route)] = flow;
+        OUTBOUND_PROVENANCE.consumeBreaker(request.token, plan.net);
     }
 
     function _previewOutbound(OutboundRequest memory request)
         private
         view
-        returns (OutboundPlan memory plan, FlowWindow memory flow)
+        returns (OutboundPlan memory, FlowWindow memory flow)
     {
-        if (request.amount == 0) revert InvalidAmount();
-        if (routePaused[request.route]) revert RouteIsPaused(request.route);
-        if (!routeEnabled[request.route]) revert RouteDisabled();
-        if (bytes(request.destination.chain).length == 0) revert UnknownChain();
-
-        (AddressKind kind,,) = OUTBOUND_PROVENANCE.checkDestination(request.destination.strkey);
-        if (kind == AddressKind.MuxedAccount && !RouteMeta.carriesPayload(request.route)) {
-            revert MuxedNotSupported();
-        }
-
-        TokenConfig memory cfg = _tokens[request.token];
-        if (!cfg.registered) revert TokenNotRegistered();
-        if (!cfg.enabled) revert TokenDisabled();
-
-        (uint256 fee, uint256 net) = OUTBOUND_PROVENANCE.outboundAmounts(
-            request.amount, feeBps, cfg.decimals, request.destinationDecimals, request.minDestinationAmount
-        );
+        (uint256 fee, uint256 net, address adapterAddress) = OUTBOUND_PROVENANCE.previewOutbound(request);
 
         // The flow limit is charged against what crosses, not against what the sender handed
         // over. The fee never leaves this chain, so it is not cross-chain exposure and counting
@@ -530,11 +514,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             _effectiveFlowLimit(request.token, request.route), net, uint64(block.timestamp), flowWindow
         );
 
-        address adapterAddress = _adapters[request.route];
-        if (adapterAddress == address(0)) revert AdapterNotSet();
-        if (adapterAddress.codehash != adapterCodeHash[request.route]) revert AdapterIdentityMismatch();
-
-        plan = OutboundPlan({fee: fee, net: net, gross: fee + net, adapterAddress: adapterAddress});
+        return (OutboundPlan({fee: fee, net: net, gross: fee + net, adapterAddress: adapterAddress}), flow);
     }
 
     /// @dev The log and read-only provenance describe the same authenticated departure, carrying every field
@@ -616,6 +596,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         });
         uint8 reason = _payoutFailureReason(token, amount);
         claimFailureReason[claimId] = reason;
+        TOKEN_RECOVERY_MANAGER.recordClaim(token, amount);
         emit ClaimParked(claimId, recipient, token, amount, route, origin.chain, origin.nonce);
         emit ClaimPayoutFailureV1(claimId, reason, amount, recipient);
         emit BridgeIn(route, recipient, token, amount, origin.chain, origin.nonce, origin.messageId);
@@ -678,8 +659,19 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         if (claim.settled) revert ClaimAlreadySettled();
         claim.settled = true;
         if (!_tryPay(claim.token, claim.recipient, claim.amount)) revert RecipientNotReady();
+        TOKEN_RECOVERY_MANAGER.releaseClaim(claim.token, claim.amount);
         delete claimFailureReason[claimId];
         emit ClaimSettled(claimId, claim.recipient, claim.token, claim.amount, settler);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function completeTokenRecovery(address tokenAddress, address recipient, uint256 amount)
+        external
+        override
+        nonReentrant
+    {
+        if (msg.sender != address(TOKEN_RECOVERY_MANAGER)) revert Unauthorized();
+        IERC20(tokenAddress).safeTransfer(recipient, amount);
     }
 
     /// @dev V1: 1 refusal, 2 shortage, 3 unreadable token, 4 inexact token payout.
@@ -800,7 +792,18 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         view
         returns (AddressKind kind, bytes32 key, uint64 muxedId)
     {
-        return OUTBOUND_PROVENANCE.checkDestination(strkey);
+        (bool ok, bytes memory result) = address(OUTBOUND_PROVENANCE)
+            .staticcall(abi.encodeCall(OutboundProvenance.checkDestination, (strkey)));
+        // Forward the immutable pure parser's exact fixed tuple and errors without another codec.
+        // This method is external, so RETURN cannot terminate an internal Solidity caller.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            pop(kind)
+            pop(key)
+            pop(muxedId)
+            if iszero(ok) { revert(add(result, 32), mload(result)) }
+            return(add(result, 32), mload(result))
+        }
     }
 
     // -------------------------------------------------------------------------------------
@@ -849,6 +852,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         cfg.flowLimit = limit;
         emit FlowLimitLowered(token, msg.sender, limit);
         emit TokenRegistered(token, cfg);
+    }
+
+    /// @inheritdoc IHyperionRouter
+    function circuitBreaker(address token) external view override returns (uint256, bool) {
+        return OUTBOUND_PROVENANCE.circuitBreaker(token);
     }
 
     // -------------------------------------------------------------------------------------
@@ -1065,7 +1073,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
 
     function _applyAction(AdminAction memory action) private {
         ActionKind kind = action.kind;
-
+        if (kind >= ActionKind.SetTokenCircuitBreakerThreshold) {
+            OUTBOUND_PROVENANCE.configureBreaker(action);
+            return;
+        }
         if (kind == ActionKind.SetFeeBps) {
             feeBps = uint16(action.amount);
         } else if (kind == ActionKind.SetTreasury) {

@@ -226,7 +226,9 @@ contract RouterQuoteTest is Fixture {
         // a bound and not an off by one.
         uint256 ceiling = type(uint128).max;
         RouteQuote memory q = router.quote(RouteKind.Cctp, address(usdc), ceiling, _dest(G_ADDR), 7);
-        assertEq(uint8(q.reason), uint8(QuoteBlocker.FlowLimitExceeded), "far past the ceiling");
+        // The token-wide emergency breaker answers before the per-rail ceiling for an amount
+        // this far past both, which is the diagnostic an operator needs to see.
+        assertEq(uint8(q.reason), uint8(QuoteBlocker.CircuitBreakerTripped), "far past the ceiling");
     }
 
     function test_blocker_flow_limit_exceeded() public {

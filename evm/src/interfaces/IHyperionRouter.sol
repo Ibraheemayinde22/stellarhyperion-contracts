@@ -169,6 +169,14 @@ interface IHyperionRouter {
     /// @param limit The new ceiling, which is always lower than the old one.
     event FlowLimitLowered(address indexed token, address indexed by, uint256 limit);
 
+    /// @notice A token's emergency breaker latched and new departures for it are refused.
+    /// @dev The departure that reaches the threshold completes and then latches the breaker; a
+    /// departure that would cross it is refused before any funds move.
+    /// @param token The token that is now stopped for departures.
+    /// @param observedAmount The rolling amount counted when the breaker latched.
+    /// @param threshold The ceiling in force.
+    event CircuitBreakerTripped(address indexed token, uint256 observedAmount, uint256 threshold);
+
     /// @notice A token became routable, or its parameters changed.
     /// @param token The ERC20.
     /// @param config Its decimals, its ceiling, and whether it is currently enabled.
@@ -315,6 +323,13 @@ interface IHyperionRouter {
         external
         returns (ClaimSettlementResult[] memory results);
 
+    /// @notice Complete the exact transfer authorized by the router-owned recovery manager.
+    /// @dev Only the manager deployed at router CREATE nonce 2 may call this guarded hook.
+    /// @param token The unregistered ERC20 whose surplus is authorized for recovery.
+    /// @param recipient The fixed recipient authorized by the queued recovery.
+    /// @param amount The exact amount to transfer in token base units.
+    function completeTokenRecovery(address token, address recipient, uint256 amount) external;
+
     /// @notice Dispatch with a native provider cap while preserving legacy request fields.
     /// @param request The legacy outbound request.
     /// @param maxProviderBudget Maximum msg.value passed to the provider, in native-currency wei.
@@ -427,6 +442,12 @@ interface IHyperionRouter {
     /// @param id The action to apply.
     function executeAction(uint64 id) external;
 
+    /// @notice Current delay applied to new router governance and recovery proposals.
+    function timelockDelay() external view returns (uint64);
+
+    /// @notice Execution grace period after a queued action matures.
+    function GRACE_PERIOD() external view returns (uint64);
+
     /// @notice Drop a proposed change.
     /// @param id The action to drop.
     function cancelAction(uint64 id) external;
@@ -441,6 +462,12 @@ interface IHyperionRouter {
     /// @param token The token to tighten.
     /// @param limit The new ceiling, which has to be below the one in force.
     function lowerTokenFlowLimit(address token, uint256 limit) external;
+
+    /// @notice Read a token's emergency breaker threshold and latch state.
+    /// @param token The token to read.
+    /// @return threshold The token-wide rolling ceiling, or zero when no breaker is configured.
+    /// @return tripped Whether departures for this token are currently refused by the breaker.
+    function circuitBreaker(address token) external view returns (uint256 threshold, bool tripped);
 
     /// @notice Pause departures for a single rail without affecting other rails.
     /// @param route The rail to pause.

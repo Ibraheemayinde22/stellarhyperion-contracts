@@ -6,6 +6,7 @@ import {console} from "forge-std/console.sol";
 import {HyperionRouter} from "../src/HyperionRouter.sol";
 import {ActionKind, AdminAction, RouteKind} from "../src/HyperionTypes.sol";
 import {OutboundProvenance} from "../src/OutboundProvenance.sol";
+import {TokenRecoveryManager} from "../src/TokenRecoveryManager.sol";
 import {AxelarItsAdapter} from "../src/adapters/AxelarItsAdapter.sol";
 import {CctpAdapter} from "../src/adapters/CctpAdapter.sol";
 
@@ -67,6 +68,7 @@ contract Deploy is DeployConfig {
         console.log("timelock delay (s)  ", params.timelockDelay);
         console.log("flow window (s)     ", params.flowWindow);
         console.log("asset               ", token.token);
+        console.log("breaker threshold   ", token.breakerThreshold);
         console.log("wiring axelar       ", axelarToo);
 
         vm.startBroadcast();
@@ -124,6 +126,20 @@ contract Deploy is DeployConfig {
                 decimals: token.decimals
             }),
             string.concat("register ", token.symbol)
+        );
+
+        // Queued immediately after registration and executed in that order. A fresh router has
+        // no token yet, so the router defers the upper-bound check to execution, where the
+        // registration above has already landed.
+        _queue(
+            AdminAction({
+                kind: ActionKind.SetTokenCircuitBreakerThreshold,
+                route: RouteKind.Cctp,
+                subject: token.token,
+                amount: token.breakerThreshold,
+                decimals: 0
+            }),
+            string.concat("set ", token.symbol, " circuit breaker")
         );
 
         _queue(_routeAction(ActionKind.SetAdapter, RouteKind.Cctp, address(cctp), 0), "set cctp adapter");
@@ -197,7 +213,7 @@ contract Deploy is DeployConfig {
         vm.serializeUint(key, "optimizerRuns", profile.optimizerRuns);
         vm.serializeBool(key, "viaIR", profile.viaIR);
         vm.serializeAddress(key, "router", address(router));
-        // The router constructor creates exactly one support child at its first CREATE nonce.
+        // The router constructor creates provenance at nonce one and recovery at nonce two.
         address provenanceStore =
             address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"01")))));
         require(
@@ -207,6 +223,15 @@ contract Deploy is DeployConfig {
         );
         vm.serializeAddress(key, "provenanceStore", provenanceStore);
         vm.serializeBytes32(key, "provenanceStoreCodeHash", provenanceStore.codehash);
+        address recoveryManager =
+            address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(router), hex"02")))));
+        require(
+            recoveryManager.code.length != 0
+                && TokenRecoveryManager(recoveryManager).ROUTER() == address(router),
+            "router recovery manager identity differs"
+        );
+        vm.serializeAddress(key, "recoveryManager", recoveryManager);
+        vm.serializeBytes32(key, "recoveryManagerCodeHash", recoveryManager.codehash);
         vm.serializeAddress(key, "deployer", deployer);
         vm.serializeAddress(key, "admin", params.admin);
         vm.serializeAddress(key, "guardian", params.guardian);
@@ -250,6 +275,7 @@ contract Deploy is DeployConfig {
         vm.serializeAddress(key, "token", token.token);
         vm.serializeUint(key, "tokenDecimals", token.decimals);
         vm.serializeUint(key, "tokenFlowLimit", token.flowLimit);
+        vm.serializeUint(key, "tokenBreakerThreshold", token.breakerThreshold);
 
         uint256[] memory ids = new uint256[](queued.length);
         string[] memory whats = new string[](queued.length);

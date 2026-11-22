@@ -38,6 +38,12 @@ error InvalidLimit();
 error InvalidWindow();
 error LimitNotRaised();
 
+// Per-token emergency circuit breaker. Separate vocabulary from the ordinary flow limit so an
+// operator can tell a throughput refusal from an emergency stop in a revert trace.
+error CircuitBreakerLatched(address token, uint256 observedAmount, uint256 threshold);
+error CircuitBreakerNotTripped();
+error InvalidThreshold();
+
 // Destinations.
 error InvalidDestination();
 error ZeroAddressKey();
@@ -113,3 +119,12 @@ error TopUpBindingMismatch();
 error FeeTokenNotSupported();
 /// @notice Fee fields or observed token balance changes violate the signed charge.
 error InvalidRelayerFee();
+
+/// @notice Token recovery is not available for this asset.
+error TokenRecoveryForbidden();
+
+/// @notice Requested recovery exceeds custody after outstanding claims are reserved.
+error RecoveryExceedsSurplus();
+
+/// @notice Tracked claim liabilities cannot cover a claim being settled.
+error ClaimLiabilityInsufficient();

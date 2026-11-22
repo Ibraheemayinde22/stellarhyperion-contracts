@@ -61,6 +61,9 @@ for them. Existing request and quote schemas remain compatible. The active deplo
 Stellar Testnet outbound ITS/CCTP; new entrypoints require reviewed router/adapter upgrades,
 and these source changes do not activate additional deployments.
 
+The EVM governance and parked-claim gas budgets, including their Foundry reproduction command
+and compiler profile, are documented in [EVM gas budgets](docs/EVM_GAS_BUDGETS.md).
+
 ## Organization overview
 
 The StellarHyperion organization divides cross-chain routing across three dedicated repositories:

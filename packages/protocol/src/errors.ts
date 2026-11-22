@@ -101,6 +101,9 @@ export const EVM_ERROR_NAMES = [
   "InvalidLimit",
   "InvalidWindow",
   "LimitNotRaised",
+  "CircuitBreakerLatched",
+  "CircuitBreakerNotTripped",
+  "InvalidThreshold",
   "InvalidDestination",
   "ZeroAddressKey",
   "MuxedNotSupported",
@@ -148,6 +151,10 @@ export const EVM_ERROR_NAMES = [
   "TopUpBindingMismatch",
   "FeeTokenNotSupported",
   "InvalidRelayerFee",
+
+  "TokenRecoveryForbidden",
+  "RecoveryExceedsSurplus",
+  "ClaimLiabilityInsufficient",
 ] as const;
 
 export type EvmErrorName = (typeof EVM_ERROR_NAMES)[number];
@@ -456,6 +463,23 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     fault: "config",
     retryable: false,
   },
+  CircuitBreakerLatched: {
+    summary:
+      "This asset's token-wide emergency threshold has been reached, or this transfer would cross it. Departures for this asset are stopped until an operator resets the breaker; arrivals and existing claims still work.",
+    fault: "limit",
+    retryable: true,
+  },
+  CircuitBreakerNotTripped: {
+    summary: "That asset's emergency breaker is not tripped, so there is nothing to reset.",
+    fault: "config",
+    retryable: false,
+  },
+  InvalidThreshold: {
+    summary:
+      "An emergency threshold has to be above zero and no higher than the asset's ordinary flow limit.",
+    fault: "config",
+    retryable: false,
+  },
   TimelockAlreadyExecuted: {
     summary: "That admin action already ran.",
     fault: "timing",
@@ -540,6 +564,21 @@ const HELP: Record<HyperionErrorName, Omit<ErrorHelp, "sorobanCode" | "recovery"
     summary:
       "The gas top-up changes the sender, destination, token, amount, or message already bound to this transfer.",
     fault: "input",
+    retryable: false,
+  },
+  TokenRecoveryForbidden: {
+    summary: "Registered tokens and addresses without token code cannot be recovered.",
+    fault: "input",
+    retryable: false,
+  },
+  RecoveryExceedsSurplus: {
+    summary: "The requested recovery exceeds the token balance left after outstanding claims.",
+    fault: "input",
+    retryable: false,
+  },
+  ClaimLiabilityInsufficient: {
+    summary: "Tracked claim liabilities cannot cover this settlement.",
+    fault: "config",
     retryable: false,
   },
   ExceedsRouteLimit: {
