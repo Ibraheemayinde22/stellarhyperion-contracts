@@ -8,6 +8,7 @@ import {
     AmountNotRepresentable,
     CircuitBreakerLatched,
     FeeTokenNotSupported,
+    FlowLimitExceeded,
     IntentDomainMismatch,
     IntentExpired,
     IntentNonceMismatch,
@@ -45,6 +46,7 @@ import {IRailAdapter} from "./interfaces/IRailAdapter.sol";
 import {AmountMath} from "./libraries/AmountMath.sol";
 import {RouteMeta} from "./libraries/RouteMeta.sol";
 import {StellarAddress} from "./libraries/StellarAddress.sol";
+import {Pausable} from "openzeppelin/utils/Pausable.sol";
 
 /// @title Read-only router quote inputs
 /// @notice State and pure address validation queried by the immutable router support module.
@@ -186,6 +188,26 @@ contract OutboundProvenance is RouterActionValidator {
                 selector := mload(add(failure, 32))
             }
             return selector;
+        }
+    }
+
+    /// @notice Validate all read-only outbound admission checks through the router's current state.
+    function checkOutbound(
+        OutboundRequest calldata request,
+        uint256 providerPayment,
+        uint256 maxProviderBudget
+    ) external view {
+        if (providerPayment > maxProviderBudget) revert ProviderBudgetExceeded();
+        IRouterQuoteState target = IRouterQuoteState(ROUTER);
+        if (target.paused()) revert Pausable.EnforcedPause();
+
+        (, uint256 net, address adapterAddress) = previewOutbound(request);
+        uint256 available = target.flowAvailable(request.token, request.route);
+        if (net > available) revert FlowLimitExceeded(net, available);
+
+        try IRailAdapter(adapterAddress).checkDispatch(request.token, net, request.destination) {}
+        catch (bytes memory failure) {
+            rethrowAdapterFailure(failure);
         }
     }
 

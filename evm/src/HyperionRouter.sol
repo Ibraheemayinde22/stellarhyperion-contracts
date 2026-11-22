@@ -715,17 +715,7 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         uint256 providerPayment,
         uint256 maxProviderBudget
     ) external view {
-        if (providerPayment > maxProviderBudget) revert ProviderBudgetExceeded();
-        _requireNotPaused();
-        (OutboundPlan memory plan,) = _previewOutbound(request);
-        _checkAdapterDispatch(request, plan);
-    }
-
-    function _checkAdapterDispatch(OutboundRequest memory request, OutboundPlan memory plan) private view {
-        try IRailAdapter(plan.adapterAddress).checkDispatch(request.token, plan.net, request.destination) {}
-        catch (bytes memory failure) {
-            OUTBOUND_PROVENANCE.rethrowAdapterFailure(failure);
-        }
+        OUTBOUND_PROVENANCE.checkOutbound(request, providerPayment, maxProviderBudget);
     }
 
     function _errorSelector(bytes memory failure) private pure returns (bytes4) {
