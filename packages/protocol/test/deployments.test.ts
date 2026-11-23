@@ -93,7 +93,43 @@ describe("reading a record that holds together", () => {
       expect(base.chainId).toBe(8453);
       expect(base.feeBps).toBe(30);
       expect(base.tokens.USDC?.routes).toEqual([RouteKind.Cctp, RouteKind.AxelarIts]);
+      expect(base.evidenceLimitations).toEqual([
+        "genesis-block network binding unavailable in legacy record",
+        "initialization transaction evidence unavailable",
+        "activation transaction evidence unavailable",
+      ]);
     }
+  });
+
+  it("reads public EVM initialization and activation receipt positions", () => {
+    const parsed = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          genesisBlockHash: `0x${"11".repeat(32)}`,
+          positions: {
+            initialization: {
+              txHash: `0x${"22".repeat(32)}`,
+              blockNumber: "21000000",
+              blockHash: `0x${"33".repeat(32)}`,
+            },
+            activation: [
+              {
+                txHash: `0x${"44".repeat(32)}`,
+                blockNumber: "21000010",
+                blockHash: `0x${"55".repeat(32)}`,
+              },
+            ],
+          },
+        }),
+      }),
+    );
+    const deployment = parsed.networks.base;
+    if (deployment === undefined || !isEvmDeployment(deployment)) {
+      throw new Error("expected an EVM Base deployment");
+    }
+    expect(deployment.positions.initialization?.blockNumber).toBe("21000000");
+    expect(deployment.positions.activation[0]?.blockNumber).toBe("21000010");
+    expect(deployment.evidenceLimitations).toEqual([]);
   });
 
   it("reads a Stellar deployment", () => {
@@ -104,7 +140,45 @@ describe("reading a record that holds together", () => {
       expect(stellar.router).toBe(ROUTER_C);
       expect(stellar.wasmHashes.router).toBe("a".repeat(64));
       expect(stellar.deployedAt.ledger).toBe(55_000_000);
+      expect(stellar.positions).toEqual({ initialization: null, activation: [] });
+      expect(stellar.evidenceLimitations).toEqual([
+        "initialization transaction evidence unavailable",
+        "activation transaction evidence unavailable",
+      ]);
     }
+  });
+
+  it("rejects a passphrase that does not belong to the selected Stellar network", () => {
+    expect(() =>
+      parseDeploymentSet(
+        set({
+          "stellar-testnet": stellarRecord({
+            networkPassphrase: "Public Global Stellar Network ; September 2015",
+          }),
+        }),
+      ),
+    ).toThrow(/networkPassphrase/);
+  });
+
+  it("reads separately identified Stellar initialization and activation positions", () => {
+    const parsed = parseDeploymentSet(
+      set({
+        "stellar-testnet": stellarRecord({
+          networkPassphrase: "Test SDF Network ; September 2015",
+          positions: {
+            initialization: { ledger: 55_000_001, txHash: "a".repeat(64) },
+            activation: [{ ledger: 55_000_010, txHash: "b".repeat(64) }],
+          },
+        }),
+      }),
+    );
+    const deployment = parsed.networks["stellar-testnet"];
+    if (deployment === undefined || !isStellarDeployment(deployment)) {
+      throw new Error("expected a Stellar Testnet deployment");
+    }
+    expect(deployment.positions.initialization?.ledger).toBe(55_000_001);
+    expect(deployment.positions.activation[0]?.ledger).toBe(55_000_010);
+    expect(deployment.evidenceLimitations).toEqual([]);
   });
 
   it("reads explicit provider addresses without changing declared asset metadata", () => {

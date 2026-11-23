@@ -33,6 +33,7 @@ import {
 } from "./record-evidence.mjs";
 import { rpcClient } from "./restore-plan.mjs";
 import { validateRpcUrl } from "./rollback-report.mjs";
+import { verifyEnvelope } from "./reconcile-transaction.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const contractsRoot = resolve(here, "..", "..");
@@ -94,20 +95,55 @@ export async function buildRecord(env = process.env, dependencies = {}) {
    * Worth a round trip: it is the only value in the record that lets somebody line the deployment up
    * against the chain's own history, and a wrong one makes an indexer start from the wrong place.
    */
-  async function latestLedger() {
+  async function transactionPosition() {
     const endpoint = validateRpcUrl(env.STELLAR_RPC_URL || entry.defaultRpcUrl);
     const rpc = dependencies.rpc ?? rpcClient(endpoint);
-    const network = await rpc("getNetwork", {});
-    if (network.passphrase !== entry.networkPassphrase)
+    const observedNetwork = await rpc("getNetwork", {});
+    if (observedNetwork.passphrase !== entry.networkPassphrase)
       throw new Error("RPC network does not match deployment network");
-    const body = await rpc("getLatestLedger", {});
+    const txHash = need("HYPERION_INITIALIZATION_TX_HASH").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(txHash))
+      throw new Error(
+        "HYPERION_INITIALIZATION_TX_HASH must be 64 hexadecimal characters",
+      );
+    const body = await rpc("getTransaction", { hash: txHash });
     if (
-      !Number.isSafeInteger(body.sequence) ||
-      body.sequence < 1 ||
-      body.sequence > 0xffffffff
+      body.status !== "SUCCESS" ||
+      typeof body.envelopeXdr !== "string" ||
+      typeof body.createdAt !== "string" ||
+      !Number.isFinite(Date.parse(body.createdAt)) ||
+      !Number.isSafeInteger(body.ledger) ||
+      body.ledger < 1 ||
+      body.ledger > 0xffffffff
     )
-      throw new Error("RPC did not return an exact u32 ledger sequence");
-    return body.sequence;
+      throw new Error(
+        "RPC did not confirm the initialization transaction at an exact ledger",
+      );
+    const decoded = (dependencies.verifyEnvelope ?? verifyEnvelope)(
+      body.envelopeXdr,
+      entry.networkPassphrase,
+    );
+    if (decoded.hash !== txHash || decoded.source !== need("HYPERION_DEPLOYER"))
+      throw new Error(
+        "initialization transaction hash or public deployer differs from the record",
+      );
+    const configuredLedger =
+      env.HYPERION_ROUTER_LEDGER ||
+      env.ROUTER_LEDGER ||
+      env.STELLAR_START_LEDGER;
+    if (
+      configuredLedger &&
+      (!/^(0|[1-9][0-9]{0,9})$/.test(configuredLedger) ||
+        Number(configuredLedger) !== body.ledger)
+    )
+      throw new Error(
+        "configured initialization ledger differs from public transaction evidence",
+      );
+    return {
+      ledger: body.ledger,
+      txHash,
+      timestamp: new Date(body.createdAt).toISOString(),
+    };
   }
 
   /** The commit the wasm was built from. The only thing tying a contract id to a source tree. */
@@ -178,6 +214,7 @@ export async function buildRecord(env = process.env, dependencies = {}) {
   if (env.HYPERION_AXELAR) adapters["axelar-its"] = env.HYPERION_AXELAR;
 
   const routes = Object.keys(adapters);
+  const initialization = await transactionPosition();
 
   const wasmHashes = {};
   if (env.ROUTER_HASH) wasmHashes.router = env.ROUTER_HASH;
@@ -226,20 +263,12 @@ export async function buildRecord(env = process.env, dependencies = {}) {
     timelockDelay: integer("HYPERION_TIMELOCK_DELAY"),
     wasmHashes,
     deployedAt: {
-      ledger:
-        env.HYPERION_ROUTER_LEDGER ||
-        env.ROUTER_LEDGER ||
-        env.STELLAR_START_LEDGER
-          ? integer(
-              env.HYPERION_ROUTER_LEDGER
-                ? "HYPERION_ROUTER_LEDGER"
-                : env.ROUTER_LEDGER
-                  ? "ROUTER_LEDGER"
-                  : "STELLAR_START_LEDGER",
-              1,
-            )
-          : await latestLedger(),
-      timestamp: new Date().toISOString(),
+      ledger: initialization.ledger,
+      timestamp: initialization.timestamp,
+    },
+    positions: {
+      initialization,
+      activation: [],
     },
     commit: commit(),
     ...lifecycle(),
