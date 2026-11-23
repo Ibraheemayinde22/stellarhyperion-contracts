@@ -7,6 +7,7 @@ mod hostile;
 mod setup;
 
 mod admin;
+mod abi_compatibility;
 mod benchmarks;
 mod capabilities;
 mod codec_parity;
