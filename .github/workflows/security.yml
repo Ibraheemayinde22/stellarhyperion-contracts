@@ -238,7 +238,7 @@ jobs:
         #
         # --build-info is what crytic-compile reads when analysing.
         working-directory: evm
-        run: forge build --build-info
+        run: forge build --build-info --skip test --skip script
 
       - name: Slither
         id: slither
@@ -253,7 +253,7 @@ jobs:
         # - unused-return: false positive on intentional partial tuple unpacking in parse and relayer adapter bridgeIn
         run: |
           set -o pipefail
-          slither . \
+          slither . --foundry-ignore-compile \
             --checklist \
             --filter-paths "lib/|test/" \
             --exclude arbitrary-send-eth,incorrect-equality,uninitialized-local,unused-return \

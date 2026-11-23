@@ -486,7 +486,7 @@ describe("the documented inbound trust surface", () => {
     );
     requireEvidence(
       solidityFunction(evmRouter, "_forwardProvenance"),
-      /address\(OUTBOUND_PROVENANCE\)[\s\S]*calldatacopy[\s\S]*staticcall[\s\S]*returndatacopy/,
+      /address\(OUTBOUND_PROVENANCE\)\.staticcall\(msg\.data\)/,
       "EVM typed status forwards the immutable helper schema",
     );
     requireEvidence(

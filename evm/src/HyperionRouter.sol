@@ -405,21 +405,19 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             pop(feeToken)
             pop(maxRelayerCharge)
         }
-        _forwardProvenance();
+        bytes memory result = _forwardProvenance();
+        // Return from this external view, while the shared helper returns normally.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") { return(add(result, 32), mload(result)) }
     }
 
-    /// @dev Used only by external views with the immutable child's identical ABI.
-    /// EVM RETURN finishes the external invocation with the child's exact response or revert.
-    function _forwardProvenance() private view {
-        address target = address(OUTBOUND_PROVENANCE);
-        // solhint-disable-next-line no-inline-assembly
-        assembly ("memory-safe") {
-            let result := mload(0x40)
-            calldatacopy(result, 0, calldatasize())
-            let ok := staticcall(gas(), target, result, calldatasize(), 0, 0)
-            returndatacopy(result, 0, returndatasize())
-            if iszero(ok) { revert(result, returndatasize()) }
-            return(result, returndatasize())
+    /// @dev External views use the immutable child's identical selector and ABI.
+    function _forwardProvenance() private view returns (bytes memory response) {
+        bool ok;
+        (ok, response) = address(OUTBOUND_PROVENANCE).staticcall(msg.data);
+        if (!ok) {
+            // solhint-disable-next-line no-inline-assembly
+            assembly ("memory-safe") { revert(add(response, 32), mload(response)) }
         }
     }
 
@@ -781,7 +779,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             pop(destination)
             pop(destinationDecimals)
         }
-        _forwardProvenance();
+        bytes memory result = _forwardProvenance();
+        // Return from this external view, while the shared helper returns normally.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") { return(add(result, 32), mload(result)) }
     }
 
     /// @inheritdoc IHyperionRouter
@@ -799,7 +800,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             pop(destination)
             pop(destinationDecimals)
         }
-        _forwardProvenance();
+        bytes memory result = _forwardProvenance();
+        // Return from this external view, while the shared helper returns normally.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") { return(add(result, 32), mload(result)) }
     }
 
     /// @notice Take a Stellar address apart and say whether it holds together.
@@ -819,7 +823,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             pop(strkey.offset)
             pop(strkey.length)
         }
-        _forwardProvenance();
+        bytes memory result = _forwardProvenance();
+        // Return from this external view, while the shared helper returns normally.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") { return(add(result, 32), mload(result)) }
     }
 
     // -------------------------------------------------------------------------------------
@@ -994,7 +1001,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         assembly ("memory-safe") {
             pop(id)
         }
-        _forwardProvenance();
+        bytes memory result = _forwardProvenance();
+        // Return from this external view, while the shared helper returns normally.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") { return(add(result, 32), mload(result)) }
     }
 
     /// @inheritdoc IHyperionRouter
@@ -1019,7 +1029,10 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             pop(record)
             pop(nonce)
         }
-        _forwardProvenance();
+        bytes memory result = _forwardProvenance();
+        // Return from this external view, while the shared helper returns normally.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") { return(add(result, 32), mload(result)) }
     }
 
     /// @notice The contract allowed to call `bridgeIn` for a rail.
