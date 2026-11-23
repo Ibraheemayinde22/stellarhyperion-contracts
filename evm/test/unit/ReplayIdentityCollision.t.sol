@@ -6,12 +6,9 @@ import {RouteKind} from "../../src/HyperionTypes.sol";
 import {Fixture} from "../Fixture.sol";
 
 contract ReplayIdentityCollisionTest is Fixture {
-    bytes32 internal constant ID_A =
-        0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000000000002a;
-    bytes32 internal constant ID_B =
-        0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab000000000000002a;
-    bytes32 internal constant ID_C =
-        0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac000000000000002a;
+    bytes32 internal constant ID_A = 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000000000002a;
+    bytes32 internal constant ID_B = 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab000000000000002a;
+    bytes32 internal constant ID_C = 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac000000000000002a;
     uint256 internal constant DELIVERY = 1e6;
 
     function test_distinct_full_width_ids_sharing_prefix_and_display_nonce_do_not_collide() public {

@@ -1071,16 +1071,16 @@ impl AllbridgeAdapter {
         env.crypto()
             .ed25519_verify(&validator.validator, &digest.into(), &intent.signature);
 
-        let provider_evidence_present = request.provider_evidence.is_some();
-        let provider_matches_intent = request.provider_evidence.map_or(false, |evidence| {
-            evidence.amount == amount
-                && evidence.recipient == recipient
-                && evidence.source_chain_id == intent.source_chain_id
-                && evidence.destination_chain_id == STELLAR_CHAIN_ID
-                && evidence.receive_token == receive_token
-                && evidence.nonce == intent.nonce
-                && evidence.message_id == message_id
-        });
+        let provider_evidence_present = request.provider_evidence_present;
+        let evidence = request.provider_evidence;
+        let provider_matches_intent = provider_evidence_present
+            && evidence.amount == amount
+            && evidence.recipient == recipient
+            && evidence.source_chain_id == intent.source_chain_id
+            && evidence.destination_chain_id == STELLAR_CHAIN_ID
+            && evidence.receive_token == receive_token
+            && evidence.nonce == intent.nonce
+            && evidence.message_id == message_id;
 
         let (
             payout_record_present,

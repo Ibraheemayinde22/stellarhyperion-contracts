@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import {
-  lstatSync,
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -14,11 +17,17 @@ const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const HASH = /^0x[0-9a-f]{64}$/i;
 
 function readRegularJson(path) {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES) {
-    throw new Error("evidence input must be a bounded regular file");
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const descriptor = openSync(path, constants.O_RDONLY | noFollow);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+      throw new Error("evidence input must be a bounded regular file");
+    }
+    return JSON.parse(readFileSync(descriptor, "utf8"));
+  } finally {
+    closeSync(descriptor);
   }
-  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function transactionHash(transaction) {

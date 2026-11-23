@@ -1,10 +1,14 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -39,6 +43,19 @@ const HOOKS = new Set([
 
 export function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function readRegularFile(path) {
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const descriptor = openSync(path, constants.O_RDONLY | noFollow);
+  try {
+    if (!fstatSync(descriptor).isFile()) {
+      throw new Error("package source contains a non-regular file");
+    }
+    return readFileSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function assertArchivePath(path) {
@@ -92,10 +109,12 @@ export function collectPackageFiles(packageRoot) {
   const files = new Map();
   for (const name of ["package.json", "README.md"]) {
     const path = join(root, name);
-    if (!existsSync(path) || !lstatSync(path).isFile()) {
+    try {
+      files.set(name, readRegularFile(path));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
       throw new Error(`required package file is missing or not regular: ${name}`);
     }
-    files.set(name, readFileSync(path));
   }
 
   const dist = join(root, "dist");
@@ -112,7 +131,7 @@ export function collectPackageFiles(packageRoot) {
         walk(path);
       } else if (entry.isFile()) {
         const name = relative(root, path).split(sep).join("/");
-        files.set(name, readFileSync(path));
+        files.set(name, readRegularFile(path));
       } else {
         throw new Error(`package source contains a special file: ${relative(root, path)}`);
       }

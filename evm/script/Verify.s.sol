@@ -51,11 +51,7 @@ contract Verify is DeployConfig {
         _expectUint("chain id", block.chainid, record.readUint(".chainId"));
         bytes32 observedGenesis = observedGenesisBlockHash();
         if (vm.keyExistsJson(record, ".genesisBlockHash")) {
-            _expectBytes32(
-                "genesis block hash",
-                record.readBytes32(".genesisBlockHash"),
-                observedGenesis
-            );
+            _expectBytes32("genesis block hash", record.readBytes32(".genesisBlockHash"), observedGenesis);
         } else {
             console.log("WARN legacy record has no genesis-block network binding");
         }
@@ -278,7 +274,11 @@ contract Verify is DeployConfig {
         }
         _verifyReceiptPosition(record, ".positions.initialization");
         uint256 index;
-        while (vm.keyExistsJson(record, string.concat(".positions.activation[", vm.toString(index), "].txHash"))) {
+        while (
+            vm.keyExistsJson(
+                record, string.concat(".positions.activation[", vm.toString(index), "].txHash")
+            )
+        ) {
             _verifyReceiptPosition(record, string.concat(".positions.activation[", vm.toString(index), "]"));
             ++index;
         }
@@ -312,11 +312,7 @@ contract Verify is DeployConfig {
                 record.readAddress(".router")
             );
         }
-        _expectString(
-            string.concat(path, " receipt hash"),
-            vm.parseJsonString(receipt, ".transactionHash"),
-            txHash
-        );
+        _expectString(string.concat(path, " receipt hash"), vm.parseJsonString(receipt, ".transactionHash"), txHash);
         _expectString(string.concat(path, " receipt status"), vm.parseJsonString(receipt, ".status"), "0x1");
         _expectString(
             string.concat(path, " receipt block"),

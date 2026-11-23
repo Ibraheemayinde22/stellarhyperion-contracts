@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,11 +44,17 @@ function runBuild() {
 }
 
 function readSuppliedArchive(path) {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0 || stat.size > MAX_ARCHIVE_BYTES) {
-    throw new Error("supplied archive must be a non-empty bounded regular file");
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const descriptor = openSync(path, constants.O_RDONLY | noFollow);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_ARCHIVE_BYTES) {
+      throw new Error("supplied archive must be a non-empty bounded regular file");
+    }
+    return readFileSync(descriptor);
+  } finally {
+    closeSync(descriptor);
   }
-  return readFileSync(path);
 }
 
 function reportDifferences(differences) {

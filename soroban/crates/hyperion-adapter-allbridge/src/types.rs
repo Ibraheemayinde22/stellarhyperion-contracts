@@ -112,7 +112,8 @@ pub struct InboundProviderEvidence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InboundAuditRequest {
     pub intent: InboundIntent,
-    pub provider_evidence: Option<InboundProviderEvidence>,
+    pub provider_evidence_present: bool,
+    pub provider_evidence: InboundProviderEvidence,
     pub claim_id: Option<u64>,
 }
 
