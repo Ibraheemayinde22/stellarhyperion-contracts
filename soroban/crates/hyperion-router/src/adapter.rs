@@ -64,6 +64,7 @@ pub trait PaidRailAdapter {
 /// consume CCTP token mappings.
 #[soroban_sdk::contractclient(name = "CctpRailAdapterClient")]
 pub trait CctpRailAdapter {
+    #[allow(clippy::too_many_arguments)]
     fn check_dispatch_revision(
         env: Env,
         caller: Address,
@@ -75,6 +76,7 @@ pub trait CctpRailAdapter {
         destination_decimals: u32,
         gas_amount: Option<i128>,
     );
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_revision(
         env: Env,
         caller: Address,

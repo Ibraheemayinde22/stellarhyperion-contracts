@@ -530,10 +530,7 @@ contract CctpAdapterTest is Fixture {
     function test_dispatch_refuses_a_destination_that_fails_its_checksum() public {
         _fund(AMOUNT);
         Destination memory destination = Destination({
-            chain: STELLAR,
-            strkey: "GA5ZYIIVYDX5GRF2BKEQD2Y47ZCPG3HX3PUUNPVQ5ZECB57MJG7RLVNV",
-            mappingRevision: 1,
-            remoteDecimals: 7
+            chain: STELLAR, strkey: "not-a-stellar-strkey", mappingRevision: 1, remoteDecimals: 7
         });
         vm.prank(address(router));
         vm.expectRevert(InvalidDestination.selector);

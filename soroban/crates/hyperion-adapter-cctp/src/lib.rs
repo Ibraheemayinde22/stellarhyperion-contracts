@@ -127,6 +127,7 @@ impl CctpAdapter {
     // ---------------------------------------------------------------------------------------
 
     // Shares all local dispatch checks; provider execution/balances still require simulation.
+    #[allow(clippy::too_many_arguments)]
     pub fn check_dispatch_revision(
         env: Env,
         caller: Address,
@@ -157,6 +158,7 @@ impl CctpAdapter {
     /// The router is the only caller. It has already taken its fee, floored the amount to
     /// something the far side can represent, charged the flow limit and moved the money, so by
     /// the time this runs the adapter is holding exactly what needs to cross.
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch_revision(
         env: Env,
         caller: Address,
@@ -1285,6 +1287,7 @@ fn contract_at(env: &Env, raw: &BytesN<32>) -> Address {
     Address::from_string(&codec::contract_strkey(env, &raw.to_array()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_dispatch(
     env: &Env,
     caller: &Address,

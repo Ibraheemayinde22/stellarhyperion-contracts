@@ -123,6 +123,7 @@ impl MockRail {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn check_dispatch_revision(
         _env: Env,
         _caller: Address,
@@ -136,6 +137,7 @@ impl MockRail {
     ) {
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch_revision(
         env: Env,
         caller: Address,
@@ -158,6 +160,7 @@ impl MockRail {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch_from_revision(
         env: Env,
         caller: Address,
