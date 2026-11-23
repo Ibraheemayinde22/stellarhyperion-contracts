@@ -402,6 +402,7 @@ describe("reading a record that holds together", () => {
 
   it("keeps inverse-quote wiring gated to configured Stellar Testnet CCTP and ITS", () => {
     const activeTestnet = stellarRecord({
+      networkPassphrase: "Test SDF Network ; September 2015",
       adapters: { cctp: ROUTER_C, "axelar-its": C_ADDR },
       tokens: {
         USDC: {
