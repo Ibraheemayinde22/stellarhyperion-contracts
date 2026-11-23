@@ -169,9 +169,10 @@ AXELAR_SLUG=$(awk '$1 == "route" { print $2; exit }' testdata/capabilities/evm-a
 echo "  adapters report the routes the snapshots record"
 
 note "checking the versioned malformed-message corpus"
-node script/malformed-message-corpus.mjs >/tmp/hyperion-malformed-corpus.json \
+corpus_cases=$(node script/malformed-message-corpus.mjs \
+  | node -e 'let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>{const cases=JSON.parse(input).cases;if(!Array.isArray(cases)||cases.length===0)process.exitCode=1;else process.stdout.write(String(cases.length));});') \
   || die "malformed-message corpus"
-echo "  corpus: $(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync("/tmp/hyperion-malformed-corpus.json")); console.log(x.cases.length+" cases")')"
+echo "  corpus: $corpus_cases cases"
 
 note "sending one real transfer"
 ( cd "$EVM_DIR" && forge script script/Smoke.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \

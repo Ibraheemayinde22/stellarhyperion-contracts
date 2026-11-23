@@ -68,7 +68,7 @@ function hex(value, name, length) {
 }
 
 /** Standard HashIDPreimage::ContractId / FromAsset XDR, using the SDK's independent strkey codec. */
-export function assetContractId(code, issuer, passphrase, protocol) {
+export function assetContractId(code, issuer, publicNetworkId, protocol) {
   if (!/^[A-Za-z0-9]{1,12}$/.test(code))
     throw new Error("asset code is invalid");
   const parsed = protocol.parseStellarAddress(issuer);
@@ -83,7 +83,7 @@ export function assetContractId(code, issuer, passphrase, protocol) {
   assetCode.write(code, "ascii");
   const preimage = Buffer.concat([
     uint(8),
-    createHash("sha256").update(passphrase).digest(),
+    createHash("sha256").update(publicNetworkId).digest(),
     uint(1),
     uint(code.length <= 4 ? 1 : 2),
     assetCode,

@@ -20,6 +20,8 @@ contract AuthorityModelTest is Fixture {
         if (index == 0) return admin;
         if (index == 1) return guardian;
         if (index == 2) return stranger;
+        // The generated actor indices are bounded to eight entries.
+        // forge-lint: disable-next-line(unsafe-typecast)
         return address(uint160(0xA000 + index));
     }
 
@@ -102,8 +104,8 @@ contract AuthorityModelTest is Fixture {
             if (!ok) _checkFailure(row, result, trace);
         }
         for (uint256 actor; actor < 8; ++actor) {
-            assertEq(actual.hasRole(adminRole, _actor(actor)), row[9] & (1 << actor) != 0, trace);
-            assertEq(actual.hasRole(guardianRole, _actor(actor)), row[10] & (1 << actor) != 0, trace);
+            assertEq(actual.hasRole(adminRole, _actor(actor)), row[9] & (2 ** actor) != 0, trace);
+            assertEq(actual.hasRole(guardianRole, _actor(actor)), row[10] & (2 ** actor) != 0, trace);
         }
         assertEq(block.timestamp, row[7], trace);
         assertEq(actual.feeBps(), row[11], trace);
@@ -112,6 +114,8 @@ contract AuthorityModelTest is Fixture {
     }
 
     function _checkFailure(uint256[18] memory row, bytes memory result, string memory trace) private view {
+        // An EVM revert selector is exactly the first four bytes.
+        // forge-lint: disable-next-line(unsafe-typecast)
         bytes4 selector = bytes4(result);
         if (row[5] == 1) {
             if (row[2] == 3 || row[2] == 6) {

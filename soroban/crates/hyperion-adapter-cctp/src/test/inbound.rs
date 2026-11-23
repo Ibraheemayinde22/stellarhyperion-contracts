@@ -197,6 +197,7 @@ fn a_message_with_no_attestation_behind_it_goes_nowhere() {
 #[test]
 fn a_message_bound_for_another_chain_is_not_ours_to_process() {
     let w = World::new();
+    w.transmitter().set_mute(&true);
     let mut spec = w.spec(ARRIVING, 30, w.hook_to_recipient());
     spec.destination_domain = 3;
     assert_eq!(
@@ -204,11 +205,16 @@ fn a_message_bound_for_another_chain_is_not_ours_to_process() {
             .try_receive(&w.relayer, &spec.encode(&w.env), &w.attestation()),
         Err(Ok(HyperionError::WrongDomain))
     );
+    assert_eq!(w.token().balance(&w.adapter_id), 0);
+    assert_eq!(w.token().balance(&w.router_id), 0);
+    assert_eq!(w.token().balance(&w.recipient), 0);
+    assert_eq!(w.router().claim_count(), 0);
 }
 
 #[test]
 fn a_message_addressed_to_anything_but_circles_minter_is_refused() {
     let w = World::new();
+    w.transmitter().set_mute(&true);
     let mut spec = w.spec(ARRIVING, 31, w.hook_to_recipient());
     // A message for some other contract on this domain. Whatever it means, it does not mean a
     // USDC burn, and handing it to the transmitter on the chance it works out is not a plan.
@@ -218,6 +224,10 @@ fn a_message_addressed_to_anything_but_circles_minter_is_refused() {
             .try_receive(&w.relayer, &spec.encode(&w.env), &w.attestation()),
         Err(Ok(HyperionError::UnexpectedRailContract))
     );
+    assert_eq!(w.token().balance(&w.adapter_id), 0);
+    assert_eq!(w.token().balance(&w.router_id), 0);
+    assert_eq!(w.token().balance(&w.recipient), 0);
+    assert_eq!(w.router().claim_count(), 0);
 }
 
 #[test]
@@ -250,6 +260,7 @@ fn a_source_domain_the_admin_never_linked_is_refused() {
 #[test]
 fn forged_header_or_burn_sender_is_refused() {
     let w = World::new();
+    w.transmitter().set_mute(&true);
 
     let mut header = w.spec(ARRIVING, 34, w.hook_to_recipient());
     header.sender = [0xDEu8; 32];
@@ -258,6 +269,9 @@ fn forged_header_or_burn_sender_is_refused() {
             .try_receive(&w.relayer, &header.encode(&w.env), &w.attestation()),
         Err(Ok(HyperionError::UnexpectedRailContract))
     );
+    assert_eq!(w.token().balance(&w.adapter_id), 0);
+    assert_eq!(w.token().balance(&w.router_id), 0);
+    assert_eq!(w.token().balance(&w.recipient), 0);
 
     let mut body = w.spec(ARRIVING, 35, w.hook_to_recipient());
     body.message_sender = [0xDEu8; 32];
@@ -266,6 +280,10 @@ fn forged_header_or_burn_sender_is_refused() {
             .try_receive(&w.relayer, &body.encode(&w.env), &w.attestation()),
         Err(Ok(HyperionError::UnexpectedRailContract))
     );
+    assert_eq!(w.token().balance(&w.adapter_id), 0);
+    assert_eq!(w.token().balance(&w.router_id), 0);
+    assert_eq!(w.token().balance(&w.recipient), 0);
+    assert_eq!(w.router().claim_count(), 0);
 }
 
 #[test]
