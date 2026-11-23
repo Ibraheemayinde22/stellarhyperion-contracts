@@ -25,6 +25,7 @@ import { RouteKind } from "./routes.js";
 import { ROUTE_KINDS, ROUTE_SLUGS, tryRouteFromSlug } from "./routes.js";
 import { isStellarAddress } from "./addresses.js";
 import type { ProviderAddressOverrides } from "./registry/assets.js";
+import { MAX_DEPLOYMENT_TOKENS, MAX_DEPLOYMENT_WASM_HASHES } from "./limits.js";
 
 /** The schema version of a deployment file, so an old file fails loudly rather than oddly. */
 export const DEPLOYMENT_SCHEMA_VERSION = 1;
@@ -401,8 +402,15 @@ function readStellarDeployment(
 ): StellarDeployment {
   const adapters = asAdapters(raw.adapters, `${path}.adapters`, asStellarContract);
   const tokensRaw = asRecord(raw.tokens, `${path}.tokens`);
+  const tokenEntries = Object.entries(tokensRaw);
+  if (tokenEntries.length > MAX_DEPLOYMENT_TOKENS) {
+    fail(
+      `${path}.tokens`,
+      `more than ${String(MAX_DEPLOYMENT_TOKENS)} token entries exceeds the record input limit`,
+    );
+  }
   const tokens: Record<string, StellarTokenDeployment> = {};
-  for (const [symbol, entry] of Object.entries(tokensRaw)) {
+  for (const [symbol, entry] of tokenEntries) {
     const tokenPath = `${path}.tokens.${symbol}`;
     const token = asRecord(entry, tokenPath);
     const routes = asRoutes(token.routes, `${tokenPath}.routes`);
@@ -430,8 +438,15 @@ function readStellarDeployment(
   }
 
   const hashesRaw = asRecord(raw.wasmHashes, `${path}.wasmHashes`);
+  const hashEntries = Object.entries(hashesRaw);
+  if (hashEntries.length > MAX_DEPLOYMENT_WASM_HASHES) {
+    fail(
+      `${path}.wasmHashes`,
+      `more than ${String(MAX_DEPLOYMENT_WASM_HASHES)} wasm hashes exceeds the record input limit`,
+    );
+  }
   const wasmHashes: Record<string, string> = {};
-  for (const [name, entry] of Object.entries(hashesRaw)) {
+  for (const [name, entry] of hashEntries) {
     const hash = asString(entry, `${path}.wasmHashes.${name}`);
     if (!/^[0-9a-f]{64}$/.test(hash)) {
       fail(`${path}.wasmHashes.${name}`, "expected 64 lowercase hex characters");
