@@ -28,6 +28,10 @@ divergence.
   record the fee budget, measured burn, retained dust and attested destination deduction in
   explicit units, and existing `cctp_out` / `cctp_in` decoding is unchanged. See
   `CCTP_FEE_ACCOUNTING.md`.
+- The Axelar token-manager probe (`probe_token_manager`) is an additive read-only view. It
+  establishes token id, manager type, local mapping, remote trust and paid-send reads through
+  real ITS calls. Unknown manager types and missing methods block it, and a matching symbol never
+  qualifies a mapping. See `AXELAR_TOKEN_MANAGER_PROBE.md`.
 - Inbound routers reject zero and provider amounts outside the router's supported `i128`/`uint128`
   representable range before custody changes. The exact upper bounds retain normal payout and claim
   behavior. Active deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail paths
