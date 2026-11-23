@@ -24,6 +24,10 @@ divergence.
   classified as a verified mint; renewal plans preserve source message identity and payout intent.
   Unknown or paused messenger/transmitter reads fail closed, and unsupported recovery methods
   remain explicitly unavailable.
+- CCTP fee accounting events (`cctp_fee_out`, `cctp_fee_in`) are additive and versioned. They
+  record the fee budget, measured burn, retained dust and attested destination deduction in
+  explicit units, and existing `cctp_out` / `cctp_in` decoding is unchanged. See
+  `CCTP_FEE_ACCOUNTING.md`.
 - Inbound routers reject zero and provider amounts outside the router's supported `i128`/`uint128`
   representable range before custody changes. The exact upper bounds retain normal payout and claim
   behavior. Active deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail paths
