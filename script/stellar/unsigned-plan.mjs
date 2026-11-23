@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Offline public-input planning. This module has no CLI, RPC or signer dependency. */
-import { createHash, hash } from "node:crypto";
+import { createHash, hash as cryptoHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -84,7 +84,7 @@ export function assetContractId(code, issuer, publicNetworkId, protocol) {
   const preimage = Buffer.concat([
     uint(8),
     // The public Stellar network identifier uses SHA-256, as required by its XDR protocol.
-    hash("sha256", publicNetworkId, "buffer"),
+    cryptoHash("sha256", publicNetworkId, "buffer"),
     uint(1),
     uint(code.length <= 4 ? 1 : 2),
     assetCode,
