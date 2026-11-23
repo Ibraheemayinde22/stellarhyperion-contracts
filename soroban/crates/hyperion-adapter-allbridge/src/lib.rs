@@ -122,6 +122,7 @@ struct AuditClaimProvenance {
 }
 
 #[contractclient(name = "RouterAuditClient")]
+#[allow(dead_code)]
 trait RouterAudit {
     fn audit_claim(env: Env, id: u64) -> Option<AuditClaim>;
     fn get_claim_provenance(env: Env, id: u64) -> Option<AuditClaimProvenance>;
@@ -1091,7 +1092,7 @@ impl AllbridgeAdapter {
             let router = RouterAuditClient::new(&env, &cfg.router);
             let claim = router.audit_claim(&claim_id);
             let provenance = router.get_claim_provenance(&claim_id);
-            let claim_matches = claim.as_ref().map_or(false, |claim| {
+            let claim_matches = claim.as_ref().is_some_and(|claim| {
                 claim.id == claim_id
                     && claim.route == RouteKind::Allbridge
                     && claim.recipient == intent.recipient
@@ -1100,14 +1101,14 @@ impl AllbridgeAdapter {
                     && claim.source_chain == source_chain
                     && claim.source_nonce == display_nonce(&intent.nonce)
             });
-            let provenance_matches = provenance.as_ref().map_or(false, |provenance| {
+            let provenance_matches = provenance.as_ref().is_some_and(|provenance| {
                 provenance.route == RouteKind::Allbridge
                     && provenance.source_chain == source_chain
                     && provenance.message_id == message_id
             });
             let payout_record_present = claim.is_some();
             let payout_provenance_present = provenance.is_some();
-            let payout_settled = claim.as_ref().map_or(false, |claim| claim.settled);
+            let payout_settled = claim.as_ref().is_some_and(|claim| claim.settled);
             (
                 payout_record_present,
                 payout_provenance_present,

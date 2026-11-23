@@ -151,7 +151,7 @@ abstract contract DeployConfig is Script {
 
     /// @dev Chain IDs can be shared by forks. Bind EVM deployment artifacts to the RPC's public
     /// genesis block as well, so a same-ID fork cannot silently receive a desired record.
-    function observedGenesisBlockHash() internal view returns (bytes32) {
+    function observedGenesisBlockHash() internal returns (bytes32) {
         string memory response = vm.rpcJson("eth_getBlockByNumber", '["0x0",false]');
         bytes32 genesisHash = vm.parseJsonBytes32(response, ".hash");
         require(genesisHash != bytes32(0), "RPC returned no genesis block hash");

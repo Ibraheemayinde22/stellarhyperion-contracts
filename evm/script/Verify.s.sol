@@ -274,11 +274,9 @@ contract Verify is DeployConfig {
         }
         _verifyReceiptPosition(record, ".positions.initialization");
         uint256 index;
-        while (
-            vm.keyExistsJson(
-                record, string.concat(".positions.activation[", vm.toString(index), "].txHash")
-            )
-        ) {
+        while (vm.keyExistsJson(
+            record, string.concat(".positions.activation[", vm.toString(index), "].txHash")
+        )) {
             _verifyReceiptPosition(record, string.concat(".positions.activation[", vm.toString(index), "]"));
             ++index;
         }
@@ -312,7 +310,9 @@ contract Verify is DeployConfig {
                 record.readAddress(".router")
             );
         }
-        _expectString(string.concat(path, " receipt hash"), vm.parseJsonString(receipt, ".transactionHash"), txHash);
+        _expectString(
+            string.concat(path, " receipt hash"), vm.parseJsonString(receipt, ".transactionHash"), txHash
+        );
         _expectString(string.concat(path, " receipt status"), vm.parseJsonString(receipt, ".status"), "0x1");
         _expectString(
             string.concat(path, " receipt block"),
