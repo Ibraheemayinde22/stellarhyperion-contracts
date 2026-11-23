@@ -37,7 +37,7 @@ function packageFiles(): Map<string, Buffer> {
 }
 
 function rawArchive(
-  entries: Array<{ path: string; content?: Buffer; mode?: number; type?: number }>,
+  entries: { path: string; content?: Buffer; mode?: number; type?: number }[],
 ): Buffer {
   const chunks: Buffer[] = [];
   for (const entry of entries) {

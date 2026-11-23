@@ -455,7 +455,7 @@ function readEvmDeployment(
     ? readPosition(initializationRaw, `${path}.positions.initialization`)
     : null;
   const activation = activationRaw.map((position, index) =>
-    readPosition(position, `${path}.positions.activation[${index}]`),
+    readPosition(position, `${path}.positions.activation[${String(index)}]`),
   );
   return {
     family: "evm",
@@ -583,7 +583,7 @@ function readStellarDeployment(
     ? readPosition(initializationRaw, `${path}.positions.initialization`)
     : null;
   const activation = activationRaw.map((position, index) =>
-    readPosition(position, `${path}.positions.activation[${index}]`),
+    readPosition(position, `${path}.positions.activation[${String(index)}]`),
   );
   const evidenceLimitations = [
     ...(initialization ? [] : ["initialization transaction evidence unavailable"]),

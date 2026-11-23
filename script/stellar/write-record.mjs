@@ -35,6 +35,7 @@ import {
 import { rpcClient } from "./restore-plan.mjs";
 import { validateRpcUrl } from "./rollback-report.mjs";
 import { buildUnsignedPlan } from "./unsigned-plan.mjs";
+import { verifyEnvelope } from "./reconcile-transaction.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const contractsRoot = resolve(here, "..", "..");
@@ -96,7 +97,7 @@ export async function buildRecord(env = process.env, dependencies = {}) {
    * Worth a round trip: it is the only value in the record that lets somebody line the deployment up
    * against the chain's own history, and a wrong one makes an indexer start from the wrong place.
    */
-  async function latestLedger() {
+  async function transactionPosition() {
     if (dependencies.offline)
       throw new Error(
         "unsigned record planning requires an explicit public deployment ledger",
@@ -302,7 +303,10 @@ export async function buildRecord(env = process.env, dependencies = {}) {
       timestamp: initialization.timestamp,
     },
     positions: {
-      initialization,
+      initialization: {
+        ledger: initialization.ledger,
+        txHash: initialization.txHash,
+      },
       activation: [],
     },
     commit: commit(),
