@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
@@ -5,6 +9,7 @@ import {
   comparePackageFiles,
   createPackageArchive,
   parsePackageArchive,
+  readRegularFile,
   sha256,
   smokeTestPackage,
 } from "../scripts/archive.mjs";
@@ -62,6 +67,22 @@ function rawArchive(
 }
 
 describe("SDK release archives", () => {
+  it("reads bounded regular descriptors and rejects links and directories", () => {
+    const root = mkdtempSync(join(tmpdir(), "protocol-file-boundary-"));
+    try {
+      const path = join(root, "source");
+      const link = join(root, "link");
+      writeFileSync(path, "abcd");
+      symlinkSync(path, link);
+      expect(readRegularFile(path, 4).toString()).toBe("abcd");
+      expect(() => readRegularFile(path, 3)).toThrow(/bounded regular file|size limit/);
+      expect(() => readRegularFile(link, 4)).toThrow();
+      expect(() => readRegularFile(root, 4)).toThrow(/regular file/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("round-trips an archive and loads both exports in an isolated consumer", () => {
     const expected = packageFiles();
     const actual = parsePackageArchive(createPackageArchive(expected));

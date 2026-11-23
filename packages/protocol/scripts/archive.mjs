@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -87,15 +90,39 @@ export function validatePackageManifest(manifest, path = "package.json") {
   }
 }
 
+// Validate and read the same opened file; never reopen a checked pathname.
+export function readRegularFile(path, maximum = MAX_UNCOMPRESSED_BYTES) {
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > maximum) {
+      throw new Error(`not a bounded regular file: ${path}`);
+    }
+    const buffer = Buffer.alloc(Math.min(64 * 1024, maximum + 1));
+    const chunks = [];
+    let length = 0;
+    while (true) {
+      const count = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      length += count;
+      if (length > maximum) throw new Error(`file exceeds size limit: ${path}`);
+      chunks.push(Buffer.from(buffer.subarray(0, count)));
+    }
+    return Buffer.concat(chunks, length);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 export function collectPackageFiles(packageRoot) {
   const root = resolve(packageRoot);
   const files = new Map();
   for (const name of ["package.json", "README.md"]) {
     const path = join(root, name);
-    if (!existsSync(path) || !lstatSync(path).isFile()) {
-      throw new Error(`required package file is missing or not regular: ${name}`);
-    }
-    files.set(name, readFileSync(path));
+    files.set(name, readRegularFile(path));
   }
 
   const dist = join(root, "dist");
@@ -112,7 +139,7 @@ export function collectPackageFiles(packageRoot) {
         walk(path);
       } else if (entry.isFile()) {
         const name = relative(root, path).split(sep).join("/");
-        files.set(name, readFileSync(path));
+        files.set(name, readRegularFile(path));
       } else {
         throw new Error(`package source contains a special file: ${relative(root, path)}`);
       }
@@ -309,8 +336,7 @@ export function smokeTestPackage(files) {
       const target = resolve(packageRoot, ...path.split("/"));
       if (!target.startsWith(`${packageRoot}${sep}`)) throw new Error(`unsafe smoke path: ${path}`);
       mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, contents, { mode: 0o644 });
-      chmodSync(target, 0o644);
+      writeFileSync(target, contents, { flag: "wx", mode: 0o644 });
     }
     const entry = join(temporary, "consumer");
     const script = [

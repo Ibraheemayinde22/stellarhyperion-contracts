@@ -1,3 +1,5 @@
+extern crate std;
+
 use std::vec::Vec;
 
 use hyperion_core::{AddressKind, HyperionError, RouteKind};
@@ -5,7 +7,6 @@ use soroban_sdk::{BytesN, String};
 
 use super::{
     doubles::Delivery,
-    doubles::MockRailClient,
     setup::{World, HUNDRED},
 };
 

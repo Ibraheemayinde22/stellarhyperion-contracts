@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +9,7 @@ import {
   collectPackageFiles,
   comparePackageFiles,
   parsePackageArchive,
+  readRegularFile,
   sha256,
   smokeTestPackage,
 } from "./archive.mjs";
@@ -38,11 +38,9 @@ function runBuild() {
 }
 
 function readSuppliedArchive(path) {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0 || stat.size > MAX_ARCHIVE_BYTES) {
-    throw new Error("supplied archive must be a non-empty bounded regular file");
-  }
-  return readFileSync(path);
+  const bytes = readRegularFile(path, MAX_ARCHIVE_BYTES);
+  if (bytes.length === 0) throw new Error("supplied archive must be non-empty");
+  return bytes;
 }
 
 function reportDifferences(differences) {
@@ -61,7 +59,8 @@ function main(args) {
   const [path, ...extra] = args;
   if (!path || extra.length) throw new Error("usage: verify-archive.mjs ARCHIVE_PATH");
 
-  const actual = parsePackageArchive(readSuppliedArchive(resolve(path)));
+  const supplied = readSuppliedArchive(resolve(path));
+  const actual = parsePackageArchive(supplied);
   cleanPackageBuild(packageRoot);
   runBuild();
   const expected = collectPackageFiles(packageRoot);
@@ -72,7 +71,7 @@ function main(args) {
   }
   smokeTestPackage(expected);
   process.stdout.write(
-    `verified ${String(expected.size)} packaged files; archive sha256 ${sha256(readSuppliedArchive(resolve(path)))}\n`,
+    `verified ${String(expected.size)} packaged files; archive sha256 ${sha256(supplied)}\n`,
   );
   process.stdout.write(
     'isolated imports succeeded: "@hyperion/protocol" and "@hyperion/protocol/abi"\n',

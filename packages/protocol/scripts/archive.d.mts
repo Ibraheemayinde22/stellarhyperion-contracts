@@ -9,6 +9,7 @@ export interface PackageDifferences {
 }
 
 export const MAX_ARCHIVE_BYTES: number;
+export function readRegularFile(path: string, maximum?: number): Buffer;
 export function sha256(value: Uint8Array): string;
 export function validatePackageManifest(manifest: unknown, path?: string): void;
 export function cleanPackageBuild(packageRoot: string): void;

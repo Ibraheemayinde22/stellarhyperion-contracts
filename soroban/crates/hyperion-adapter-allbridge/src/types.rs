@@ -108,11 +108,21 @@ pub struct InboundProviderEvidence {
     pub message_id: BytesN<32>,
 }
 
+/// Optional provider evidence encoded as a contract enum, avoiding the SDK's
+/// environment-free XDR conversion for `Option` of a custom contract type.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)] // Contract wire values cannot contain Box indirection.
+pub enum ProviderEvidence {
+    Missing,
+    Present(InboundProviderEvidence),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InboundAuditRequest {
     pub intent: InboundIntent,
-    pub provider_evidence: Option<InboundProviderEvidence>,
+    pub provider_evidence: ProviderEvidence,
     pub claim_id: Option<u64>,
 }
 
@@ -129,4 +139,31 @@ pub struct InboundAuditReport {
     pub payout_settled: bool,
     pub verified: bool,
     pub unresolved_trust_assumption: bool,
+}
+
+#[cfg(test)]
+mod evidence_encoding {
+    use super::*;
+    use soroban_sdk::{Env, IntoVal, TryFromVal, Val};
+
+    #[test]
+    fn optional_provider_evidence_round_trips_contract_values() {
+        let env = Env::default();
+        let present = ProviderEvidence::Present(InboundProviderEvidence {
+            amount: 42,
+            recipient: BytesN::from_array(&env, &[1; 32]),
+            source_chain_id: 2,
+            destination_chain_id: 7,
+            receive_token: BytesN::from_array(&env, &[3; 32]),
+            nonce: U256::from_u32(&env, 9),
+            message_id: BytesN::from_array(&env, &[4; 32]),
+        });
+        for evidence in [ProviderEvidence::Missing, present] {
+            let encoded: Val = evidence.clone().into_val(&env);
+            assert_eq!(
+                ProviderEvidence::try_from_val(&env, &encoded).unwrap(),
+                evidence
+            );
+        }
+    }
 }
