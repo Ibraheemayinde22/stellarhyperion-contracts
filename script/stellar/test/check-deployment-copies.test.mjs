@@ -2,10 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  closeSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +43,21 @@ function writeRecord(directory, record, name = "copy.json") {
   const file = path.join(directory, name);
   writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
   return file;
+}
+
+/**
+ * Capture a file's bytes and modification time through one descriptor, so both observations come
+ * from the same file object. Checking the path and then opening it separately would leave a window
+ * in which the file could be replaced between the two, which is a TOCTOU pattern CodeQL flags.
+ */
+function snapshot(file) {
+  const descriptor = openSync(file, "r");
+  try {
+    const { mtimeMs } = fstatSync(descriptor);
+    return { bytes: readFileSync(descriptor), mtimeMs };
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function git(args, cwd) {
@@ -289,19 +306,19 @@ test("missing and unexpected fields are named, and extras are notices", () => {
 test("the command never rewrites a consumer copy", () => {
   const directory = scratch();
   const file = writeRecord(directory, canonicalRecord());
-  const before = readFileSync(file);
-  const beforeStat = statSync(file);
+  const before = snapshot(file);
 
   const report = check(fileCopy("frontend", file), "--allow-working-tree");
   assert.equal(report.consistent, true);
-  assert.deepEqual(readFileSync(file), before);
-  assert.equal(statSync(file).mtimeMs, beforeStat.mtimeMs);
+  const after = snapshot(file);
+  assert.deepEqual(after.bytes, before.bytes);
+  assert.equal(after.mtimeMs, before.mtimeMs);
 
   assert.throws(
     () => check(fileCopy("frontend", file), "--allow-working-tree", "--out", file),
     /never rewrites a consumer/,
   );
-  assert.deepEqual(readFileSync(file), before);
+  assert.deepEqual(snapshot(file).bytes, before.bytes);
 });
 
 test("copy revisions must be full, exact and locally available", () => {
