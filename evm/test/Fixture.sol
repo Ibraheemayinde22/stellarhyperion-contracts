@@ -267,6 +267,15 @@ contract Fixture is Test {
         return Destination({chain: STELLAR, strkey: strkey});
     }
 
+    function _replayOrigin(bytes32 messageId, uint64 displayNonce) internal pure returns (Origin memory) {
+        return Origin({
+            chain: STELLAR,
+            nonce: displayNonce,
+            messageId: messageId,
+            sender: bytes32(0)
+        });
+    }
+
     function _request(uint256 amount, RouteKind route) internal pure returns (OutboundRequest memory) {
         return OutboundRequest({
             token: address(0),
