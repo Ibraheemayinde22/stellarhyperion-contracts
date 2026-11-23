@@ -86,6 +86,10 @@ contract Fixture is Test {
     MockRailAdapter internal gmpRail;
     MockRailAdapter internal allbridgeRail;
 
+    /// Payout-relevant ABI baseline: exact amount, recipient, replay nonce.
+    /// Removal or reorder of these fields is a breaking compatibility failure.
+    bytes32 internal constant PAYOUT_SHAPE_HASH = keccak256("uint256 address bytes32 uint64");
+
     function setUp() public virtual {
         _configureProviderFaults(156);
         router = new HyperionRouter(admin, guardian, treasury, FEE_BPS, TIMELOCK, FLOW_WINDOW);
@@ -362,5 +366,9 @@ contract Fixture is Test {
             before_.totalNative,
             string.concat(operation, ": relay currency balance delta is non-zero")
         );
+    }
+
+    function _assertPayoutShape(bytes32 observed) internal pure {
+        assertEq(observed, PAYOUT_SHAPE_HASH, "payout ABI tuple layout changed");
     }
 }

@@ -57,6 +57,17 @@ else
 fi
 
 CHAIN_ID=$(cast chain-id --rpc-url "$RPC")
+
+note "checking generated ABI provenance"
+( cd evm && forge build >/tmp/hyperion-abi-build.log 2>&1 ) \
+  || { cat /tmp/hyperion-abi-build.log; die "Foundry ABI build provenance"; }
+( cd packages/protocol && npm run gen >/tmp/hyperion-abi-gen.log 2>&1 ) \
+  || { cat /tmp/hyperion-abi-gen.log; die "generated ABI provenance"; }
+if ! git diff --quiet -- packages/protocol/src/abi; then
+  die "generated ABI differs from the committed provenance"
+fi
+echo "  ABI modules match the compiled EVM artifacts"
+
 [ "$CHAIN_ID" = "31337" ] || [ "$CHAIN_ID" = "1337" ] || die "chain $CHAIN_ID is not a local node; this script deploys a mintable token called USDC and that belongs nowhere else"
 
 # Anvil's first three well known accounts. Public, documented, funded only on a throwaway chain.

@@ -71,3 +71,6 @@ export * from "./deployments.js";
 
 // Assets and rail contracts per chain, with provenance attached.
 export * from "./registry/index.js";
+
+// ABI and tuple compatibility checks for payout-relevant consumer surfaces.
+export * from "./abi-compat.js";

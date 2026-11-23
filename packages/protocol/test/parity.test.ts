@@ -36,6 +36,8 @@ import {
 import { MAX_DECIMALS, MAX_FEE_BPS } from "../src/amounts.js";
 import { NOTE_VERSION, OUTBOUND_NOTE_LEN } from "../src/notes.js";
 import { WIRE_SCHEMAS } from "../src/wire-compat.js";
+import { abiSignature, compareAbiSets } from "../src/abi-compat.js";
+import type { AbiEntry } from "../src/abi-compat.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..");
@@ -754,6 +756,69 @@ describe("the constants both chains agree on", () => {
       new RegExp(`pub const MAX_FEE_BPS\\s*:\\s*u32\\s*=\\s*${String(MAX_FEE_BPS)}`),
     );
     expect(root).toMatch(/pub const BPS_DENOMINATOR\s*:\s*i128\s*=\s*10_?000/);
+  });
+});
+
+describe("payout-relevant ABI compatibility", () => {
+  const baseline = [
+    {
+      type: "function",
+      name: "settleClaim",
+      stateMutability: "nonpayable",
+      inputs: [
+        { name: "id", type: "uint64" },
+        { name: "amount", type: "uint256" },
+        { name: "recipient", type: "address" },
+        { name: "nonce", type: "bytes32" },
+      ],
+      outputs: [],
+    },
+    {
+      type: "event",
+      name: "ClaimSettled",
+      inputs: [
+        { name: "id", type: "uint64", indexed: true },
+        { name: "recipient", type: "address", indexed: true },
+        { name: "amount", type: "uint256", indexed: false },
+      ],
+    },
+  ] as const satisfies readonly AbiEntry[];
+
+  it("fails removed and reordered payout fields", () => {
+    const removed = [{ ...baseline[0], inputs: baseline[0].inputs.slice(0, 3) }];
+    expect(compareAbiSets(baseline, removed).result).toBe("breaking");
+
+    const reordered = [
+      {
+        ...baseline[0],
+        inputs: [
+          baseline[0].inputs[0],
+          baseline[0].inputs[2],
+          baseline[0].inputs[1],
+          baseline[0].inputs[3],
+        ],
+      },
+    ];
+    expect(compareAbiSets(baseline, reordered).result).toBe("breaking");
+  });
+
+  it("assesses additive ABI entries as migration work rather than activation", () => {
+    const additive: readonly AbiEntry[] = [
+      ...baseline,
+      {
+        type: "event",
+        name: "ClaimSettledV2",
+        inputs: [...baseline[1].inputs, { name: "migration", type: "bytes32", indexed: false }],
+      },
+    ];
+    const report = compareAbiSets(baseline, additive);
+    expect(report.result).toBe("compatible");
+    expect(report.decisions[0]?.rule).toBe("entry-added");
+  });
+
+  it("uses canonical signatures for tuple and event layout comparisons", () => {
+    expect(abiSignature(baseline[0])).toBe("settleClaim(uint64,uint256,address,bytes32)");
+    expect(abiSignature(baseline[1])).toBe("ClaimSettled(uint64,address,uint256)");
   });
 });
 
