@@ -128,6 +128,99 @@ pub struct ClaimLiability {
     pub solvent: bool,
 }
 
+// Format version of `CustodyAudit`; consumers refuse a version they do not know.
+pub const CUSTODY_AUDIT_VERSION: u32 = 1;
+
+// Overall reconciliation outcome for one token. A known shortfall outranks missing data;
+// otherwise any unreadable input makes the audit `Unknown`, never `Reconciled`.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum CustodyStatus {
+    // Router custody equals unsettled claims and no adapter or receiver holds the token.
+    Reconciled = 0,
+    // Balances exceed known liabilities: donations, rail dust or other unattributed funds.
+    Unexplained = 1,
+    // Router custody is below unsettled claims.
+    Shortfall = 2,
+    // A balance or the liability history could not be established.
+    Unknown = 3,
+}
+
+// One adapter or rail receiver configured on the router, and what it holds at rest.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HolderCustody {
+    // First route (in `RouteKind` order) that names this address.
+    pub route: RouteKind,
+    pub holder: Address,
+    // `None` when the balance read failed or returned a negative amount.
+    pub balance: Option<i128>,
+}
+
+// Read-only custody reconciliation for one token.
+//
+// Inbound deliveries either pay the fixed recipient or park a claim in the router, and outbound
+// dispatch hands funds to the rail in the same transaction, so at rest the router should hold
+// exactly its unsettled claims and adapters/receivers should hold nothing. Anything else is
+// reported separately as unexplained; this record never moves, sweeps or reassigns funds.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CustodyAudit {
+    pub version: u32,
+    pub token: Address,
+    // Router balance, `None` if unreadable.
+    pub router_custody: Option<i128>,
+    // Tracked sum of unsettled claims, `None` when liability tracking is incomplete (an
+    // unmigrated instance). Never estimated.
+    pub unsettled_claims: Option<i128>,
+    // `router_custody - unsettled_claims` when both are known. Negative is a shortfall.
+    pub router_unexplained: Option<i128>,
+    pub holders: soroban_sdk::Vec<HolderCustody>,
+    // Sum of holder balances when every one is known. None of it backs a claim.
+    pub holder_unexplained: Option<i128>,
+    pub status: CustodyStatus,
+}
+
+impl CustodyAudit {
+    // Derive the unexplained amounts and status from observed balances and liabilities.
+    pub fn classify(
+        version: u32,
+        token: Address,
+        router_custody: Option<i128>,
+        unsettled_claims: Option<i128>,
+        holders: soroban_sdk::Vec<HolderCustody>,
+    ) -> Self {
+        let router_unexplained = match (router_custody, unsettled_claims) {
+            (Some(custody), Some(claims)) => custody.checked_sub(claims),
+            _ => None,
+        };
+        let mut holder_unexplained = Some(0i128);
+        for holder in holders.iter() {
+            holder_unexplained = match (holder_unexplained, holder.balance) {
+                (Some(total), Some(balance)) => total.checked_add(balance),
+                _ => None,
+            };
+        }
+        let status = match (router_unexplained, holder_unexplained) {
+            (Some(router), _) if router < 0 => CustodyStatus::Shortfall,
+            (Some(router), Some(held)) if router > 0 || held > 0 => CustodyStatus::Unexplained,
+            (Some(_), Some(_)) => CustodyStatus::Reconciled,
+            _ => CustodyStatus::Unknown,
+        };
+        Self {
+            version,
+            token,
+            router_custody,
+            unsettled_claims,
+            router_unexplained,
+            holders,
+            holder_unexplained,
+            status,
+        }
+    }
+}
+
 // Best-effort recipient diagnostic. This never changes the recipient stored in a claim.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -26,6 +26,7 @@ method claim_count
 method claim_failure_reason
 method claim_history
 method claim_liability
+method custody_audit
 method destination_flow_available
 method destination_flow_limit
 method disable_route
