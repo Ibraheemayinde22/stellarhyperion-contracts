@@ -70,6 +70,58 @@ The current router uses WASM `281d946ea78b194c0ef44ad9488ed02b2aa6912fb4f6fbab52
 
 The older deployment is preserved in `deployments/archive/stellar-testnet-2026-10-01.json`. Its separate admin upgrade instructions are historical in `docs/LEGACY_TESTNET_UPGRADE.md`. Do not run those old-address commands against this fresh deployment.
 
+## Cross-repository deployment copies
+
+`deployments/stellar-testnet-phase1.json` is the canonical record. The backend and frontend carry
+their own copies, and each is deployed from its own commit, so "the copies agree" is a question
+about three revisions rather than one working tree. Check it without signing or writing anything:
+
+```sh
+script/stellar/check-deployment-copies.sh \
+  --copy stellarhyperion-backend=git:../stellarhyperion-backend:$BACKEND_COMMIT:deployments/stellar-testnet-phase1.json \
+  --copy stellarhyperion-frontend=git:../stellarhyperion-frontend:$FRONTEND_COMMIT:deployments/stellar-testnet-phase1.json
+```
+
+Every copy is read out of a local Git object at a full 40-character commit (`git show`), so the
+report names the commit it compared. A short SHA, an unfetched commit, a path outside the
+repository or a copy that describes another network is refused rather than guessed. Working-tree
+rehearsal is possible with `--copy frontend=file:/tmp/copy.json --allow-working-tree`; the report
+labels that revision as not reproducible.
+
+The command prints one JSON report. Each disagreement carries the exact dotted field path
+(`networks.stellar-testnet.tokens.USDC.flowLimit`), the owning repository, the kind
+(`value`, `integer`, `missing`, `unexpected`, `route-set`, `length`, `type`, `archived-copy`,
+`gated-rail`, `unbacked-route` or `unsafe-integer`), the severity and both values.
+`owningRepositories` names whose change fixes it: a consumer label for a copy-side difference,
+`stellarhyperion-contracts` for a canonical-side inconsistency. It exits 0 only when every
+compared copy agrees. Route membership is compared as a set because it is a set on the wire;
+every other array is positional.
+
+Integer amounts are compared as exact decimal integers, never as floating point: a flow limit of
+`123456789012345678901234` must match digit for digit, and a copy storing an integer outside the
+exact numeric range is reported as `unsafe-integer` instead of being compared with a rounded value.
+Stellar contract IDs, account addresses, issuers and passphrases compare case-sensitively; EVM
+addresses compare semantically.
+
+Archived records are distinguished from the active manifest rather than diffed against it. A copy
+whose lifecycle is `archived`, `deprecated` or `retired`, or that was read from an archive path,
+produces a single `archived-copy` finding naming its successor; field-by-field differences are not
+reported for it. A canonical record that is itself archived is refused unless `--allow-archived` is
+passed for a deliberately historical comparison, in which case an active copy becomes the finding.
+
+This command is read-only: it does not sign, submit, or write a consumer copy, and `--out` refuses
+to point at a compared working-tree copy. `wroteConsumerCopies` is always `false` in the report.
+Updating a copy remains a separate reviewed change in that repository, made against the canonical
+record and re-checked here.
+
+Compatibility and migration: this adds a read-only check and no wire-format change. Records that
+already validate with `parseDeploymentSet` need no edits, and a consumer that has not yet adopted
+the full record shape can be compared locally with `file:` and `--allow-working-tree` while its
+copy is migrated. The active deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other
+rail copies stay explicitly gated, and a canonical family other than `stellar` is refused. The EVM
+verifier `evm/script/Verify.s.sol` still checks a live EVM chain against an EVM record; it does not
+compare cross-repository copies, and this command does not activate an EVM lane.
+
 ## Deprecated and archived deployments
 
 Deprecation is a status change, not a deletion. Archived records remain in the repository and their transaction evidence is retained in full; only their operational authority is withdrawn.

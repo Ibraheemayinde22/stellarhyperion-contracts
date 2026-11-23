@@ -201,6 +201,13 @@ say "Historical cleanup: claim_history distinguishes Live, intentional Archived(
 say "Cost capture (read-only): node script/stellar/storage-cost.mjs --rpc RPC_URL --request recorded-keysets.json"
 say "Cost replay: node script/stellar/storage-cost.mjs --record recorded-rpc.json"
 
+note "consumer deployment copies"
+say "Read-only cross-repository consistency check (backend and frontend at explicit commits):"
+say "  script/stellar/check-deployment-copies.sh \\"
+say "    --copy stellarhyperion-backend=git:../stellarhyperion-backend:\$BACKEND_COMMIT:deployments/stellar-testnet-phase1.json \\"
+say "    --copy stellarhyperion-frontend=git:../stellarhyperion-frontend:\$FRONTEND_COMMIT:deployments/stellar-testnet-phase1.json"
+say "Archived records are reported as archived, never rewritten. See docs/TESTNET_ACTIVATION.md."
+
 note "rollback feasibility"
 say "Read-only report — signs nothing, executes nothing:"
 say "  node script/stellar/rollback-report.mjs $RECORD"
