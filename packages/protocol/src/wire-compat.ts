@@ -24,6 +24,8 @@ import { toHex } from "./bytes.js";
 import { SOROBAN_ERROR_NAMES } from "./errors.js";
 import { EVM_ERROR_SELECTORS } from "./abi/errors.js";
 import { AddressKind, VERSION_ACCOUNT, VERSION_CONTRACT, VERSION_MUXED } from "./addresses.js";
+import { MAX_WIRE_ERROR_ENTRIES, MAX_WIRE_FIELDS, MAX_WIRE_SCHEMAS, byteLimit } from "./limits.js";
+import type { ByteParserLimits, WireSchemaLimits } from "./limits.js";
 
 /** Version of the schema-set document format. */
 export const WIRE_SCHEMA_SET_VERSION = 1 as const;
@@ -465,9 +467,11 @@ function parseSize(value: unknown, path: string): WireSize {
   }
 }
 
-function parseMessage(s: Record<string, unknown>, path: string): MessageSchema {
+function parseMessage(s: Record<string, unknown>, path: string, maxFields: number): MessageSchema {
   if (!Array.isArray(s.fields) || s.fields.length === 0)
     bad(`${path}.fields`, "expected a non-empty array");
+  if (s.fields.length > maxFields)
+    bad(`${path}.fields`, `more than ${String(maxFields)} fields exceeds the schema input limit`);
   const fields = new Map<string, WireField>();
   s.fields.forEach((value, i) => {
     const field = parseField(value, `${path}.fields[${String(i)}]`, fields);
@@ -507,12 +511,21 @@ function parseMessage(s: Record<string, unknown>, path: string): MessageSchema {
   };
 }
 
-function parseErrorTable(s: Record<string, unknown>, path: string): ErrorTableSchema {
+function parseErrorTable(
+  s: Record<string, unknown>,
+  path: string,
+  maxErrorEntries: number,
+): ErrorTableSchema {
   const codeSpace = s.codeSpace;
   if (codeSpace !== "soroban-contract-error" && codeSpace !== "evm-selector") {
     bad(`${path}.codeSpace`, "expected soroban-contract-error or evm-selector");
   }
   if (!Array.isArray(s.entries)) bad(`${path}.entries`, "expected an array");
+  if (s.entries.length > maxErrorEntries)
+    bad(
+      `${path}.entries`,
+      `more than ${String(maxErrorEntries)} entries exceeds the schema input limit`,
+    );
   const names = new Set<string>();
   const codes = new Set<number | string>();
   const entries = s.entries.map((value, i): ErrorEntry => {
@@ -545,13 +558,36 @@ function parseErrorTable(s: Record<string, unknown>, path: string): ErrorTableSc
   };
 }
 
-/** Validate untrusted schema-set data, such as a committed baseline file or one from another build. */
-export function parseWireSchemaSet(input: unknown): WireSchemaSet {
+function schemaBudget(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    bad(`limits.${name}`, "expected a positive safe integer");
+  }
+  return value;
+}
+
+/**
+ * Validate untrusted schema-set data, such as a committed baseline file or one from another build.
+ *
+ * Collection budgets are checked before any array is mapped, so an oversized external document is
+ * refused without building an equally oversized parsed copy. `limits` overrides the documented
+ * defaults for a provider extension that registers more schemas than this build does.
+ */
+export function parseWireSchemaSet(input: unknown, limits?: WireSchemaLimits): WireSchemaSet {
+  const maxSchemas = schemaBudget(limits?.maxSchemas, MAX_WIRE_SCHEMAS, "maxSchemas");
+  const maxFields = schemaBudget(limits?.maxFields, MAX_WIRE_FIELDS, "maxFields");
+  const maxErrorEntries = schemaBudget(
+    limits?.maxErrorEntries,
+    MAX_WIRE_ERROR_ENTRIES,
+    "maxErrorEntries",
+  );
   const root = record(input, "$", ["schemaSetVersion", "schemas"]);
   if (root.schemaSetVersion !== WIRE_SCHEMA_SET_VERSION) {
     bad("$.schemaSetVersion", `unsupported schema set version ${String(root.schemaSetVersion)}`);
   }
   if (!Array.isArray(root.schemas)) bad("$.schemas", "expected an array");
+  if (root.schemas.length > maxSchemas)
+    bad("$.schemas", `more than ${String(maxSchemas)} schemas exceeds the schema input limit`);
   const keys = new Set<string>();
   const schemas = root.schemas.map((value, i): WireSchema => {
     const path = `$.schemas[${String(i)}]`;
@@ -561,11 +597,13 @@ export function parseWireSchemaSet(input: unknown): WireSchemaSet {
         ? parseMessage(
             record(value, path, ["kind", "id", "version", "description", "size", "fields"]),
             path,
+            maxFields,
           )
         : kind === "error-table"
           ? parseErrorTable(
               record(value, path, ["kind", "id", "version", "description", "codeSpace", "entries"]),
               path,
+              maxErrorEntries,
             )
           : bad(`${path}.kind`, "expected message or error-table");
     const key = wireSchemaKey(schema);
@@ -592,13 +630,29 @@ export type WireReadResult =
   | { readonly ok: true; readonly fields: Readonly<Record<string, WireFieldValue>> }
   | { readonly ok: false; readonly field: string | null; readonly detail: string };
 
-/** Decode `bytes` against one message schema, refusing anything the layout does not allow. */
-export function readWireMessage(schema: MessageSchema, bytes: Uint8Array): WireReadResult {
+/**
+ * Decode `bytes` against one message schema, refusing anything the layout does not allow.
+ *
+ * `limits.maxBytes` defaults to `MAX_WIRE_BYTES`; a larger buffer is refused before any field is
+ * read.
+ */
+export function readWireMessage(
+  schema: MessageSchema,
+  bytes: Uint8Array,
+  limits?: ByteParserLimits,
+): WireReadResult {
   const refuse = (field: string | null, detail: string): WireReadResult => ({
     ok: false,
     field,
     detail,
   });
+  const maxBytes = byteLimit(limits, MAX_WIRE_BYTES);
+  if (bytes.length > maxBytes) {
+    return refuse(
+      null,
+      `${String(bytes.length)} bytes, over the ${String(maxBytes)} byte input limit`,
+    );
+  }
   const { size } = schema;
   if (size.kind === "fixed" && bytes.length !== size.bytes) {
     return refuse(null, `${String(bytes.length)} bytes, expected ${String(size.bytes)}`);

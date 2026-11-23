@@ -25,6 +25,18 @@ import { bytesToAscii, bytesToBigInt, concatBytes, fromHex, toHex } from "./byte
 import type { Hex } from "./bytes.js";
 import { CCTP_HOOK_VERSION } from "./cctp.js";
 import { fail } from "./errors.js";
+import { boundedBytes, byteLimit } from "./limits.js";
+import type { ByteParserLimits } from "./limits.js";
+
+/** Read a caller's hex or bytes within the documented input budget, before allocating anything. */
+function noteBytes(payload: Uint8Array | Hex, limits?: ByteParserLimits): Uint8Array {
+  return boundedBytes(payload, byteLimit(limits), (actual, max) =>
+    fail(
+      "MalformedMessage",
+      `${String(actual)} byte input is over the ${String(max)} byte input limit`,
+    ),
+  );
+}
 
 /** One envelope version across both rails, so nobody has to remember which rail numbers what. */
 export const NOTE_VERSION_V1 = 1;
@@ -92,8 +104,11 @@ export interface InboundNote {
  * else built, and reading the first twenty nine bytes of it anyway is how a parser becomes an
  * attack surface.
  */
-export function decodeOutboundNote(payload: Uint8Array | Hex): OutboundNote {
-  const bytes = typeof payload === "string" ? fromHex(payload) : payload;
+export function decodeOutboundNote(
+  payload: Uint8Array | Hex,
+  limits?: ByteParserLimits,
+): OutboundNote {
+  const bytes = noteBytes(payload, limits);
   const version = bytes[0];
   if (version === undefined) fail("MalformedMessage", "missing note version");
   switch (version) {
@@ -135,8 +150,11 @@ export function encodeInboundNote(strkey: string, nonce: bigint): Uint8Array {
 }
 
 /** Read an inbound note back, which is what the Stellar side does with it. */
-export function decodeInboundNote(payload: Uint8Array | Hex): InboundNote {
-  const bytes = typeof payload === "string" ? fromHex(payload) : payload;
+export function decodeInboundNote(
+  payload: Uint8Array | Hex,
+  limits?: ByteParserLimits,
+): InboundNote {
+  const bytes = noteBytes(payload, limits);
   const version = bytes[0];
   if (version === undefined) fail("MalformedMessage", "missing note version");
   switch (version) {
@@ -193,13 +211,16 @@ export function encodeCctpHook(strkey: string, mappingRevision: number): Uint8Ar
 }
 
 /** Read a CCTP hook back into the destination it names. */
-export function decodeCctpHook(payload: Uint8Array | Hex): {
+export function decodeCctpHook(
+  payload: Uint8Array | Hex,
+  limits?: ByteParserLimits,
+): {
   mappingRevision: number;
   kind: AddressKind;
   key: Hex;
   muxedId: bigint;
 } {
-  const bytes = typeof payload === "string" ? fromHex(payload) : payload;
+  const bytes = noteBytes(payload, limits);
   if (bytes.length !== 38 && bytes.length !== 46) {
     fail(
       "MalformedMessage",
