@@ -11,7 +11,6 @@ mod admin;
 mod benchmarks;
 mod capabilities;
 mod codec_parity;
-mod custody_audit;
 mod discovery;
 mod event_codec_parity;
 mod event_fixtures;

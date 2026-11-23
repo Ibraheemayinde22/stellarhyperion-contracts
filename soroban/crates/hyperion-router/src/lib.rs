@@ -33,11 +33,11 @@ pub use storage::DataKey;
 pub use timelock::{GRACE_PERIOD, MAX_TIMELOCK_DELAY, MIN_TIMELOCK_DELAY};
 pub use types::{
     ActionAuditStatus, AdminAction, BatchOutboundItem, CancelReason, ClaimHistory, ClaimLiability,
-    ClaimProvenance, ClaimSettlementResult, Config, CustodyAudit, CustodyStatus, DebitBreakdown,
-    Destination, HolderCustody, InboundRecord, MigrationStatus, Origin, OutboundPreconditions,
-    OutboundRequest, PendingClaim, QueuedAction, Recipient, RecipientEligibility, RouteConfig,
-    RouteQuote, RouteQuoteV2, SourceDebit, TokenConfig, TransferRecord, CURRENT_SCHEMA_VERSION,
-    CUSTODY_AUDIT_VERSION, LEGACY_SCHEMA_VERSION, MAX_MAINTENANCE_BATCH, MAX_REASON_LEN,
+    ClaimProvenance, ClaimSettlementResult, Config, DebitBreakdown, Destination, InboundRecord,
+    MigrationStatus, Origin, OutboundPreconditions, OutboundRequest, PendingClaim, QueuedAction,
+    Recipient, RecipientEligibility, RouteConfig, RouteQuote, RouteQuoteV2, SourceDebit,
+    TokenConfig, TransferRecord, CURRENT_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION,
+    MAX_MAINTENANCE_BATCH, MAX_REASON_LEN,
 };
 
 use hyperion_core::{
@@ -856,47 +856,6 @@ impl HyperionRouter {
             known,
             solvent: known && custody >= outstanding,
         }
-    }
-
-    // Read-only orphaned-custody audit: router custody against unsettled claims, plus every
-    // configured adapter and rail receiver, which hold nothing at rest. Writes nothing, bumps no
-    // TTL and moves no funds; incomplete liability history or a failed read reports unknown.
-    pub fn custody_audit(env: Env, token: Address) -> CustodyAudit {
-        let this = env.current_contract_address();
-        let client = token::Client::new(&env, &token);
-        let read = |who: &Address| match client.try_balance(who) {
-            Ok(Ok(balance)) if balance >= 0 => Some(balance),
-            _ => None,
-        };
-        let unsettled_claims =
-            storage::liability_tracking(&env).then(|| storage::claim_liability(&env, &token));
-        let mut holders: Vec<HolderCustody> = Vec::new(&env);
-        for route in ALL_ROUTES {
-            for holder in [
-                storage::adapter(&env, route),
-                storage::rail_receiver(&env, route),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if holder == this || holders.iter().any(|seen| seen.holder == holder) {
-                    continue;
-                }
-                let balance = read(&holder);
-                holders.push_back(HolderCustody {
-                    route,
-                    holder,
-                    balance,
-                });
-            }
-        }
-        CustodyAudit::classify(
-            CUSTODY_AUDIT_VERSION,
-            token.clone(),
-            read(&this),
-            unsettled_claims,
-            holders,
-        )
     }
 
     // Best-effort payout preview. This is diagnostic only and never affects settlement.

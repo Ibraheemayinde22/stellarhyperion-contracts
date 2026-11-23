@@ -1,0 +1,26 @@
+{
+  "token": "CTOKENFIXTUREAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "router": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5",
+  "routerBalance": "1000000017",
+  "claimLiability": { "outstanding": "1000000000", "custody": "1000000017", "known": true },
+  "holders": [
+    {
+      "route": "cctp",
+      "role": "adapter",
+      "address": "CBRAILAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N",
+      "balance": "5"
+    },
+    {
+      "route": "cctp",
+      "role": "rail-receiver",
+      "address": "CBRAILAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N",
+      "balance": "5"
+    },
+    {
+      "route": "axelar-its",
+      "role": "adapter",
+      "address": "CBAXELARAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "balance": "0"
+    }
+  ]
+}

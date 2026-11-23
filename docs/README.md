@@ -32,9 +32,11 @@ divergence.
   establishes token id, manager type, local mapping, remote trust and paid-send reads through
   real ITS calls. Unknown manager types and missing methods block it, and a matching symbol never
   qualifies a mapping. See `AXELAR_TOKEN_MANAGER_PROBE.md`.
-- The router's `custody_audit(token)` is an additive read-only view. It separates unsettled
-  claims from unexplained router and adapter balances, reports missing liability history or
-  unreadable balances as unknown, and never moves funds. See `claim-operations.md`.
+- `script/stellar/custody-audit.mjs` is an offline orphaned-custody auditor built on existing
+  router and token views; there is no contract change, because the router is at the 64KB limit. It
+  separates unsettled claims from unexplained router and adapter balances, reports missing
+  liability history or unreadable balances as unknown, and cannot move funds. See
+  `claim-operations.md`.
 - Inbound routers reject zero and provider amounts outside the router's supported `i128`/`uint128`
   representable range before custody changes. The exact upper bounds retain normal payout and claim
   behavior. Active deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail paths

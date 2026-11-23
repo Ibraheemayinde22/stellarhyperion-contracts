@@ -20,46 +20,78 @@ and the router's custody.
 
 ## Orphaned-custody audit
 
-`custody_audit(token)` reports, for one token, every balance the router stack holds that is not
-explained by a known liability. It returns a versioned `CustodyAudit`
-(`CUSTODY_AUDIT_VERSION = 1`). It is a view: it writes nothing, extends no TTL, publishes no
-event, and never sweeps, transfers or reassigns funds. Its result grants no recovery authority.
+`script/stellar/custody-audit.mjs` reports, for one token, every balance the router stack holds
+that a known liability does not explain. It is an offline tool: it reads a snapshot of on-chain
+view results, needs no key, and cannot sweep, transfer or reassign anything. Its report
+(`version: 1`, `movesFunds: false`) grants no recovery authority.
+
+It runs off-chain because the router WASM is at the 64KB ledger limit, and the router already
+exposes every fact the audit needs. No contract changes are required.
 
 At rest, an inbound delivery has either paid its fixed recipient or parked a claim in the router,
 and outbound dispatch hands funds to the rail in the same transaction. So the router should hold
-exactly its unsettled claims, and adapters and rail receivers should hold nothing. The report keeps
-these amounts separate:
+exactly its unsettled claims, and adapters and rail receivers should hold nothing.
 
-| Field                | Meaning                                                                                       |
-| -------------------- | --------------------------------------------------------------------------------------------- |
-| `unsettled_claims`   | Tracked sum of unsettled claims. These are recipient-bound liabilities, not surplus.          |
-| `router_custody`     | The router's token balance.                                                                   |
-| `router_unexplained` | `router_custody - unsettled_claims`. Positive means donations or other surplus; negative means a shortfall. |
-| `holders`            | Each distinct configured adapter and rail receiver with its balance, listed once under the first route that names it. |
-| `holder_unexplained` | Sum of holder balances. None of it backs a claim: it is donations, rail dust (for example CCTP retained dust awaiting `sweep`) or other unattributed funds. |
-| `status`             | `Reconciled`, `Unexplained`, `Shortfall` or `Unknown`.                                        |
+### Collecting a snapshot
+
+Every read is a simulated view call (`--send=no`); none signs or submits a transaction:
+
+```bash
+stellar contract invoke --id "$ROUTER" --network testnet --send=no -- claim_liability --token "$TOKEN"
+stellar contract invoke --id "$TOKEN"  --network testnet --send=no -- balance --id "$ROUTER"
+# For each RouteKind tag (0 cctp, 1 axelar-its, 2 axelar-gmp, 3 allbridge):
+stellar contract invoke --id "$ROUTER" --network testnet --send=no -- get_adapter --route 0
+stellar contract invoke --id "$ROUTER" --network testnet --send=no -- get_rail_receiver --route 0
+stellar contract invoke --id "$TOKEN"  --network testnet --send=no -- balance --id "$HOLDER"
+```
+
+Record the results as JSON, with amounts as integer strings. A read that failed is `null`. A route
+whose adapter or receiver is unset is simply omitted:
+
+```json
+{
+  "token": "C…",
+  "router": "C…",
+  "routerBalance": "1000000017",
+  "claimLiability": { "outstanding": "1000000000", "custody": "1000000017", "known": true },
+  "holders": [{ "route": "cctp", "role": "adapter", "address": "C…", "balance": "5" }]
+}
+```
+
+Then run `node script/stellar/custody-audit.mjs --snapshot snapshot.json` (or pipe the JSON in).
+
+### Reading the report
+
+| Field               | Meaning                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `unsettledClaims`   | `claim_liability(token).outstanding`. These are recipient-bound liabilities, not surplus.     |
+| `routerCustody`     | The router's token balance.                                                                   |
+| `routerUnexplained` | `routerCustody - unsettledClaims`. Positive means donations or other surplus; negative means a shortfall. |
+| `holders`           | Each distinct adapter and rail receiver with its balance, listed once under the first route that names it. |
+| `holderUnexplained` | Sum of holder balances. None of it backs a claim: it is donations, rail dust (for example CCTP retained dust awaiting `sweep`) or other unattributed funds. |
+| `status`            | `reconciled`, `unexplained`, `shortfall` or `unknown`.                                        |
 
 Missing data is never filled in:
 
-- **Incomplete history.** On an upgraded instance that has not finished the liability
-  migration, `unsettled_claims` is `None`, not zero. `router_unexplained` is then also `None` and
-  the status is `Unknown`, so a parked claim can never be mistaken for a donation.
-- **Unreadable balances.** A failed or negative balance read is `None` for that holder. The
-  totals that depend on it are `None` too, and the status is `Unknown`.
-- **Shortfall wins.** A known shortfall reports `Shortfall` even if some holder could not be read.
+- **Incomplete history.** When `claim_liability` reports `known: false` (an upgraded instance
+  that has not finished the liability migration, or a failed read), `unsettledClaims` is `null`,
+  not zero. `routerUnexplained` is then also `null` and the status is `unknown`, so a parked claim
+  can never be mistaken for a donation.
+- **Unreadable balances.** A missing, negative or non-integer balance is `null`. Totals that
+  depend on it are `null`, and the status is `unknown`. If two reads of one address disagree,
+  neither is trusted.
+- **Shortfall wins.** A known shortfall reports `shortfall` even if some holder could not be read.
+- **Exact amounts.** All arithmetic uses `BigInt`. JSON numbers are accepted only as safe
+  integers.
 
-The audit relies on the same liability counter as `claim_liability`. It does not scan claim
-records, so its cost does not grow with claim history. Each unsettled claim's recipient, amount
-and replay identity stay exactly as recorded, and `settle_claim` is still the only way claim
-funds leave the router. Disposing of unexplained funds is a separate, reviewed operation that
-this view does not provide.
+The audit relies on the router's liability counter. It does not scan claim records, so its cost
+does not grow with claim history. Each unsettled claim's recipient, amount and replay identity
+stay exactly as recorded, and `settle_claim` is still the only way claim funds leave the router.
+Disposing of unexplained funds is a separate, reviewed operation that this tool does not provide.
 
-Compatibility: this is one additive view plus its types (`CustodyAudit`, `HolderCustody`,
-`CustodyStatus`), recorded in `soroban-router.cap`. No existing method, storage key, event, error
-or claim record changes. A deployed router gets it only through a WASM upgrade, and no storage
-migration is needed. An instance without liability tracking reports `Unknown` until the existing
-reviewed liability migration completes. The EVM router is unchanged: its `TokenRecoveryManager`
-already caps recovery at balance minus tracked claim liability, and EVM remains development-only.
+Compatibility: no contract, storage, event, error or claim record changes, so no upgrade or
+migration is needed. The EVM router is unchanged: its `TokenRecoveryManager` already caps
+recovery at balance minus tracked claim liability, and EVM remains development-only.
 
 `preview_claim_recipient(id)` is a read-only best-effort diagnostic. It can identify a missing
 Stellar Asset Contract trustline and an unauthorized Stellar Asset Contract account. Other token
