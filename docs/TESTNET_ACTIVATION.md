@@ -17,6 +17,22 @@ The wallet-owned router and ITS adapter were deployed with the dedicated `hyperi
 
 The received asset is the ITS representation of Stellar USDC, not Circle's native Sepolia USDC. Route 1 sends directly to the recipient through ITS and needs no EVM Hyperion adapter.
 
+## CCTP EVM inbound development gate
+
+The EVM CCTP adapter's inbound receiver is development-only and disabled for every source domain
+by default. Configuring an outbound lane or remote sender does not enable inbound minting. A
+validated EVM deployment must independently verify its Circle domain, remote messenger, native
+USDC mapping, hook compatibility, transmitter behavior, replay handling, and claim recovery, then
+explicitly call `setInboundEnabled(domain, true)` as owner. The EVM deployment script intentionally
+does not enable this gate. Local tests use a mock transmitter and are rehearsal evidence, not
+provider or deployment validation.
+
+The gate is additive storage on the non-proxy EVM adapter; an existing deployed adapter cannot
+acquire it in place. Migration therefore means deploying and verifying a new adapter, preserving
+the reviewed outbound settings, independently validating the inbound lane, and changing router
+registration only through its normal timelock. Do not treat this development path as an active
+Stellar Testnet EVM route.
+
 ## Axelar capability admission and upgrade compatibility
 
 The adapter now stores an explicit capability for each `(Hyperion chain, ITS token id)` pair. A
