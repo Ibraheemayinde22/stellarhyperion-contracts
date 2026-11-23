@@ -368,7 +368,7 @@ contract Fixture is Test {
         );
     }
 
-    function _assertPayoutShape(bytes32 observed) internal view {
+    function _assertPayoutShape(bytes32 observed) internal pure {
         assertEq(observed, PAYOUT_SHAPE_HASH, "payout ABI tuple layout changed");
     }
 }
