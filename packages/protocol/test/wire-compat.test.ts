@@ -53,14 +53,14 @@ const BASELINE = join(repoRoot, "testdata", "wire-schemas-v1.json");
 const U64_MAX = (1n << 64n) - 1n;
 const U256_MAX = (1n << 256n) - 1n;
 
-function message(id: string, set: WireSchemaSet = WIRE_SCHEMAS): MessageSchema {
-  const s = set.schemas.find((x) => x.id === id && x.version === 1);
+function message(id: string, set: WireSchemaSet = WIRE_SCHEMAS, version = 1): MessageSchema {
+  const s = set.schemas.find((x) => x.id === id && x.version === version);
   if (s?.kind !== "message") throw new Error(`no message schema ${id}`);
   return s;
 }
 
-function read(id: string, bytes: Uint8Array) {
-  const result = readWireMessage(message(id), bytes);
+function read(id: string, bytes: Uint8Array, version = 1) {
+  const result = readWireMessage(message(id, WIRE_SCHEMAS, version), bytes);
   if (!result.ok) throw new Error(`${id}: ${result.field ?? "size"} ${result.detail}`);
   return result.fields;
 }
@@ -149,9 +149,11 @@ describe("the registered version-one layouts", () => {
 
   it("read CCTP hooks for every address kind exactly as the codec does", () => {
     for (const strkey of [G_ADDR, C_ADDR, M_ADDR]) {
-      const bytes = encodeCctpHook(strkey);
+      const bytes = encodeCctpHook(strkey, 1);
       const codec = decodeCctpHook(bytes);
-      const fields = read("cctp.hook", bytes);
+      const fields = read("cctp.hook", bytes, 2);
+      expect(fields.version).toBe(2n);
+      expect(fields.mappingRevision).toBe(1n);
       expect(fields.kind).toBe(BigInt(codec.kind));
       expect(fields.key).toBe(codec.key);
       expect(fields.muxedId ?? 0n).toBe(codec.muxedId);
@@ -222,21 +224,39 @@ describe("the registered version-one layouts", () => {
 });
 
 describe("the frozen version-one baseline", () => {
-  it("still compares as identical, with an unchanged report", () => {
+  it("preserves old layouts and reports only compatible additions", () => {
     if (process.env.HYPERION_WRITE_WIRE_BASELINE !== undefined) {
       writeFileSync(BASELINE, serializeWireSchemaSet(WIRE_SCHEMAS));
     }
     const baseline = parseWireSchemaSet(JSON.parse(readFileSync(BASELINE, "utf8")));
     const report = compareWireSchemaSets(baseline, WIRE_SCHEMAS);
-    expect(report).toEqual({
+    expect(report).toMatchObject({
       reportVersion: WIRE_COMPAT_REPORT_VERSION,
-      result: "identical",
+      result: "compatible",
       breaking: 0,
-      compatible: 0,
-      decisions: [],
+      compatible: 3,
+      decisions: [
+        { classification: "compatible", path: "cctp.hook@2", rule: "schema-added" },
+        {
+          classification: "compatible",
+          path: "errors.evm@1/entries/StaleMapping/code",
+          rule: "error-added",
+        },
+        {
+          classification: "compatible",
+          path: "errors.soroban@1/entries/StaleMapping/code",
+          rule: "error-appended",
+        },
+      ],
     });
     expect(formatCompatibilityReport(report)).toBe(
-      "wire compatibility: identical (0 breaking, 0 compatible)\n",
+      [
+        "wire compatibility: compatible (0 breaking, 3 compatible)",
+        'compatible schema-added cctp.hook@2: absent -> "message" (new layout; existing ones are unaffected)',
+        'compatible error-added errors.evm@1/entries/StaleMapping/code: absent -> "0x2ce51082" (a new selector)',
+        "compatible error-appended errors.soroban@1/entries/StaleMapping/code: absent -> 59 (new code past the end of the table)",
+        "",
+      ].join("\n"),
     );
     expect(baseline.schemas.map(wireSchemaKey)).toEqual([
       "note.outbound@1",
@@ -566,7 +586,7 @@ describe("loading malformed schema-set data", () => {
     rejects({ ...base(), extra: 1 }, "$.extra", /unknown property/);
     const dup = base();
     dup.schemas.push(dup.schemas[0]!);
-    rejects(dup, "$.schemas[9].id", /duplicate schema note.outbound@1/);
+    rejects(dup, "$.schemas[10].id", /duplicate schema note.outbound@1/);
     const kind = base();
     kind.schemas[0]!.kind = "table";
     rejects(kind, "$.schemas[0].kind");
@@ -592,21 +612,21 @@ describe("loading malformed schema-set data", () => {
     at((d) => (field(d, 2, 1).values = { a: 0, b: 0 }), "$.schemas[2].fields[1].values.b");
     at((d) => (field(d, 2, 1).values = null), "$.schemas[2].fields[1].values");
     at(
-      (d) => ((d.schemas[7]!.entries as { code: unknown }[])[0]!.code = 0),
-      "$.schemas[7].entries[0].code",
-    );
-    at(
-      (d) => ((d.schemas[7]!.entries as { code: unknown }[])[0]!.code = 2 ** 32),
-      "$.schemas[7].entries[0].code",
-    );
-    at(
-      (d) => ((d.schemas[8]!.entries as { code: unknown }[])[0]!.code = "0xABCDEF01"),
+      (d) => ((d.schemas[8]!.entries as { code: unknown }[])[0]!.code = 0),
       "$.schemas[8].entries[0].code",
+    );
+    at(
+      (d) => ((d.schemas[8]!.entries as { code: unknown }[])[0]!.code = 2 ** 32),
+      "$.schemas[8].entries[0].code",
+    );
+    at(
+      (d) => ((d.schemas[9]!.entries as { code: unknown }[])[0]!.code = "0xABCDEF01"),
+      "$.schemas[9].entries[0].code",
     );
     // The exact upper bounds are accepted.
     const ok = base();
     field(ok, 0, 0).constant = 255;
-    (ok.schemas[7]!.entries as { name: string; code: unknown }[]).push({
+    (ok.schemas[8]!.entries as { name: string; code: unknown }[]).push({
       name: "Last",
       code: 0xffff_ffff,
     });
@@ -673,9 +693,10 @@ describe("reading external bytes against a layout", () => {
     expect(refuse("note.outbound", Uint8Array.from([2, ...note.slice(1)]))).toMatchObject({
       field: "version",
     });
-    const hook = encodeCctpHook(G_ADDR);
-    hook[1] = 7;
-    expect(refuse("cctp.hook", hook)).toMatchObject({
+    const hook = encodeCctpHook(G_ADDR, 1);
+    hook[5] = 7;
+    const invalidHook = readWireMessage(message("cctp.hook", WIRE_SCHEMAS, 2), hook);
+    expect(invalidHook).toMatchObject({
       field: "kind",
       detail: "value 7 is not one of 0, 1, 2",
     });

@@ -1,7 +1,7 @@
 //! A local rehearsal that crosses the actual router and adapter entrypoints in both directions.
 
 use hyperion_core::{
-    cctp::{BurnMessage, CctpMessage},
+    cctp::{BurnMessage, CctpMessage, CctpOutboundNote},
     HyperionError, RouteKind,
 };
 use hyperion_router::{Destination, OutboundRequest};
@@ -28,6 +28,7 @@ fn cctp_rehearsal_checks_burn_mint_movement_and_recipient_bound_claim_recovery()
         destination: Destination {
             chain: world.ethereum(),
             address: evm_recipient(&world),
+            mapping_revision: 1,
         },
         destination_decimals: EVM_DECIMALS,
         min_destination_amount: 0,
@@ -42,7 +43,12 @@ fn cctp_rehearsal_checks_burn_mint_movement_and_recipient_bound_claim_recovery()
     assert_eq!(burn.burned, net_of(HUNDRED));
     assert_eq!(burn.mint_recipient, evm_recipient(&world));
     assert_eq!(burn.burn_token, world.token_id);
-    assert!(!burn.had_hook);
+    assert!(burn.had_hook);
+    let outbound_note =
+        CctpOutboundNote::decode(&world.env, &world.messenger().last_hook()).unwrap();
+    assert_eq!(outbound_note.mapping_revision, 1);
+    assert_eq!(outbound_note.recipient, evm_recipient(&world));
+    assert_eq!(outbound_note.router_nonce, 1);
     assert_eq!(world.token().balance(&world.user), user_before - HUNDRED);
     assert_eq!(world.token().balance(&world.adapter_id), 0);
     assert_eq!(world.token().balance(&world.router_id), 0);

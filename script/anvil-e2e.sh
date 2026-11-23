@@ -112,6 +112,7 @@ export AXELAR_STELLAR_CHAIN=stellar
 # Stands in for the Soroban router's contract id. A real run takes this from the Stellar half's
 # deployment record, which is why neither side can be deployed without reference to the other.
 export STELLAR_RAIL_RECIPIENT=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
+export STELLAR_CCTP_TOKEN=0xcab975307fe155049e626f7c9b7334a63a870899a55a261857b6eacfe2d30672
 export STELLAR_AXELAR_PEER=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
 
 note "phase one: deploy and queue"

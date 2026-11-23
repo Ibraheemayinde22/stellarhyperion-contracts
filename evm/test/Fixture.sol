@@ -268,7 +268,7 @@ contract Fixture is Test {
     // -------------------------------------------------------------------------------------
 
     function _dest(string memory strkey) internal pure returns (Destination memory) {
-        return Destination({chain: STELLAR, strkey: strkey});
+        return Destination({chain: STELLAR, strkey: strkey, mappingRevision: 1, remoteDecimals: 7});
     }
 
     function _request(uint256 amount, RouteKind route) internal pure returns (OutboundRequest memory) {
@@ -298,6 +298,7 @@ contract Fixture is Test {
         request = _request(amount, RouteKind.Cctp);
         request.token = token;
         request.destinationDecimals = destinationDecimals;
+        request.destination.remoteDecimals = destinationDecimals;
     }
 
     /// @dev The common case: USDC, over CCTP, to a classic account, no slippage floor.

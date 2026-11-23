@@ -178,6 +178,27 @@ const MESSAGE_SCHEMAS: readonly MessageSchema[] = [
   },
   {
     kind: "message",
+    id: "cctp.hook",
+    version: 2,
+    description:
+      "Revision-bound CCTP hook: version, mapping revision, address kind, key, optional muxed id",
+    size: { kind: "one-of", bytes: [38, 46] },
+    fields: [
+      { name: "version", encoding: "uint", offset: 0, length: 1, constant: 2 },
+      { name: "mappingRevision", encoding: "uint", offset: 1, length: 4 },
+      { name: "kind", encoding: "uint", offset: 5, length: 1, values: ADDRESS_KIND_TAGS },
+      word("key", 6),
+      {
+        name: "muxedId",
+        encoding: "uint",
+        offset: 38,
+        length: 8,
+        presentWhen: { field: "kind", equals: AddressKind.MuxedAccount },
+      },
+    ],
+  },
+  {
+    kind: "message",
     id: "cctp.header",
     version: 1,
     description: "CCTP V2 message header, followed by the message body",
