@@ -302,14 +302,13 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// is repeated by `_bridgeOut`, which then charges the flow window immediately before funds
     /// move. If the permit is expired, replayed, or signed for another spender or amount, the
     /// token reverts and the whole dispatch is rolled back.
-    function bridgeOutWithPermit(OutboundRequest calldata request, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
-        external
-        payable
-        override
-        nonReentrant
-        whenNotPaused
-        returns (uint64 nonce)
-    {
+    function bridgeOutWithPermit(
+        OutboundRequest calldata request,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable override nonReentrant whenNotPaused returns (uint64 nonce) {
         (OutboundPlan memory plan,) = _previewOutbound(request);
         IERC20Permit(request.token).permit(msg.sender, address(this), plan.gross, deadline, v, r, s);
         return _bridgeOut(request, msg.sender);
@@ -381,8 +380,8 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
             uint256 senderAfter = token.balanceOf(intent.sender);
             uint256 relayerAfter = token.balanceOf(msg.sender);
             if (
-                senderAfter > senderBefore || senderBefore - senderAfter != charge || relayerAfter < relayerBefore
-                    || relayerAfter - relayerBefore != charge
+                senderAfter > senderBefore || senderBefore - senderAfter != charge
+                    || relayerAfter < relayerBefore || relayerAfter - relayerBefore != charge
             ) revert InvalidRelayerFee();
             emit RelayerFeePaid(intent.sender, feeToken, msg.sender, charge);
         }
@@ -535,7 +534,9 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         // it would tighten the limit by a number nobody picked.
         flow = _flow[_flowKey(
                 request.token, request.route
-            )].consume(_effectiveFlowLimit(request.token, request.route), net, uint64(block.timestamp), flowWindow);
+            )].consume(
+            _effectiveFlowLimit(request.token, request.route), net, uint64(block.timestamp), flowWindow
+        );
 
         return (OutboundPlan({fee: fee, net: net, gross: fee + net, adapterAddress: adapterAddress}), flow);
     }
@@ -571,12 +572,13 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @dev Pause does not appear here, and that is deliberate. Once a rail has attested a
     /// message the counterpart is already burned on the far side, so refusing it on this side
     /// does not undo anything, it only strands somebody's money. Pausing stops departures.
-    function bridgeIn(RouteKind route, address token, uint256 amount, address recipient, Origin calldata origin)
-        external
-        override
-        nonReentrant
-        returns (uint64 claimId)
-    {
+    function bridgeIn(
+        RouteKind route,
+        address token,
+        uint256 amount,
+        address recipient,
+        Origin calldata origin
+    ) external override nonReentrant returns (uint64 claimId) {
         address expected = _railReceivers[route];
         if (expected == address(0)) revert AdapterNotSet();
         if (msg.sender != expected) revert NotRailReceiver();
@@ -706,12 +708,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     }
 
     /// @inheritdoc IHyperionRouter
-    function explainOutbound(OutboundRequest calldata request, uint256 providerPayment, uint256 maxProviderBudget)
-        external
-        view
-        override
-        returns (bytes4 blocker)
-    {
+    function explainOutbound(
+        OutboundRequest calldata request,
+        uint256 providerPayment,
+        uint256 maxProviderBudget
+    ) external view override returns (bytes4 blocker) {
         try this.checkOutbound(request, providerPayment, maxProviderBudget) {
             return bytes4(0);
         } catch (bytes memory failure) {
@@ -723,10 +724,11 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     /// @param request The legacy outbound request.
     /// @param providerPayment Prospective native payment in wei.
     /// @param maxProviderBudget Maximum native payment in wei.
-    function checkOutbound(OutboundRequest calldata request, uint256 providerPayment, uint256 maxProviderBudget)
-        external
-        view
-    {
+    function checkOutbound(
+        OutboundRequest calldata request,
+        uint256 providerPayment,
+        uint256 maxProviderBudget
+    ) external view {
         if (providerPayment > maxProviderBudget) revert ProviderBudgetExceeded();
         _requireNotPaused();
         (OutboundPlan memory plan,) = _previewOutbound(request);
@@ -783,12 +785,12 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
     }
 
     /// @inheritdoc IHyperionRouter
-    function quoteAll(address token, uint256 amount, Destination calldata destination, uint8 destinationDecimals)
-        external
-        view
-        override
-        returns (RouteQuote[] memory quotes)
-    {
+    function quoteAll(
+        address token,
+        uint256 amount,
+        Destination calldata destination,
+        uint8 destinationDecimals
+    ) external view override returns (RouteQuote[] memory quotes) {
         // solhint-disable-next-line no-inline-assembly
         assembly ("memory-safe") {
             pop(quotes)
@@ -892,7 +894,12 @@ contract HyperionRouter is IHyperionRouter, AccessControl, Pausable, ReentrancyG
         uint64 eta = uint64(block.timestamp) + timelockDelay;
         uint64 expiresAt = eta + GRACE_PERIOD;
         _actions[id] = QueuedAction({
-            id: id, action: action, queuedAt: uint64(block.timestamp), eta: eta, expiresAt: expiresAt, executed: false
+            id: id,
+            action: action,
+            queuedAt: uint64(block.timestamp),
+            eta: eta,
+            expiresAt: expiresAt,
+            executed: false
         });
         if (action.kind == ActionKind.SetAdapter) _queuedAdapterCodeHash[id] = action.subject.codehash;
         emit ActionQueued(id, action.kind, eta, expiresAt);
