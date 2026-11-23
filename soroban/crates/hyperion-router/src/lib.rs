@@ -534,8 +534,8 @@ impl HyperionRouter {
         Ok(())
     }
 
-    /// Tighten a destination-specific flow limit immediately. Raising one goes through the timelock;
-    /// lowering one does not.
+    // Tighten a destination-specific flow limit immediately. Raising one goes through the timelock;
+    // lowering one does not.
     pub fn lower_destination_flow_limit(
         env: Env,
         caller: Address,
@@ -778,9 +778,9 @@ impl HyperionRouter {
         storage::claim(&env, id).ok_or(HyperionError::ClaimNotFound)
     }
 
-    /// Read a claim without extending its TTL, for read-only evidence reports.
+    // Read a claim without extending its TTL, for read-only evidence reports.
     pub fn audit_claim(env: Env, id: u64) -> Option<PendingClaim> {
-        env.storage().persistent().get(&DataKey::Claim(id))
+        storage::read_persistent(&env, &DataKey::Claim(id).into_val(&env))
     }
 
     // Historical lookup: archived is permanent; unavailable requires RPC restoration.
