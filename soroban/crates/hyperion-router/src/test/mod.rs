@@ -6,6 +6,7 @@ mod doubles;
 mod hostile;
 mod setup;
 
+mod abi_compatibility;
 mod admin;
 mod benchmarks;
 mod capabilities;

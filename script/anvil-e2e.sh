@@ -57,6 +57,17 @@ else
 fi
 
 CHAIN_ID=$(cast chain-id --rpc-url "$RPC")
+
+note "checking generated ABI provenance"
+( cd evm && forge build --skip test >/tmp/hyperion-abi-build.log 2>&1 ) \
+  || { cat /tmp/hyperion-abi-build.log; die "Foundry ABI build provenance"; }
+( cd packages/protocol && npm run gen >/tmp/hyperion-abi-gen.log 2>&1 ) \
+  || { cat /tmp/hyperion-abi-gen.log; die "generated ABI provenance"; }
+if ! git diff --quiet -- packages/protocol/src/abi; then
+  die "generated ABI differs from the committed provenance"
+fi
+echo "  ABI modules match the compiled EVM artifacts"
+
 [ "$CHAIN_ID" = "31337" ] || [ "$CHAIN_ID" = "1337" ] || die "chain $CHAIN_ID is not a local node; this script deploys a mintable token called USDC and that belongs nowhere else"
 
 # Anvil's first three well known accounts. Public, documented, funded only on a throwaway chain.
@@ -101,6 +112,7 @@ export AXELAR_STELLAR_CHAIN=stellar
 # Stands in for the Soroban router's contract id. A real run takes this from the Stellar half's
 # deployment record, which is why neither side can be deployed without reference to the other.
 export STELLAR_RAIL_RECIPIENT=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
+export STELLAR_CCTP_TOKEN=0xcab975307fe155049e626f7c9b7334a63a870899a55a261857b6eacfe2d30672
 export STELLAR_AXELAR_PEER=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
 
 note "phase one: deploy and queue"

@@ -1,6 +1,9 @@
 //! The leg where Circle mints on Stellar and Hyperion works out who the money belongs to.
 
-use hyperion_core::{codec, HyperionError, RouteKind};
+use hyperion_core::{
+    address::StellarDestination, cctp::HyperionHook, codec, HyperionError, RouteKind,
+    STELLAR_DECIMALS,
+};
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
     Address, Bytes, BytesN, IntoVal,
@@ -489,13 +492,56 @@ fn an_unmapped_lane_refuses_before_it_ever_reaches_circle() {
     );
     // And the lane opens the moment the admin links it and maps the asset.
     w.link_ethereum();
-    w.adapter()
-        .map_asset(&ETHEREUM_DOMAIN, &w.eth_usdc(), &w.token_id);
+    w.adapter().map_asset(
+        &ETHEREUM_DOMAIN,
+        &w.eth_usdc(),
+        &w.token_id,
+        &STELLAR_DECIMALS,
+        &super::setup::EVM_DECIMALS,
+        &1,
+    );
     assert_eq!(
         w.adapter()
             .receive(&w.relayer, &w.inbound(ARRIVING, 54), &w.attestation()),
         0
     );
+    assert_eq!(w.token().balance(&w.recipient), ARRIVING);
+}
+
+#[test]
+fn mapping_migration_keeps_canonical_decimals_and_rejects_old_messages_before_mint() {
+    let w = World::new();
+    let old_message = w.inbound(ARRIVING, 55);
+    w.adapter().map_asset(
+        &ETHEREUM_DOMAIN,
+        &w.eth_usdc(),
+        &w.token_id,
+        &STELLAR_DECIMALS,
+        &super::setup::EVM_DECIMALS,
+        &2,
+    );
+
+    let current = w.adapter().mapping_for(&ETHEREUM_DOMAIN, &w.eth_usdc());
+    assert_eq!(current.revision, 2);
+    assert_eq!(current.local_decimals, 7);
+    assert_eq!(current.remote_decimals, 6);
+
+    assert_eq!(
+        w.adapter()
+            .try_receive(&w.relayer, &old_message, &Bytes::new(&w.env)),
+        Err(Ok(HyperionError::StaleMapping))
+    );
+    assert_eq!(w.token().balance(&w.recipient), 0);
+    assert_eq!(w.router().claim_count(), 0);
+
+    let current_hook = HyperionHook::new(
+        2,
+        StellarDestination::contract(BytesN::from_array(&w.env, &w.recipient_key)),
+    )
+    .encode(&w.env)
+    .unwrap();
+    let message = w.inbound_with_hook(ARRIVING, 56, current_hook);
+    w.adapter().receive(&w.relayer, &message, &w.attestation());
     assert_eq!(w.token().balance(&w.recipient), ARRIVING);
 }
 

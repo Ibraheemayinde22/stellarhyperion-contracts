@@ -12,6 +12,18 @@
 import { bytesToBigInt, fromHex, toHex } from "./bytes.js";
 import type { Hex } from "./bytes.js";
 import { fail } from "./errors.js";
+import { boundedBytes, byteLimit } from "./limits.js";
+import type { ByteParserLimits } from "./limits.js";
+
+/** Read a caller's hex or bytes within the documented input budget, before allocating anything. */
+function cctpBytes(raw: Uint8Array | Hex, limits?: ByteParserLimits): Uint8Array {
+  return boundedBytes(raw, byteLimit(limits), (actual, max) =>
+    fail(
+      "MalformedMessage",
+      `${String(actual)} byte input is over the ${String(max)} byte input limit`,
+    ),
+  );
+}
 
 /** Circle's domain number for Stellar. */
 export const STELLAR_DOMAIN = 27;
@@ -28,8 +40,11 @@ export const BURN_MESSAGE_VERSION = 1;
  */
 export const FINALITY_THRESHOLD_FINALIZED = 2000;
 
-/** Version byte on Hyperion's own hook payload. */
-export const HOOK_VERSION = 1;
+/** Version byte on Hyperion's revision-bound CCTP hook payload. */
+export const CCTP_HOOK_VERSION = 2;
+
+/** Versioned Stellar-to-EVM CCTP outbound note length. */
+export const CCTP_OUTBOUND_NOTE_LEN = 33;
 
 /** Diagnostic format version for CCTP approval lifecycle audits. */
 export const APPROVAL_DIAGNOSTICS_VERSION = 1;
@@ -182,9 +197,14 @@ export interface CctpBurnMessage {
   readonly expirationBlock: bigint;
 }
 
-/** Parse a header, refusing anything too short to hold one. */
-export function parseCctpMessage(raw: Uint8Array | Hex): CctpMessage {
-  const bytes = typeof raw === "string" ? fromHex(raw) : raw;
+/**
+ * Parse a header, refusing anything too short to hold one.
+ *
+ * `limits.maxBytes` defaults to `DEFAULT_MAX_MESSAGE_BYTES` and is checked before hex input is
+ * decoded, so oversized external data fails without a proportional allocation.
+ */
+export function parseCctpMessage(raw: Uint8Array | Hex, limits?: ByteParserLimits): CctpMessage {
+  const bytes = cctpBytes(raw, limits);
   if (bytes.length < MSG_BODY) fail("MalformedMessage", "too short for a CCTP header");
   return {
     version: readU32(bytes, MSG_VERSION),
@@ -200,14 +220,17 @@ export function parseCctpMessage(raw: Uint8Array | Hex): CctpMessage {
 }
 
 /** The body Circle hands to whichever handler the recipient names. */
-export function cctpBody(raw: Uint8Array | Hex): Uint8Array {
-  const bytes = typeof raw === "string" ? fromHex(raw) : raw;
+export function cctpBody(raw: Uint8Array | Hex, limits?: ByteParserLimits): Uint8Array {
+  const bytes = cctpBytes(raw, limits);
   if (bytes.length < MSG_BODY) fail("MalformedMessage", "too short for a CCTP header");
   return bytes.slice(MSG_BODY);
 }
 
-export function parseCctpBurnMessage(body: Uint8Array | Hex): CctpBurnMessage {
-  const bytes = typeof body === "string" ? fromHex(body) : body;
+export function parseCctpBurnMessage(
+  body: Uint8Array | Hex,
+  limits?: ByteParserLimits,
+): CctpBurnMessage {
+  const bytes = cctpBytes(body, limits);
   if (bytes.length < BURN_HOOK_DATA) fail("MalformedMessage", "too short for a burn message");
   return {
     version: readU32(bytes, BURN_VERSION),
@@ -222,8 +245,8 @@ export function parseCctpBurnMessage(body: Uint8Array | Hex): CctpBurnMessage {
 }
 
 /** The trailing hook payload, empty when the sender attached none. */
-export function cctpHookData(body: Uint8Array | Hex): Uint8Array {
-  const bytes = typeof body === "string" ? fromHex(body) : body;
+export function cctpHookData(body: Uint8Array | Hex, limits?: ByteParserLimits): Uint8Array {
+  const bytes = cctpBytes(body, limits);
   if (bytes.length < BURN_HOOK_DATA) fail("MalformedMessage", "too short for a burn message");
   return bytes.slice(BURN_HOOK_DATA);
 }
