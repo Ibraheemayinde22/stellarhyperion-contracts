@@ -69,7 +69,7 @@ jobs:
         # this TypeScript job. That is not a mistake: the ABI this package ships comes out of this
         # compile, so a compile nobody trusts is an SDK nobody should trust either.
         working-directory: evm
-        run: forge build
+        run: forge build --skip test --skip script
 
       - name: Set up node
         # The package's engines floor is node >=20.11. 22 is the active LTS line, which is the

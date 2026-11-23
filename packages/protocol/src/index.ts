@@ -24,6 +24,9 @@
 // Bytes and hex, which everything else is built out of.
 export * from "./bytes.js";
 
+// The input-size budgets every public byte and message parser applies before allocating.
+export * from "./limits.js";
+
 // The rails, and what is true about each one.
 export * from "./routes.js";
 
@@ -71,3 +74,6 @@ export * from "./deployments.js";
 
 // Assets and rail contracts per chain, with provenance attached.
 export * from "./registry/index.js";
+
+// ABI and tuple compatibility checks for payout-relevant consumer surfaces.
+export * from "./abi-compat.js";

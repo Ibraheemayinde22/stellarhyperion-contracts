@@ -21,6 +21,7 @@ import {
     RouteDisabled,
     RouteIsPaused,
     SlippageExceeded,
+    StaleMapping,
     TokenDisabled,
     TokenNotMapped,
     TokenNotRegistered,
@@ -144,6 +145,11 @@ contract OutboundProvenance is RouterActionValidator {
         TokenConfig memory cfg = target.tokenConfig(request.token);
         if (!cfg.registered) revert TokenNotRegistered();
         if (!cfg.enabled) revert TokenDisabled();
+        if (
+            request.route == RouteKind.Cctp
+                && (request.destination.mappingRevision == 0
+                    || request.destination.remoteDecimals != request.destinationDecimals)
+        ) revert StaleMapping();
 
         (fee, net) = outboundAmounts(
             request.amount,
@@ -287,7 +293,9 @@ contract OutboundProvenance is RouterActionValidator {
         if (
             (v != 27 && v != 28)
                 || uint256(s) > 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0
-        ) revert InvalidSignature();
+        ) {
+            revert InvalidSignature();
+        }
         signer = ecrecover(digest, v, r, s);
         if (signer == address(0)) revert InvalidSignature();
     }

@@ -87,6 +87,10 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install locked ABI generator dependencies
+        working-directory: packages/protocol
+        run: npm ci --ignore-scripts
+
       - name: Report the tool versions
         run: |
           forge --version
@@ -102,7 +106,7 @@ jobs:
         # lines into the script's log. Remember that deny = "warnings" is set and the linter runs
         # here, so a Solidity warning stops this job.
         working-directory: evm
-        run: forge build
+        run: forge build --skip test
 
       - name: Rehearse the deployment
         # No secrets, no RPC url, no key. The script starts its own anvil, refuses to run against
