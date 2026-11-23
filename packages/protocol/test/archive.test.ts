@@ -63,7 +63,7 @@ function rawArchive(
     if (padding) chunks.push(Buffer.alloc(padding));
   }
   chunks.push(Buffer.alloc(1024));
-  return gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  return gzipSync(Buffer.concat(chunks), { level: 9 });
 }
 
 describe("SDK release archives", () => {

@@ -209,7 +209,7 @@ export function createPackageArchive(files) {
     if (padding) chunks.push(Buffer.alloc(padding));
   }
   chunks.push(Buffer.alloc(1024));
-  const archive = gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  const archive = gzipSync(Buffer.concat(chunks), { level: 9 });
   if (archive.length > MAX_ARCHIVE_BYTES) throw new Error("archive exceeds size limit");
   return archive;
 }

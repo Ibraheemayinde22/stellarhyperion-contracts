@@ -228,7 +228,20 @@ export async function buildRecord(env = process.env, dependencies = {}) {
   if (env.HYPERION_AXELAR) adapters["axelar-its"] = env.HYPERION_AXELAR;
 
   const routes = Object.keys(adapters);
-  const initialization = await transactionPosition();
+  const initialization = dependencies.offline
+    ? {
+        ledger: integer(
+          env.HYPERION_ROUTER_LEDGER
+            ? "HYPERION_ROUTER_LEDGER"
+            : env.ROUTER_LEDGER
+              ? "ROUTER_LEDGER"
+              : "STELLAR_START_LEDGER",
+          1,
+        ),
+        timestamp: new Date().toISOString(),
+        txHash: null,
+      }
+    : await transactionPosition();
 
   const wasmHashes = {};
   if (env.ROUTER_HASH) wasmHashes.router = env.ROUTER_HASH;
@@ -303,10 +316,12 @@ export async function buildRecord(env = process.env, dependencies = {}) {
       timestamp: initialization.timestamp,
     },
     positions: {
-      initialization: {
-        ledger: initialization.ledger,
-        txHash: initialization.txHash,
-      },
+      initialization: dependencies.offline
+        ? null
+        : {
+            ledger: initialization.ledger,
+            txHash: initialization.txHash,
+          },
       activation: [],
     },
     commit: commit(),

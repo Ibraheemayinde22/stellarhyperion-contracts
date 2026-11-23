@@ -401,7 +401,8 @@ function readEvmDeployment(
   path: string,
 ): EvmDeployment {
   const expectedChain = chainConfig(chain);
-  if (expectedChain.family !== "evm" || raw.chainId !== expectedChain.chainId) {
+  const chainId = asInteger(raw.chainId, `${path}.chainId`, 1);
+  if (expectedChain.family !== "evm" || chainId !== expectedChain.chainId) {
     fail(`${path}.chainId`, "does not match the selected chain");
   }
   const adapters = asAdapters(raw.adapters, `${path}.adapters`, asEvmAddress);
@@ -460,7 +461,7 @@ function readEvmDeployment(
   return {
     family: "evm",
     chain,
-    chainId: asInteger(raw.chainId, `${path}.chainId`, 1),
+    chainId,
     ...(raw.genesisBlockHash === undefined
       ? {}
       : { genesisBlockHash: asHash(raw.genesisBlockHash, `${path}.genesisBlockHash`) }),

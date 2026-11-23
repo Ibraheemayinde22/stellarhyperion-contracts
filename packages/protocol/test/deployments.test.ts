@@ -115,7 +115,13 @@ describe("reading a record that holds together", () => {
       },
     ] satisfies RouteCapabilitySet[]) {
       const deployed = {
-        ...parseDeploymentSet(set({ "stellar-testnet": stellarRecord() })),
+        ...parseDeploymentSet(
+          set({
+            "stellar-testnet": stellarRecord({
+              networkPassphrase: "Test SDF Network ; September 2015",
+            }),
+          }),
+        ),
         routeCapabilities,
       };
       expect(
@@ -140,7 +146,13 @@ describe("reading a record that holds together", () => {
     expect(() => Reflect.set(parsed.records[0]!, "status", "active")).not.toThrow();
     expect(parsed.records[0]?.status).toBe("gated");
     const deployed = {
-      ...parseDeploymentSet(set({ "stellar-testnet": stellarRecord() })),
+      ...parseDeploymentSet(
+        set({
+          "stellar-testnet": stellarRecord({
+            networkPassphrase: "Test SDF Network ; September 2015",
+          }),
+        }),
+      ),
       routeCapabilities: parsed,
     };
     expect(hasActivatedRouteCapability(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
@@ -153,7 +165,13 @@ describe("reading a record that holds together", () => {
       records: [{ ...capability, paidDispatch: false, recipientKinds: ["account"] }],
     });
     const deployed = {
-      ...parseDeploymentSet(set({ "stellar-testnet": stellarRecord() })),
+      ...parseDeploymentSet(
+        set({
+          "stellar-testnet": stellarRecord({
+            networkPassphrase: "Test SDF Network ; September 2015",
+          }),
+        }),
+      ),
       routeCapabilities,
     };
     expect(hasActivatedRouteCapability(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
@@ -196,7 +214,13 @@ describe("reading a record that holds together", () => {
     ).toThrow(/duplicate/);
   });
   it("models route activation independently from registry and deployment presence", () => {
-    const parsed = parseDeploymentSet(set({ "stellar-testnet": stellarRecord() }));
+    const parsed = parseDeploymentSet(
+      set({
+        "stellar-testnet": stellarRecord({
+          networkPassphrase: "Test SDF Network ; September 2015",
+        }),
+      }),
+    );
     expect(hasActivatedRouteCapability(parsed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
       false,
     );
