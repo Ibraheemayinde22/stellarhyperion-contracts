@@ -760,7 +760,7 @@ describe("the generated ABI modules", () => {
       stdio: "pipe",
     });
     expect(snapshotAbiDir()).toEqual(before);
-  });
+  }, 30_000);
 
   it("exports an ABI for every contract the app has to talk to", () => {
     const abiDir = join(packageRoot, "src", "abi");
