@@ -161,3 +161,10 @@ jobs:
         if: failure()
         working-directory: packages/protocol
         run: git --no-pager diff -- src/abi || true
+
+      - name: Release and independently verify the SDK archive
+        working-directory: packages/protocol
+        run: |
+          set -euo pipefail
+          npm run release -- --out "$RUNNER_TEMP/hyperion-protocol.tgz"
+          npm run verify:archive -- "$RUNNER_TEMP/hyperion-protocol.tgz"
