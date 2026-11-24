@@ -8,6 +8,7 @@ mod inbound;
 mod its;
 mod outbound;
 mod paid;
+mod probe;
 mod setup;
 
 mod capabilities;

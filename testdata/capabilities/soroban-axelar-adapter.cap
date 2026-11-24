@@ -34,6 +34,7 @@ method maintain_storage
 method manager_type_for
 method map_token
 method paid_dispatch_auth_spec
+method probe_token_manager
 method propose_peer_rotation
 method rail_flow_limit
 method set_admin

@@ -23,7 +23,9 @@
 //! registration that quietly rewrites the first. [`TokenMappingConflict`] names the exact fields
 //! that disagree so the answer is a legible refusal rather than a mapping nobody can explain.
 
-use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, String, Vec};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, String, Symbol, Vec};
+
+use crate::route::RouteKind;
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -628,6 +630,253 @@ impl TokenMappingReport {
         }
 
         self.conflicts = conflicts;
+    }
+}
+
+// ------------------------------------------------------------------------------------------
+// Token-manager compatibility probe
+// ------------------------------------------------------------------------------------------
+
+/// Format version of [`TokenManagerProbe`]. Bumped when a field or blocker is added, removed or
+/// reinterpreted; consumers must refuse a version they do not know.
+pub const TOKEN_MANAGER_PROBE_VERSION: u32 = 1;
+
+impl TokenManagerType {
+    /// Axelar's discriminant as a known manager type, or `None` for a type this build has never
+    /// reviewed. An unknown type is never guessed at, because the manager type decides who the
+    /// outbound authorisation names.
+    pub fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::NativeInterchainToken),
+            1 => Some(Self::MintBurnFrom),
+            2 => Some(Self::LockUnlock),
+            4 => Some(Self::MintBurn),
+            _ => None,
+        }
+    }
+}
+
+/// What one real read against the rail returned.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ReadStatus {
+    /// The method answered with a value of the expected type.
+    Available = 0,
+    /// The method ran and returned a contract error for these arguments.
+    Rejected = 1,
+    /// The call aborted: the method is missing, trapped, or the host refused it. Soroban does not
+    /// tell these apart, so none of them counts as support.
+    Unavailable = 2,
+    /// The method answered with a value of the wrong type.
+    Malformed = 3,
+    /// Not attempted, because an input it needs (a local token id or chain link) is missing.
+    NotRead = 4,
+}
+
+/// One rail method the probe called, and what came back.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MethodRead {
+    pub method: Symbol,
+    pub status: ReadStatus,
+    /// Whether paid dispatch for this token depends on the method.
+    pub required: bool,
+}
+
+/// Why a probed token and chain cannot be activated for paid ITS dispatch.
+///
+/// Reported in a fixed order (local mapping, rail registration, manager, remote trust,
+/// admission, route, methods) so two runs over the same facts produce the same list.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProbeBlocker {
+    /// The local asset has no token id in this adapter's storage.
+    TokenNotMapped,
+    /// The token id does not map back to the local asset. Inbound would pay a different asset.
+    ReverseMappingMismatch,
+    /// ITS returned no registered asset for the token id.
+    UnregisteredTokenId,
+    /// ITS registered a different contract for the token id: (registered).
+    RailTokenMismatch(Address),
+    /// ITS returned no readable manager type for the token id.
+    ManagerTypeUnreadable,
+    /// ITS reported a manager type this build has not reviewed: (raw discriminant).
+    UnknownManagerType(u32),
+    /// A `LockUnlock` token has no readable deployed manager to receive the locked funds.
+    ManagerUnavailable,
+    /// The chain is not linked on this adapter.
+    ChainNotLinked,
+    /// The chain is linked but emergency-disabled.
+    ChainDisabled,
+    /// ITS does not report the linked Axelar chain as trusted.
+    ChainNotTrusted,
+    /// No destination capability is admitted for this exact link and token id.
+    CapabilityNotAdmitted,
+    /// The admitted manager type differs from what ITS reports now: (admitted).
+    CapabilityStale(u32),
+    /// This adapter instance is not the ITS route, which is the only one that sends paid.
+    PaidSendUnsupportedRoute,
+    /// A required method is missing or answered with the wrong type.
+    MethodUnavailable(Symbol),
+}
+
+/// A read-only compatibility report for one local token on one linked chain.
+///
+/// Every rail-sourced field comes from a real call to ITS made while building the report;
+/// nothing is inferred from names, symbols or configuration alone. `ready` is true only when
+/// `blockers` is empty.
+///
+/// The probe never calls `interchain_transfer`, because that entry point moves funds and cannot
+/// be read. Its presence is confirmed by simulating the paid dispatch itself.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenManagerProbe {
+    pub version: u32,
+    pub route: RouteKind,
+    pub token: Address,
+    pub chain: String,
+    /// Local forward mapping, token to token id.
+    pub token_id: Option<BytesN<32>>,
+    /// Local reverse mapping for that token id.
+    pub reverse_token: Option<Address>,
+    /// `registered_token_address(token_id)`.
+    pub rail_token: Option<Address>,
+    /// `deployed_token_manager(token_id)`.
+    pub manager: Option<Address>,
+    /// `token_manager_type(token_id)`, as the raw discriminant ITS returned.
+    pub manager_type: Option<u32>,
+    pub axelar_chain: Option<String>,
+    pub chain_enabled: bool,
+    /// `is_trusted_chain(axelar_chain)`.
+    pub rail_trusts_chain: Option<bool>,
+    /// Manager type in the admitted destination capability, when one is bound to this link.
+    pub admitted_manager_type: Option<u32>,
+    /// Whether an admitted capability exists and is bound to the current link and token id.
+    pub capability_bound: bool,
+    /// `native_token_address()`, the asset paid dispatch charges gas in.
+    pub gas_token: Option<Address>,
+    pub reads: Vec<MethodRead>,
+    pub blockers: Vec<ProbeBlocker>,
+    pub ready: bool,
+}
+
+impl TokenManagerProbe {
+    /// A report with nothing observed, no reads and no blockers yet.
+    pub fn new(env: &Env, route: RouteKind, token: Address, chain: String) -> Self {
+        Self {
+            version: TOKEN_MANAGER_PROBE_VERSION,
+            route,
+            token,
+            chain,
+            token_id: None,
+            reverse_token: None,
+            rail_token: None,
+            manager: None,
+            manager_type: None,
+            axelar_chain: None,
+            chain_enabled: false,
+            rail_trusts_chain: None,
+            admitted_manager_type: None,
+            capability_bound: false,
+            gas_token: None,
+            reads: Vec::new(env),
+            blockers: Vec::new(env),
+            ready: false,
+        }
+    }
+
+    /// Derive blockers from the observations already recorded. Pure, so the rules can be tested
+    /// without a rail.
+    pub fn classify(&mut self, env: &Env) {
+        let mut blockers = Vec::new(env);
+
+        // Local mapping, both directions.
+        match &self.token_id {
+            None => blockers.push_back(ProbeBlocker::TokenNotMapped),
+            Some(_) => {
+                if self.reverse_token.as_ref() != Some(&self.token) {
+                    blockers.push_back(ProbeBlocker::ReverseMappingMismatch);
+                }
+            }
+        }
+
+        // What ITS itself registered behind the id. Only the address counts: a token that merely
+        // shares a symbol or decimals with the registered one is a different contract.
+        let mut kind = None;
+        if self.token_id.is_some() {
+            match &self.rail_token {
+                None => blockers.push_back(ProbeBlocker::UnregisteredTokenId),
+                Some(registered) if registered != &self.token => {
+                    blockers.push_back(ProbeBlocker::RailTokenMismatch(registered.clone()));
+                }
+                Some(_) => {}
+            }
+            match self.manager_type {
+                None => blockers.push_back(ProbeBlocker::ManagerTypeUnreadable),
+                Some(raw) => match TokenManagerType::from_raw(raw) {
+                    None => blockers.push_back(ProbeBlocker::UnknownManagerType(raw)),
+                    Some(known) => kind = Some(known),
+                },
+            }
+            // A burning manager takes funds from the sender; only `LockUnlock` needs a manager
+            // to receive them. An unknown type cannot be judged, and is already a blocker.
+            if kind == Some(TokenManagerType::LockUnlock) && self.manager.is_none() {
+                blockers.push_back(ProbeBlocker::ManagerUnavailable);
+            }
+        }
+
+        // Remote trust.
+        if self.axelar_chain.is_none() {
+            blockers.push_back(ProbeBlocker::ChainNotLinked);
+        } else {
+            if !self.chain_enabled {
+                blockers.push_back(ProbeBlocker::ChainDisabled);
+            }
+            if self.rail_trusts_chain != Some(true) {
+                blockers.push_back(ProbeBlocker::ChainNotTrusted);
+            }
+        }
+
+        // Admission, which must be bound to this link and still match the rail.
+        if self.token_id.is_some() && self.axelar_chain.is_some() {
+            match (self.capability_bound, self.admitted_manager_type) {
+                (true, Some(admitted)) => {
+                    if kind.is_some() && Some(admitted) != self.manager_type {
+                        blockers.push_back(ProbeBlocker::CapabilityStale(admitted));
+                    }
+                }
+                _ => blockers.push_back(ProbeBlocker::CapabilityNotAdmitted),
+            }
+        }
+
+        if self.route != RouteKind::AxelarIts {
+            blockers.push_back(ProbeBlocker::PaidSendUnsupportedRoute);
+        }
+
+        // A required method that is missing or answers with the wrong type blocks activation.
+        // Token-scoped reads that fail are already reported above as missing data, because
+        // Soroban cannot tell a missing method from an unknown token id; either one blocks.
+        let token_scoped = [
+            Symbol::new(env, "registered_token_address"),
+            Symbol::new(env, "token_manager_type"),
+            Symbol::new(env, "deployed_token_manager"),
+        ];
+        for read in self.reads.iter() {
+            let missing = match read.status {
+                ReadStatus::Malformed => true,
+                ReadStatus::Unavailable | ReadStatus::Rejected => {
+                    !token_scoped.contains(&read.method)
+                }
+                ReadStatus::Available | ReadStatus::NotRead => false,
+            };
+            if read.required && missing {
+                blockers.push_back(ProbeBlocker::MethodUnavailable(read.method.clone()));
+            }
+        }
+
+        self.ready = blockers.is_empty();
+        self.blockers = blockers;
     }
 }
 
@@ -1277,5 +1526,215 @@ mod tests {
             return Err(());
         }
         Ok(Bytes::from_slice(env, &bytes))
+    }
+
+    // --------------------------------------------------------------------------------------
+    // Token-manager probe classification
+    // --------------------------------------------------------------------------------------
+
+    fn read(env: &Env, method: &str, status: ReadStatus, required: bool) -> MethodRead {
+        MethodRead {
+            method: Symbol::new(env, method),
+            status,
+            required,
+        }
+    }
+
+    /// Every observation a ready paid-send lane needs, with a burning manager.
+    fn ready_probe(env: &Env) -> TokenManagerProbe {
+        let token = Address::generate(env);
+        let mut probe = TokenManagerProbe::new(
+            env,
+            RouteKind::AxelarIts,
+            token.clone(),
+            String::from_str(env, "ethereum"),
+        );
+        probe.token_id = Some(BytesN::from_array(env, &[7; 32]));
+        probe.reverse_token = Some(token.clone());
+        probe.rail_token = Some(token);
+        probe.manager = Some(Address::generate(env));
+        probe.manager_type = Some(TokenManagerType::MintBurn as u32);
+        probe.axelar_chain = Some(String::from_str(env, "Ethereum"));
+        probe.chain_enabled = true;
+        probe.rail_trusts_chain = Some(true);
+        probe.admitted_manager_type = Some(TokenManagerType::MintBurn as u32);
+        probe.capability_bound = true;
+        probe.gas_token = Some(Address::generate(env));
+        for method in [
+            "registered_token_address",
+            "token_manager_type",
+            "deployed_token_manager",
+            "is_trusted_chain",
+            "native_token_address",
+        ] {
+            probe
+                .reads
+                .push_back(read(env, method, ReadStatus::Available, true));
+        }
+        probe
+    }
+
+    fn blockers_of(env: &Env, mut probe: TokenManagerProbe) -> Vec<ProbeBlocker> {
+        probe.classify(env);
+        assert_eq!(probe.ready, probe.blockers.is_empty());
+        probe.blockers
+    }
+
+    #[test]
+    fn a_fully_observed_lane_is_ready_and_versioned() {
+        let env = Env::default();
+        let mut probe = ready_probe(&env);
+        probe.classify(&env);
+        assert!(probe.ready);
+        assert_eq!(probe.version, TOKEN_MANAGER_PROBE_VERSION);
+    }
+
+    #[test]
+    fn known_manager_discriminants_round_trip_and_others_are_unknown() {
+        for kind in [
+            TokenManagerType::NativeInterchainToken,
+            TokenManagerType::MintBurnFrom,
+            TokenManagerType::LockUnlock,
+            TokenManagerType::MintBurn,
+        ] {
+            assert_eq!(TokenManagerType::from_raw(kind as u32), Some(kind));
+        }
+        for raw in [3, 5, 99, u32::MAX] {
+            assert_eq!(TokenManagerType::from_raw(raw), None);
+        }
+    }
+
+    #[test]
+    fn an_unknown_manager_type_blocks_even_with_everything_else_in_place() {
+        let env = Env::default();
+        let mut probe = ready_probe(&env);
+        probe.manager_type = Some(3);
+        probe.admitted_manager_type = Some(3);
+        assert_eq!(
+            blockers_of(&env, probe),
+            soroban_sdk::vec![&env, ProbeBlocker::UnknownManagerType(3)]
+        );
+    }
+
+    #[test]
+    fn only_the_registered_address_qualifies_a_mapping() {
+        let env = Env::default();
+        let mut probe = ready_probe(&env);
+        let other = Address::generate(&env);
+        probe.rail_token = Some(other.clone());
+        assert_eq!(
+            blockers_of(&env, probe),
+            soroban_sdk::vec![&env, ProbeBlocker::RailTokenMismatch(other)]
+        );
+
+        let mut unmapped = ready_probe(&env);
+        unmapped.token_id = None;
+        let blockers = blockers_of(&env, unmapped);
+        assert_eq!(blockers.first(), Some(ProbeBlocker::TokenNotMapped));
+        assert!(!blockers.contains(&ProbeBlocker::UnregisteredTokenId));
+
+        let mut reverse = ready_probe(&env);
+        reverse.reverse_token = Some(Address::generate(&env));
+        assert_eq!(
+            blockers_of(&env, reverse),
+            soroban_sdk::vec![&env, ProbeBlocker::ReverseMappingMismatch]
+        );
+    }
+
+    #[test]
+    fn a_missing_or_malformed_required_method_blocks_but_an_optional_one_does_not() {
+        let env = Env::default();
+        let gas = Symbol::new(&env, "native_token_address");
+        for status in [
+            ReadStatus::Unavailable,
+            ReadStatus::Rejected,
+            ReadStatus::Malformed,
+        ] {
+            let mut probe = ready_probe(&env);
+            probe
+                .reads
+                .set(4, read(&env, "native_token_address", status, true));
+            probe.gas_token = None;
+            assert_eq!(
+                blockers_of(&env, probe),
+                soroban_sdk::vec![&env, ProbeBlocker::MethodUnavailable(gas.clone())]
+            );
+        }
+
+        // A burning manager does not need a deployed manager, so that read is optional.
+        let mut probe = ready_probe(&env);
+        probe.reads.set(
+            2,
+            read(
+                &env,
+                "deployed_token_manager",
+                ReadStatus::Unavailable,
+                false,
+            ),
+        );
+        probe.manager = None;
+        assert!(blockers_of(&env, probe).is_empty());
+    }
+
+    #[test]
+    fn lock_unlock_needs_a_deployed_manager() {
+        let env = Env::default();
+        let mut probe = ready_probe(&env);
+        probe.manager_type = Some(TokenManagerType::LockUnlock as u32);
+        probe.admitted_manager_type = Some(TokenManagerType::LockUnlock as u32);
+        probe.manager = None;
+        assert_eq!(
+            blockers_of(&env, probe),
+            soroban_sdk::vec![&env, ProbeBlocker::ManagerUnavailable]
+        );
+    }
+
+    #[test]
+    fn remote_trust_admission_and_route_each_block() {
+        let env = Env::default();
+
+        let mut unlinked = ready_probe(&env);
+        unlinked.axelar_chain = None;
+        unlinked.capability_bound = false;
+        assert_eq!(
+            blockers_of(&env, unlinked),
+            soroban_sdk::vec![&env, ProbeBlocker::ChainNotLinked]
+        );
+
+        let mut untrusted = ready_probe(&env);
+        untrusted.chain_enabled = false;
+        untrusted.rail_trusts_chain = Some(false);
+        assert_eq!(
+            blockers_of(&env, untrusted),
+            soroban_sdk::vec![
+                &env,
+                ProbeBlocker::ChainDisabled,
+                ProbeBlocker::ChainNotTrusted
+            ]
+        );
+
+        let mut unadmitted = ready_probe(&env);
+        unadmitted.capability_bound = false;
+        assert_eq!(
+            blockers_of(&env, unadmitted),
+            soroban_sdk::vec![&env, ProbeBlocker::CapabilityNotAdmitted]
+        );
+
+        let mut stale = ready_probe(&env);
+        stale.admitted_manager_type = Some(TokenManagerType::LockUnlock as u32);
+        assert_eq!(
+            blockers_of(&env, stale),
+            soroban_sdk::vec![
+                &env,
+                ProbeBlocker::CapabilityStale(TokenManagerType::LockUnlock as u32)
+            ]
+        );
+
+        let mut gmp = ready_probe(&env);
+        gmp.route = RouteKind::AxelarGmp;
+        assert_eq!(
+            blockers_of(&env, gmp),
+            soroban_sdk::vec![&env, ProbeBlocker::PaidSendUnsupportedRoute]
+        );
     }
 }
