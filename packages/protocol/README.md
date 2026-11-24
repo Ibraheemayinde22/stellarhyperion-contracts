@@ -248,6 +248,20 @@ Compatibility is additive: no existing exported name changed its parameters or r
 behavioural change is the ambiguity rule above, which only differs for a registry or record that
 actually lists a duplicate symbol.
 
+`compareDeploymentSets(before, after)` compares two values returned by `parseDeploymentSet`. It
+returns stable, sorted changes with separate `metadata` and `trust` impacts, plus summary flags.
+Addresses and token identities are compared canonically; exact flow-limit strings are never
+converted to JavaScript numbers. Router configuration, adapter addresses, token identity,
+decimals, flow limits, provider addresses and lane activation are trust-impacting. Generation and
+deployment timestamps, archive explanations and token display symbols are metadata-only.
+
+A lane is a network, rail and token identity. Added and removed lanes are reported directly. A
+replacement is called a rename only when its network, rail and symbol identify exactly one lane on
+each side; ambiguous replacements remain separate additions and removals. This comparison is for
+review and inspection, not authorization or activation. It adds exports only; there are no wire,
+ABI, dispatch, replay-protection or recipient-claim changes, and consumers of existing APIs need
+no migration.
+
 ### Current deployment scope
 
 The active deployment is **Stellar Testnet, outbound ITS/CCTP**. EVM and other rail development

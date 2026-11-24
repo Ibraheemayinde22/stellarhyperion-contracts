@@ -20,7 +20,11 @@
 import type { Hex } from "./bytes.js";
 import type { ChainKey } from "./chains.js";
 import { chain, isChainKey } from "./chains.js";
-import type { AssetIdentity, AssetRepresentation } from "./registry/assets.js";
+import {
+  assetIdentityKey,
+  type AssetIdentity,
+  type AssetRepresentation,
+} from "./registry/assets.js";
 import { RouteKind } from "./routes.js";
 import { ROUTE_KINDS, ROUTE_SLUGS, tryRouteFromSlug } from "./routes.js";
 import { isStellarAddress } from "./addresses.js";
@@ -134,6 +138,32 @@ export interface DeploymentSet {
   readonly schemaVersion: number;
   readonly generatedAt: string;
   readonly networks: Readonly<Partial<Record<ChainKey, Deployment>>>;
+}
+
+export type DeploymentChangeImpact = "metadata" | "trust";
+export type DeploymentChangeKind = "metadata" | "network" | "adapter" | "lane";
+export type DeploymentChangeValue = string | number | null;
+
+/** One deterministic, reviewable difference between two parsed deployment sets. */
+export interface DeploymentSetChange {
+  readonly kind: DeploymentChangeKind;
+  readonly change: "added" | "removed" | "changed" | "renamed";
+  readonly impact: DeploymentChangeImpact;
+  readonly network?: ChainKey;
+  readonly route?: RouteKind;
+  readonly identity?: AssetIdentity;
+  readonly previousIdentity?: AssetIdentity;
+  readonly nextIdentity?: AssetIdentity;
+  readonly field?: string;
+  readonly before?: DeploymentChangeValue;
+  readonly after?: DeploymentChangeValue;
+}
+
+/** A stable deployment comparison; metadata-only edits never masquerade as trust changes. */
+export interface DeploymentSetComparison {
+  readonly changes: readonly DeploymentSetChange[];
+  readonly hasMetadataChanges: boolean;
+  readonly hasTrustChanges: boolean;
 }
 
 /** Thrown when a deployment file does not hold together. Carries the path to the bad field. */
@@ -782,4 +812,436 @@ export function tokenByIdentity(
 /** Every chain in a set that has a router, which is the list a chain picker should offer. */
 export function deployedChains(set: DeploymentSet): readonly ChainKey[] {
   return Object.keys(set.networks).filter(isChainKey);
+}
+
+interface DeploymentLane {
+  readonly network: ChainKey;
+  readonly route: RouteKind;
+  readonly identity: AssetIdentity;
+  readonly symbol: string;
+  readonly decimals: number;
+  readonly flowLimit: string;
+  readonly providerAddress: string | null;
+}
+
+function deploymentLanes(set: DeploymentSet): DeploymentLane[] {
+  const lanes: DeploymentLane[] = [];
+  for (const [network, deployment] of Object.entries(set.networks) as [ChainKey, Deployment][]) {
+    for (const token of deployedTokens(deployment)) {
+      const identity = tokenIdentity(network, token);
+      for (const route of token.routes) {
+        lanes.push({
+          network,
+          route,
+          identity,
+          symbol: token.symbol,
+          decimals: token.decimals,
+          flowLimit: token.flowLimit,
+          providerAddress: token.providerAddresses?.[route] ?? null,
+        });
+      }
+    }
+  }
+  return lanes;
+}
+
+function laneIdentityKey(lane: DeploymentLane): string {
+  return JSON.stringify([lane.network, lane.route, assetIdentityKey(lane.identity)]);
+}
+
+function laneRenameKey(lane: DeploymentLane): string {
+  return JSON.stringify([lane.network, lane.route, lane.symbol]);
+}
+
+function changeIdentity(change: DeploymentSetChange): AssetIdentity | undefined {
+  return change.previousIdentity ?? change.identity;
+}
+
+function deploymentChangeSortKey(change: DeploymentSetChange): string {
+  const identity = changeIdentity(change);
+  return JSON.stringify([
+    change.network ?? "",
+    change.kind,
+    change.route === undefined ? "" : ROUTE_SLUGS[change.route],
+    identity === undefined ? "" : assetIdentityKey(identity),
+    change.field ?? "",
+    change.change,
+    change.before ?? null,
+    change.after ?? null,
+  ]);
+}
+
+function addFieldChange(
+  changes: DeploymentSetChange[],
+  kind: DeploymentChangeKind,
+  network: ChainKey | undefined,
+  field: string,
+  before: DeploymentChangeValue,
+  after: DeploymentChangeValue,
+  impact: DeploymentChangeImpact,
+  route?: RouteKind,
+  ignoreCase = false,
+): void {
+  const same =
+    before === after ||
+    (ignoreCase &&
+      typeof before === "string" &&
+      typeof after === "string" &&
+      before.toLowerCase() === after.toLowerCase());
+  if (same) return;
+  changes.push({
+    kind,
+    change: "changed",
+    impact,
+    ...(network === undefined ? {} : { network }),
+    ...(route === undefined ? {} : { route }),
+    field,
+    before,
+    after,
+  });
+}
+
+function compareDeploymentFields(
+  changes: DeploymentSetChange[],
+  network: ChainKey,
+  before: Deployment,
+  after: Deployment,
+): void {
+  addFieldChange(changes, "network", network, "family", before.family, after.family, "trust");
+  addFieldChange(changes, "network", network, "status", before.status, after.status, "trust");
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "successor",
+    before.successor ?? null,
+    after.successor ?? null,
+    "trust",
+  );
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "router",
+    before.router,
+    after.router,
+    "trust",
+    undefined,
+    true,
+  );
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "treasury",
+    before.treasury,
+    after.treasury,
+    "trust",
+    undefined,
+    true,
+  );
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "admin",
+    before.admin,
+    after.admin,
+    "trust",
+    undefined,
+    true,
+  );
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "guardian",
+    before.guardian,
+    after.guardian,
+    "trust",
+    undefined,
+    true,
+  );
+  addFieldChange(changes, "network", network, "feeBps", before.feeBps, after.feeBps, "trust");
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "flowWindow",
+    before.flowWindow,
+    after.flowWindow,
+    "trust",
+  );
+  addFieldChange(
+    changes,
+    "network",
+    network,
+    "timelockDelay",
+    before.timelockDelay,
+    after.timelockDelay,
+    "trust",
+  );
+  addFieldChange(changes, "network", network, "commit", before.commit, after.commit, "trust");
+  addFieldChange(
+    changes,
+    "metadata",
+    network,
+    "archivedAt",
+    before.archivedAt ?? null,
+    after.archivedAt ?? null,
+    "metadata",
+  );
+  addFieldChange(
+    changes,
+    "metadata",
+    network,
+    "reason",
+    before.reason ?? null,
+    after.reason ?? null,
+    "metadata",
+  );
+
+  if (before.family === "evm" && after.family === "evm") {
+    addFieldChange(changes, "network", network, "chainId", before.chainId, after.chainId, "trust");
+    addFieldChange(
+      changes,
+      "network",
+      network,
+      "deployedAt.blockNumber",
+      before.deployedAt.blockNumber,
+      after.deployedAt.blockNumber,
+      "trust",
+    );
+    addFieldChange(
+      changes,
+      "network",
+      network,
+      "deployedAt.txHash",
+      before.deployedAt.txHash,
+      after.deployedAt.txHash,
+      "trust",
+      undefined,
+      true,
+    );
+  } else if (before.family === "stellar" && after.family === "stellar") {
+    addFieldChange(
+      changes,
+      "network",
+      network,
+      "networkPassphrase",
+      before.networkPassphrase,
+      after.networkPassphrase,
+      "trust",
+    );
+    addFieldChange(
+      changes,
+      "network",
+      network,
+      "deployedAt.ledger",
+      before.deployedAt.ledger,
+      after.deployedAt.ledger,
+      "trust",
+    );
+    const hashNames = new Set([
+      ...Object.keys(before.wasmHashes),
+      ...Object.keys(after.wasmHashes),
+    ]);
+    for (const name of [...hashNames].sort()) {
+      addFieldChange(
+        changes,
+        "network",
+        network,
+        `wasmHashes.${name}`,
+        before.wasmHashes[name] ?? null,
+        after.wasmHashes[name] ?? null,
+        "trust",
+      );
+    }
+  }
+
+  addFieldChange(
+    changes,
+    "metadata",
+    network,
+    "deployedAt.timestamp",
+    before.deployedAt.timestamp,
+    after.deployedAt.timestamp,
+    "metadata",
+  );
+}
+
+function compareLaneFields(
+  changes: DeploymentSetChange[],
+  before: DeploymentLane,
+  after: DeploymentLane,
+): void {
+  const common = {
+    kind: "lane" as const,
+    change: "changed" as const,
+    network: before.network,
+    route: before.route,
+    identity: before.identity,
+  };
+  if (assetIdentityKey(before.identity) !== assetIdentityKey(after.identity)) {
+    changes.push({
+      kind: "lane",
+      change: "renamed",
+      impact: "trust",
+      network: before.network,
+      route: before.route,
+      previousIdentity: before.identity,
+      nextIdentity: after.identity,
+      field: "identity",
+    });
+  }
+  for (const [field, oldValue, newValue, impact] of [
+    ["symbol", before.symbol, after.symbol, "metadata"],
+    ["decimals", before.decimals, after.decimals, "trust"],
+    ["flowLimit", before.flowLimit, after.flowLimit, "trust"],
+    ["providerAddress", before.providerAddress, after.providerAddress, "trust"],
+  ] as const) {
+    if (oldValue === newValue) continue;
+    const ignoreCase = field === "providerAddress" && before.identity.family === "evm";
+    if (
+      ignoreCase &&
+      typeof oldValue === "string" &&
+      typeof newValue === "string" &&
+      oldValue.toLowerCase() === newValue.toLowerCase()
+    ) {
+      continue;
+    }
+    changes.push({
+      ...common,
+      impact,
+      field,
+      before: oldValue,
+      after: newValue,
+    });
+  }
+}
+
+/**
+ * Compare already validated deployment sets without making an activation decision.
+ *
+ * A lane is one network, rail and token identity. Identity replacements on the same unique
+ * network/rail/symbol are reported as renames; ambiguous replacements remain explicit removals
+ * and additions rather than guessing which token was intended.
+ */
+export function compareDeploymentSets(
+  before: DeploymentSet,
+  after: DeploymentSet,
+): DeploymentSetComparison {
+  const changes: DeploymentSetChange[] = [];
+  addFieldChange(
+    changes,
+    "metadata",
+    undefined,
+    "generatedAt",
+    before.generatedAt,
+    after.generatedAt,
+    "metadata",
+  );
+
+  const networkNames = new Set([
+    ...Object.keys(before.networks),
+    ...Object.keys(after.networks),
+  ]);
+  for (const name of [...networkNames].sort()) {
+    if (!isChainKey(name)) continue;
+    const oldDeployment = before.networks[name];
+    const newDeployment = after.networks[name];
+    if (oldDeployment === undefined || newDeployment === undefined) {
+      const deployment = oldDeployment ?? newDeployment;
+      if (deployment !== undefined) {
+        changes.push({
+          kind: "network",
+          change: oldDeployment === undefined ? "added" : "removed",
+          impact: "trust",
+          network: name,
+          field: "deployment",
+          before: oldDeployment?.family ?? null,
+          after: newDeployment?.family ?? null,
+        });
+      }
+    } else {
+      compareDeploymentFields(changes, name, oldDeployment, newDeployment);
+    }
+
+    for (const route of ROUTE_KINDS) {
+      const oldAdapter = oldDeployment?.adapters[route] ?? null;
+      const newAdapter = newDeployment?.adapters[route] ?? null;
+      addFieldChange(
+        changes,
+        "adapter",
+        name,
+        "address",
+        oldAdapter,
+        newAdapter,
+        "trust",
+        route,
+        oldDeployment?.family === "evm" && newDeployment?.family === "evm",
+      );
+    }
+  }
+
+  const unmatchedBefore = deploymentLanes(before);
+  const unmatchedAfter = deploymentLanes(after);
+  const matched: [DeploymentLane, DeploymentLane][] = [];
+  for (let index = unmatchedAfter.length - 1; index >= 0; index--) {
+    const lane = unmatchedAfter[index];
+    if (lane === undefined) continue;
+    const matchIndex = unmatchedBefore.findIndex(
+      (candidate) => laneIdentityKey(candidate) === laneIdentityKey(lane),
+    );
+    if (matchIndex === -1) continue;
+    const previous = unmatchedBefore.splice(matchIndex, 1)[0];
+    const current = unmatchedAfter.splice(index, 1)[0];
+    if (previous !== undefined && current !== undefined) matched.push([previous, current]);
+  }
+
+  const renameGroups = new Set(unmatchedBefore.map(laneRenameKey));
+  for (const group of [...renameGroups].sort()) {
+    const oldMatches = unmatchedBefore.filter((lane) => laneRenameKey(lane) === group);
+    const newMatches = unmatchedAfter.filter((lane) => laneRenameKey(lane) === group);
+    if (oldMatches.length !== 1 || newMatches.length !== 1) continue;
+    const oldLane = oldMatches[0];
+    const newLane = newMatches[0];
+    if (oldLane === undefined || newLane === undefined) continue;
+    unmatchedBefore.splice(unmatchedBefore.indexOf(oldLane), 1);
+    unmatchedAfter.splice(unmatchedAfter.indexOf(newLane), 1);
+    matched.push([oldLane, newLane]);
+  }
+
+  for (const [oldLane, newLane] of matched) compareLaneFields(changes, oldLane, newLane);
+  for (const lane of unmatchedBefore) {
+    changes.push({
+      kind: "lane",
+      change: "removed",
+      impact: "trust",
+      network: lane.network,
+      route: lane.route,
+      identity: lane.identity,
+    });
+  }
+  for (const lane of unmatchedAfter) {
+    changes.push({
+      kind: "lane",
+      change: "added",
+      impact: "trust",
+      network: lane.network,
+      route: lane.route,
+      identity: lane.identity,
+    });
+  }
+
+  changes.sort((left, right) => {
+    const a = deploymentChangeSortKey(left);
+    const b = deploymentChangeSortKey(right);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  return {
+    changes,
+    hasMetadataChanges: changes.some((change) => change.impact === "metadata"),
+    hasTrustChanges: changes.some((change) => change.impact === "trust"),
+  };
 }
