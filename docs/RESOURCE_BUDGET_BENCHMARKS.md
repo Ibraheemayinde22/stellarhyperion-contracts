@@ -44,6 +44,50 @@ Re-run after changes to source, compiler, host, protocol or fixture assumptions;
 another runner is a new baseline. The host ledger/snapshot machinery also contributes to native
 costs, so these values do not establish live network fees or deployment acceptance.
 
+## Bounded wire inputs
+
+The parser-limit fixture and the `script/anvil-e2e.sh` report cover these maximum supported
+payload sizes. The report compares Rust, Solidity and SDK declarations before the local EVM
+rehearsal proceeds.
+
+| Input | Rust | Solidity | SDK | Behavior above limit |
+| ----- | ---: | ---: | ---: | -------------------- |
+| Muxed StrKey | 69 bytes | 69 bytes | 69 bytes | Reject destination |
+| Inbound note | 80 bytes | 80 bytes | 80 bytes | Reject before note parsing/copy |
+| CCTP hook | 46 bytes | 38 or 46 bytes written | 46 bytes | Reject on Soroban/SDK; EVM hook encoding is fixed-width |
+| Cancellation audit note | 128 printable ASCII bytes | 128 printable ASCII bytes | 128 printable ASCII bytes | Reject before cancellation state changes |
+| Queued destination-limit action chain | 64 bytes | 64-byte ITS chain cap | 64 bytes | Reject before queue insertion |
+| CCTP burn body / full message | 270 / 418 bytes | Not parsed on EVM | N/A | Reject above supported Soroban message envelope |
+
+The maximums preserve the existing wire layouts: classic StrKeys remain 56 characters, muxed
+StrKeys 69, inbound notes 80, and revision-bound CCTP hooks 38 or 46. A single additional byte does not become
+an alternate encoding. Oversized CCTP messages are rejected before slicing or reading fields, and
+the hook remains bounded before destination decoding. The Rust limit fixture reports CPU charges
+for a 4,096-byte invalid CCTP message; input construction is outside the measured interval.
+
+Reproduce the focused fixtures with:
+
+```sh
+cd soroban
+cargo test --locked -p hyperion-router resource_limits -- --nocapture
+
+cd ../evm
+forge test --match-contract HyperionNotesTest
+forge test --match-contract RouterAdminTest
+
+cd ../packages/protocol
+npm test -- test/notes.test.ts test/timelock.test.ts test/parity.test.ts
+```
+
+These are parser and audit-metadata bounds, not deployment activation. No storage schema,
+payout ABI, event layout, amount representation, authenticated rail dispatch, replay identity or
+recipient-bound claim changes. Existing stored actions and claims need no migration. Producers
+must reject rather than truncate oversized payloads; newly submitted destination-flow-limit
+actions with chain identifiers over 64 bytes are refused, while an oversized cancellation note
+leaves its action queued and cancellable with a valid note. The active
+deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rails remain independently
+gated.
+
 The separate actual-WASM `discovery::measure_bounded_replay_upkeep_resources_and_exact_ttl`
 fixture must use the final production build. It covers bounded one/32-entry upkeep and exact
 TTL, and retains the unchanged WASM deployment-size gate.

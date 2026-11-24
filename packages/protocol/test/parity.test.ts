@@ -25,7 +25,7 @@ import {
 import { ROUTE_KINDS, ROUTE_SLUGS, RouteKind } from "../src/routes.js";
 import { QuoteBlocker } from "../src/quotes.js";
 import { TokenMappingConflict } from "../src/tokenMapping.js";
-import { AddressKind } from "../src/addresses.js";
+import { AddressKind, STRKEY_LEN_MUXED } from "../src/addresses.js";
 import {
   BURN_MESSAGE_VERSION,
   CCTP_HOOK_VERSION,
@@ -35,7 +35,13 @@ import {
   STELLAR_DOMAIN,
 } from "../src/cctp.js";
 import { MAX_DECIMALS, MAX_FEE_BPS } from "../src/amounts.js";
-import { NOTE_VERSION, OUTBOUND_NOTE_LEN } from "../src/notes.js";
+import {
+  MAX_CCTP_HOOK_LEN,
+  MAX_INBOUND_NOTE_LEN,
+  NOTE_VERSION,
+  OUTBOUND_NOTE_LEN,
+} from "../src/notes.js";
+import { MAX_CANCELLATION_NOTE_LEN, MAX_QUEUED_ACTION_CHAIN_LEN } from "../src/timelock.js";
 import { WIRE_SCHEMAS } from "../src/wire-compat.js";
 import { abiSignature, compareAbiSets } from "../src/abi-compat.js";
 import type { AbiEntry } from "../src/abi-compat.js";
@@ -781,6 +787,52 @@ describe("the constants both chains agree on", () => {
     expect(source).toMatch(
       new RegExp(`OUTBOUND_NOTE_LEN\\s*:\\s*u32\\s*=\\s*${String(OUTBOUND_NOTE_LEN)}`),
     );
+  });
+
+  it("reports matching maximum parser and queued-action audit limits", () => {
+    const rustStrkey = read(join(coreSrc, "strkey.rs"));
+    const rustAxelar = read(join(coreSrc, "axelar.rs"));
+    const rustCctp = read(join(coreSrc, "cctp.rs"));
+    const rustRouterTypes = read(join(sorobanRouterSrc, "types.rs"));
+    const solidityNotes = read(join(evmRoot, "src", "libraries", "HyperionNotes.sol"));
+    const solidityRouter = read(join(evmRoot, "src", "HyperionRouter.sol"));
+    const solidityStrkey = read(join(evmRoot, "src", "libraries", "StellarAddress.sol"));
+    const solidityIts = read(join(evmRoot, "src", "adapters", "AxelarItsAdapter.sol"));
+    const rustConstValue = (source: string, name: string): number => {
+      const match = new RegExp(`(?:pub )?const ${name}\\s*:\\s*u32\\s*=\\s*(\\d+)`).exec(source);
+      expect(match, `${name} not found`).not.toBeNull();
+      return Number(match?.[1]);
+    };
+
+    expect(rustConstValue(rustStrkey, "STRKEY_LEN_MUXED")).toBe(STRKEY_LEN_MUXED);
+    expect(solidityStrkey).toMatch(/STRKEY_LEN_MUXED\s*=\s*69/);
+    expect(MAX_INBOUND_NOTE_LEN).toBe(80);
+    expect(rustAxelar).toMatch(
+      /MAX_INBOUND_NOTE_LEN\s*:\s*u32\s*=\s*1\s*\+\s*2\s*\+\s*crate::strkey::STRKEY_LEN_MUXED\s*\+\s*8/,
+    );
+    expect(solidityNotes).toMatch(
+      /MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*MAX_STRKEY_LEN\s*\+\s*8/,
+    );
+    expect(solidityNotes).toMatch(/MAX_STRKEY_LEN\s*=\s*69/);
+    expect(read(join(packageRoot, "src", "notes.ts"))).toMatch(
+      /MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*STRKEY_LEN_MUXED\s*\+\s*8/,
+    );
+
+    expect(MAX_CCTP_HOOK_LEN).toBe(46);
+    expect(rustCctp).toMatch(
+      /MAX_CCTP_HOOK_LEN\s*:\s*u32\s*=\s*1\s*\+\s*4\s*\+\s*crate::address::TAGGED_LEN_MUXED/,
+    );
+    expect(solidityNotes).toMatch(/MAX_CCTP_HOOK_LEN\s*=\s*46/);
+
+    expect(MAX_CANCELLATION_NOTE_LEN).toBe(128);
+    expect(rustConstValue(rustRouterTypes, "MAX_REASON_LEN")).toBe(MAX_CANCELLATION_NOTE_LEN);
+    expect(solidityRouter).toMatch(/MAX_REASON_LEN\s*=\s*128/);
+
+    expect(MAX_QUEUED_ACTION_CHAIN_LEN).toBe(64);
+    expect(rustConstValue(rustRouterTypes, "MAX_QUEUED_ACTION_CHAIN_LEN")).toBe(
+      MAX_QUEUED_ACTION_CHAIN_LEN,
+    );
+    expect(solidityIts).toMatch(/MAX_DESTINATION_CHAIN_LENGTH\s*=\s*64/);
   });
 
   it("has the same fee and decimal ceilings in the Solidity", () => {

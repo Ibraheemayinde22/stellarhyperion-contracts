@@ -41,6 +41,7 @@ export * from "./addresses.js";
 
 // The notes Hyperion writes into a rail's payload.
 export * from "./notes.js";
+export * from "./timelock.js";
 
 // Fees, decimal conversion, and formatting that never touches a float.
 export * from "./amounts.js";

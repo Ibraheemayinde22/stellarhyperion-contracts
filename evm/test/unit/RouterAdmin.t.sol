@@ -255,6 +255,27 @@ contract RouterAdminTest is Fixture {
         }
     }
 
+    function test_cancellation_accepts_the_maximum_note_and_rejects_one_byte_more() public {
+        AdminAction memory action = _empty(ActionKind.SetFeeBps);
+        action.amount = 22;
+        vm.prank(admin);
+        uint64 acceptedId = router.queueAction(action);
+        string memory atLimit = _asciiString(MAX_CANCELLATION_NOTE_LEN);
+        vm.prank(guardian);
+        router.cancelActionWithReason(acceptedId, CancelReason.SecurityConcern, atLimit);
+        assertTrue(router.actionCancelled(acceptedId));
+
+        vm.prank(admin);
+        uint64 retainedId = router.queueAction(action);
+        vm.expectRevert(InvalidLimit.selector);
+        vm.prank(guardian);
+        router.cancelActionWithReason(
+            retainedId, CancelReason.SecurityConcern, _asciiString(MAX_CANCELLATION_NOTE_LEN + 1)
+        );
+        assertEq(router.queuedAction(retainedId).id, retainedId);
+        assertFalse(router.actionCancelled(retainedId));
+    }
+
     // -------------------------------------------------------------------------------------
     // Deployment
     // -------------------------------------------------------------------------------------

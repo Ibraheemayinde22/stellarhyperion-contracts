@@ -37,7 +37,7 @@ pub use types::{
     MigrationStatus, Origin, OutboundPreconditions, OutboundRequest, PendingClaim, QueuedAction,
     Recipient, RecipientEligibility, RouteConfig, RouteQuote, RouteQuoteV2, SourceDebit,
     TokenConfig, TransferRecord, CURRENT_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION,
-    MAX_MAINTENANCE_BATCH, MAX_REASON_LEN,
+    MAX_MAINTENANCE_BATCH, MAX_QUEUED_ACTION_CHAIN_LEN, MAX_REASON_LEN,
 };
 
 use hyperion_core::{

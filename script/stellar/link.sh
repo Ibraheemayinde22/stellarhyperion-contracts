@@ -24,6 +24,7 @@ if is_dry_run; then
   exit 0
 fi
 require_tools
+require_stellar_operation_target
 require_identity
 
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
