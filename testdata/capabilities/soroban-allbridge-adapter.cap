@@ -10,10 +10,13 @@ contract AllbridgeAdapter
 status gated
 # Public callable methods, sorted.
 method activate_validator_rotation
+method audit_inbound
 method bridge_in
 method cancel_validator_rotation
 method chain_for
+method disable_legacy_attestations
 method dispatch
+method enable_legacy_attestations
 method fund_gas
 method gas_balance
 method get_asset
@@ -24,6 +27,7 @@ method initialize
 method is_processed
 method keep_alive
 method key_coverage
+method legacy_attestation_deadline
 method link_asset
 method link_chain
 method maintain_storage

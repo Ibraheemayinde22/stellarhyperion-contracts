@@ -37,6 +37,7 @@ pub struct Dispatched {
     pub mint_recipient: BytesN<32>,
     pub max_fee: i128,
     pub min_finality_threshold: u32,
+    pub mapping_revision: u32,
     /// The router's own outbound nonce, so the two halves of the trail can be joined up.
     pub router_nonce: u64,
 }
@@ -57,6 +58,64 @@ pub struct Received {
     /// Nonzero when the router had to park the delivery instead of handing it straight over.
     pub claim_id: u64,
     pub relayer: Address,
+    pub mapping_revision: u32,
+}
+
+/// Versioned fee-budget and actual-burn accounting for one successful outbound burn.
+///
+/// Published alongside `Dispatched`, never instead of it, so existing `cctp_out` decoders are
+/// untouched. Every amount is in the source token's base units, declared by `source_decimals`,
+/// and `burned + retained == source_debit`. The destination later mints
+/// `burned - fee_executed`, with `fee_executed <= fee_budget`, which is what lets a reconciler
+/// match this record against the destination deduction. Emitted only after the burn, the measured
+/// balance delta and the allowance cleanup have all succeeded; a failed burn unwinds it.
+#[contractevent(topics = ["hyperion", "cctp_fee_out"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BurnAccounted {
+    #[topic]
+    pub token: Address,
+    #[topic]
+    pub destination_domain: u32,
+    /// `hyperion_core::cctp::FEE_ACCOUNTING_VERSION` at emission time.
+    pub version: u32,
+    /// Joins this record to `Dispatched` and to the router's outbound event.
+    pub router_nonce: u64,
+    pub source_decimals: u32,
+    /// Exactly what the adapter held for this burn and approved to Circle.
+    pub source_debit: i128,
+    /// The `max_fee` handed to Circle: the most the destination may deduct.
+    pub fee_budget: i128,
+    /// Measured decrease of the adapter's balance across the messenger call.
+    pub burned: i128,
+    /// `source_debit - burned`: dust left in the adapter for `sweep`.
+    pub retained: i128,
+    /// True for paid forwarding (`dispatch_from_revision`), false for a plain burn.
+    pub forwarding: bool,
+    pub min_finality_threshold: u32,
+}
+
+/// Versioned fee accounting for one attested inbound mint.
+///
+/// Published alongside `Received`. `burn_amount`, `fee_budget` and `fee_executed` are the values
+/// Circle attested, in the remote burn token's wire units; `minted` is the measured local balance
+/// delta, which the adapter has already required to equal `burn_amount - fee_executed`.
+#[contractevent(topics = ["hyperion", "cctp_fee_in"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MintAccounted {
+    #[topic]
+    pub token: Address,
+    #[topic]
+    pub source_domain: u32,
+    /// `hyperion_core::cctp::FEE_ACCOUNTING_VERSION` at emission time.
+    pub version: u32,
+    /// Circle's full nonce, the replay identity shared with `Received`.
+    pub nonce: BytesN<32>,
+    pub local_decimals: u32,
+    pub remote_decimals: u32,
+    pub burn_amount: i128,
+    pub fee_budget: i128,
+    pub fee_executed: i128,
+    pub minted: i128,
 }
 
 /// Leftovers moved out of the adapter and into the treasury.
@@ -86,6 +145,9 @@ pub struct AssetMapped {
     pub domain: u32,
     pub burn_token: BytesN<32>,
     pub local: Address,
+    pub revision: u32,
+    pub local_decimals: u32,
+    pub remote_decimals: u32,
 }
 
 #[contractevent(topics = ["hyperion", "cctp_cfg"])]

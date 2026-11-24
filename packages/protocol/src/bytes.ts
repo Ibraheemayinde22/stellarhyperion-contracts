@@ -17,13 +17,31 @@ export function toHex(bytes: Uint8Array): Hex {
   return `0x${out}`;
 }
 
-/** Hex back to bytes, with or without the prefix, refusing anything that is not even length. */
-export function fromHex(value: string): Uint8Array {
+/**
+ * Hex back to bytes, with or without the prefix, refusing anything that is not even length.
+ *
+ * Pass `maxBytes` when the input is somebody else's: the budget is checked before the output
+ * array is allocated, so an enormous string fails instead of becoming an enormous `Uint8Array`.
+ * The public message parsers in this package do that for you; this argument only exists for
+ * callers reading a string directly.
+ */
+export function fromHex(value: string, maxBytes?: number): Uint8Array {
   const body = value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
   if (body.length % 2 !== 0) {
     throw new RangeError(`hex needs an even number of digits, got ${String(body.length)}`);
   }
-  const out = new Uint8Array(body.length / 2);
+  const length = body.length / 2;
+  if (maxBytes !== undefined) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      throw new RangeError("maxBytes must be a non-negative safe integer");
+    }
+    if (length > maxBytes) {
+      throw new RangeError(
+        `hex input is ${String(length)} bytes, over the ${String(maxBytes)} byte input limit`,
+      );
+    }
+  }
+  const out = new Uint8Array(length);
   for (let i = 0; i < out.length; i += 1) {
     const pair = body.slice(i * 2, i * 2 + 2);
     const byte = Number.parseInt(pair, 16);

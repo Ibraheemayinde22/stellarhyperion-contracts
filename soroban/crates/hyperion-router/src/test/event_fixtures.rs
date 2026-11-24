@@ -75,6 +75,7 @@ fn router_event_encodings_match_the_committed_sdk_fixtures() {
             destination: Destination {
                 chain: w.ethereum(),
                 address: evm_destination(&w.env, 1),
+                mapping_revision: 1,
             },
             destination_decimals: 6,
             min_destination_amount: 0,

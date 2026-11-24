@@ -59,7 +59,7 @@ use hyperion_core::{
     address::{assert_route_supports, bytes32_to_evm, evm_to_bytes32},
     axelar::{
         negotiate_note_version, DestinationCapability, DestinationCapabilityRecord, InboundNote,
-        OutboundNote, SUPPORTED_NOTE_VERSIONS,
+        MethodRead, OutboundNote, ReadStatus, TokenManagerProbe, SUPPORTED_NOTE_VERSIONS,
     },
     inbound::{Origin, Recipient, RouterClient},
     AdapterKeyCoverage, HyperionError, MaintenanceSummary, RouteKind, TokenMappingConflict,
@@ -69,7 +69,7 @@ use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contractimpl, token, vec,
     xdr::ToXdr,
-    Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
+    Address, Bytes, BytesN, Env, IntoVal, InvokeError, String, Symbol, TryFromVal, Val, Vec,
 };
 
 use rail::{InterchainTokenServiceClient, Token, TokenManagerType};
@@ -1040,6 +1040,145 @@ impl AxelarAdapter {
             gas_recipient,
             gas_amount,
         })
+    }
+
+    /// Read-only token-manager compatibility probe for paid ITS dispatch of `token` to `chain`.
+    ///
+    /// Every rail fact in the report comes from a real call to ITS made here:
+    /// `registered_token_address`, `token_manager_type` (read as its raw discriminant, so an
+    /// unreviewed type is reported rather than trapped on), `deployed_token_manager`,
+    /// `is_trusted_chain` and `native_token_address`. Local mapping, link and admission come from
+    /// this adapter's storage without the TTL bump. Nothing is written, no event is published, and
+    /// no symbol or name is ever read, so a lookalike token cannot qualify a mapping.
+    ///
+    /// The probe never calls `interchain_transfer`, which moves funds. Confirm that entry point by
+    /// simulating the paid dispatch after the probe reports `ready`.
+    pub fn probe_token_manager(
+        env: Env,
+        token: Address,
+        chain: String,
+    ) -> Result<TokenManagerProbe, HyperionError> {
+        let cfg = storage::config(&env)?;
+        let mut probe = TokenManagerProbe::new(&env, cfg.route, token.clone(), chain.clone());
+        let mut reads = Vec::new(&env);
+        let its = &cfg.its;
+
+        let token_id = storage::peek_token_id(&env, &token);
+        match &token_id {
+            Some(id) => {
+                let args: Vec<Val> = vec![&env, id.into_val(&env)];
+                probe.reverse_token = storage::peek_token_of(&env, id);
+                probe.rail_token = rail_read(
+                    &env,
+                    its,
+                    "registered_token_address",
+                    args.clone(),
+                    true,
+                    &mut reads,
+                );
+                probe.manager_type = rail_read(
+                    &env,
+                    its,
+                    "token_manager_type",
+                    args.clone(),
+                    true,
+                    &mut reads,
+                );
+                // Only a manager that locks needs a deployed manager to receive the funds.
+                let burns = probe
+                    .manager_type
+                    .and_then(TokenManagerType::from_raw)
+                    .is_some_and(|kind| kind.takes_by_burning());
+                probe.manager = rail_read(
+                    &env,
+                    its,
+                    "deployed_token_manager",
+                    args,
+                    !burns,
+                    &mut reads,
+                );
+            }
+            None => {
+                for method in [
+                    "registered_token_address",
+                    "token_manager_type",
+                    "deployed_token_manager",
+                ] {
+                    reads.push_back(not_read(&env, method));
+                }
+            }
+        }
+
+        match storage::peek_link(&env, &chain) {
+            Some(link) => {
+                probe.chain_enabled = !storage::is_chain_disabled(&env, &chain);
+                probe.rail_trusts_chain = rail_read(
+                    &env,
+                    its,
+                    "is_trusted_chain",
+                    vec![&env, link.axelar_chain.into_val(&env)],
+                    true,
+                    &mut reads,
+                );
+                if let Some(id) = &token_id {
+                    if let Some(record) = storage::destination_capability(&env, &chain, id) {
+                        probe.capability_bound = record.chain == link.chain
+                            && record.axelar_chain == link.axelar_chain
+                            && record.peer == link.peer
+                            && &record.token_id == id
+                            && expected_capability(cfg.route).ok() == Some(record.capability);
+                        probe.admitted_manager_type = Some(record.token_manager_type as u32);
+                    }
+                }
+                probe.axelar_chain = Some(link.axelar_chain);
+            }
+            None => reads.push_back(not_read(&env, "is_trusted_chain")),
+        }
+
+        probe.gas_token = rail_read(
+            &env,
+            its,
+            "native_token_address",
+            vec![&env],
+            true,
+            &mut reads,
+        );
+        probe.token_id = token_id;
+        probe.reads = reads;
+        probe.classify(&env);
+        Ok(probe)
+    }
+}
+
+/// Call one ITS method by name and record what came back, without trapping on any outcome.
+fn rail_read<T: TryFromVal<Env, Val>>(
+    env: &Env,
+    its: &Address,
+    method: &str,
+    args: Vec<Val>,
+    required: bool,
+    reads: &mut Vec<MethodRead>,
+) -> Option<T> {
+    let name = Symbol::new(env, method);
+    let (status, value) = match env.try_invoke_contract::<T, InvokeError>(its, &name, args) {
+        Ok(Ok(value)) => (ReadStatus::Available, Some(value)),
+        Ok(Err(_)) => (ReadStatus::Malformed, None),
+        Err(Ok(InvokeError::Contract(_))) => (ReadStatus::Rejected, None),
+        Err(_) => (ReadStatus::Unavailable, None),
+    };
+    reads.push_back(MethodRead {
+        method: name,
+        status,
+        required,
+    });
+    value
+}
+
+fn not_read(env: &Env, method: &str) -> MethodRead {
+    MethodRead {
+        method: Symbol::new(env, method),
+        status: ReadStatus::NotRead,
+        required: true,
     }
 }
 

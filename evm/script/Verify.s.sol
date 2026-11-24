@@ -31,6 +31,10 @@ contract Verify is DeployConfig {
     uint256 internal problems;
 
     function run() external {
+        if (vm.envOr("HYPERION_DRY_RUN", false)) {
+            _unsignedPlan();
+            return;
+        }
         problems = 0;
         console.log("EVM verification checks deployment configuration only; it does not certify destination payment.");
         string memory path = vm.envOr(
@@ -46,6 +50,13 @@ contract Verify is DeployConfig {
         console.log("");
 
         _expectUint("chain id", block.chainid, record.readUint(".chainId"));
+        bytes32 observedGenesis = observedGenesisBlockHash();
+        if (vm.keyExistsJson(record, ".genesisBlockHash")) {
+            _expectBytes32("genesis block hash", record.readBytes32(".genesisBlockHash"), observedGenesis);
+        } else {
+            console.log("WARN legacy record has no genesis-block network binding");
+        }
+        _verifyPublicPositions(record);
         _verifyProvenance(record, router);
         _verifyRecoveryManager(record, router);
         CompatibilityProfile memory profile =
@@ -78,6 +89,10 @@ contract Verify is DeployConfig {
         _expectUint("cctp lane domain", lane.domain, STELLAR_CCTP_DOMAIN);
         bytes32 recordedRecipient = record.readBytes32(".stellarRailRecipient");
         _expectBytes32("cctp mint recipient", lane.mintRecipient, recordedRecipient);
+        _expectBytes32("cctp remote token", lane.remoteToken, record.readBytes32(".stellarCctpToken"));
+        _expectUint("cctp mapping revision", lane.mappingRevision, record.readUint(".cctpMappingRevision"));
+        _expectUint("cctp local decimals", lane.localDecimals, record.readUint(".cctpLocalDecimals"));
+        _expectUint("cctp remote decimals", lane.remoteDecimals, record.readUint(".cctpRemoteDecimals"));
 
         address token = record.readAddress(".token");
         _expectTrue("token registered", router.tokenConfig(token).registered);
@@ -99,6 +114,112 @@ contract Verify is DeployConfig {
             console.log("Mismatches          ", problems);
             revert("the chain and the record disagree");
         }
+    }
+
+    /// @dev Public local evidence only. No contract call, RPC, signer or broadcast in this branch.
+    function _unsignedPlan() private view {
+        requireCompatibleExecutionTarget();
+        string memory path = vm.envOr(
+            "HYPERION_RECORD", string.concat("deployments/evm-", vm.toString(block.chainid), "-phase1.json")
+        );
+        string memory record = vm.readFile(path);
+        require(record.readUint(".chainId") == block.chainid, "record chain id differs from plan");
+        address router = record.readAddress(".router");
+        require(
+            router != address(0) && record.readAddress(".cctpAdapter") != address(0)
+                && record.readAddress(".token") != address(0) && record.readAddress(".admin") != address(0)
+                && record.readAddress(".treasury") != address(0)
+                && record.readAddress(".deployer") != address(0),
+            "record has a zero required address"
+        );
+        require(record.readUint(".feeBps") <= 100, "record fee exceeds cap");
+        require(
+            record.readUint(".timelockDelay") >= 1 hours && record.readUint(".timelockDelay") <= 30 days,
+            "record timelock outside bounds"
+        );
+        require(
+            record.readUint(".flowWindow") >= 5 minutes && record.readUint(".flowWindow") <= 7 days,
+            "record flow window outside bounds"
+        );
+        require(
+            record.readUint(".tokenDecimals") <= 18 && record.readUint(".tokenFlowLimit") != 0,
+            "record token configuration outside bounds"
+        );
+        bytes32 chain = keccak256(bytes(record.readString(".stellarChain")));
+        require(
+            chain == keccak256(bytes(STELLAR_CHAIN)) || chain == keccak256(bytes(STELLAR_TESTNET_CHAIN)),
+            "unknown Stellar peer network"
+        );
+        require(record.readBytes32(".stellarRailRecipient") != bytes32(0), "record lacks rail recipient");
+        CompatibilityProfile memory profile =
+            _verifiedArtifactProfile(vm.getArtifactPathByCode(type(HyperionRouter).creationCode));
+        require(
+            keccak256(bytes(record.readString(".evmVersion"))) == keccak256(bytes(profile.evmVersion))
+                && keccak256(bytes(record.readString(".solcVersion")))
+                    == keccak256(bytes(profile.compilerVersion))
+                && record.readUint(".optimizerRuns") == profile.optimizerRuns
+                && record.readBool(".viaIR") == profile.viaIR,
+            "record build profile differs from artifact"
+        );
+        _artifactIdentity("HYPERION_ROUTER_ARTIFACT_HASH", type(HyperionRouter).creationCode);
+        _artifactIdentity("HYPERION_CCTP_ARTIFACT_HASH", type(CctpAdapter).creationCode);
+        _publicCodeIdentity(record.readAddress(".cctpTokenMessenger"), "CCTP_TOKEN_MESSENGER_CODE_HASH");
+        _publicCodeIdentity(
+            record.readAddress(".cctpMessageTransmitter"), "CCTP_MESSAGE_TRANSMITTER_CODE_HASH"
+        );
+        require(
+            record.readAddress(".provenanceStore")
+                    == address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", router, hex"01")))))
+                && record.readBytes32(".provenanceStoreCodeHash") != bytes32(0),
+            "record lacks immutable provenance identity"
+        );
+        require(
+            vm.keyExistsJson(record, ".recoveryManager")
+                == vm.keyExistsJson(record, ".recoveryManagerCodeHash"),
+            "record has incomplete recovery identity"
+        );
+        if (vm.keyExistsJson(record, ".recoveryManager")) {
+            require(
+                record.readAddress(".recoveryManager")
+                        == address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", router, hex"02")))))
+                    && record.readBytes32(".recoveryManagerCodeHash") != bytes32(0),
+                "record has invalid recovery identity"
+            );
+        }
+        if (vm.keyExistsJson(record, ".axelarAdapter")) {
+            require(record.readAddress(".axelarAdapter") != address(0), "record has zero Axelar adapter");
+            _artifactIdentity("HYPERION_AXELAR_ARTIFACT_HASH", type(AxelarItsAdapter).creationCode);
+            _publicCodeIdentity(record.readAddress(".axelarIts"), "AXELAR_ITS_CODE_HASH");
+            _publicCodeIdentity(record.readAddress(".axelarGasService"), "AXELAR_GAS_SERVICE_CODE_HASH");
+            require(record.readBytes32(".axelarTokenId") != bytes32(0), "record lacks Axelar token identity");
+            require(vm.envBytes("STELLAR_AXELAR_PEER").length == 32, "Stellar Axelar peer must be 32 bytes");
+        }
+        console.log("mode                 dry-run");
+        console.log("signed               false");
+        console.log("submitted            false");
+        console.log("record               ", path);
+        console.log("router               ", router);
+        console.log("chain id             ", block.chainid);
+        console.log("planned read         configuration, token, adapters, provider links, immutable code");
+        console.log("planned read         admin grants; bounded guardian grant/revoke history from block");
+        console.log("history starts       ", record.readUint(".deployedAtBlock"));
+        console.log("expected admin       ", record.readAddress(".admin"));
+        console.log("expected guardian    ", record.readAddress(".guardian"));
+        console.log("public expected record", record);
+        console.log("live verification    pending; local identities are reviewed operator inputs");
+    }
+
+    function _artifactIdentity(string memory name, bytes memory creationCode) private view {
+        bytes32 expected = vm.envOr(name, bytes32(0));
+        require(expected != bytes32(0), "missing reviewed artifact identity");
+        require(expected == keccak256(creationCode), "artifact differs from reviewed identity");
+    }
+
+    function _publicCodeIdentity(address target, string memory name) private view {
+        require(
+            target != address(0) && vm.envOr(name, bytes32(0)) != bytes32(0),
+            "missing reviewed provider identity"
+        );
     }
 
     function _verifyProvenance(string memory record, HyperionRouter router) internal {
@@ -144,6 +265,78 @@ contract Verify is DeployConfig {
                 TokenRecoveryManager(expected).ROUTER(),
                 address(router)
             );
+        }
+    }
+
+    function _verifyPublicPositions(string memory record) internal {
+        if (!vm.keyExistsJson(record, ".positions.initialization.txHash")) {
+            console.log("WARN legacy record has no public initialization transaction position");
+            return;
+        }
+        _verifyReceiptPosition(record, ".positions.initialization");
+        uint256 index;
+        while (vm.keyExistsJson(
+                record, string.concat(".positions.activation[", vm.toString(index), "].txHash")
+            )) {
+            _verifyReceiptPosition(record, string.concat(".positions.activation[", vm.toString(index), "]"));
+            ++index;
+        }
+        console.log("  ok   initialization receipt");
+        console.log("  ok   activation receipts", index);
+        if (index == 0) console.log("WARN no activation transaction positions are recorded");
+    }
+
+    function _verifyReceiptPosition(string memory record, string memory path) private {
+        string memory txHash = record.readString(string.concat(path, ".txHash"));
+        string memory transaction =
+            vm.rpcJson("eth_getTransactionByHash", string.concat("[\"", txHash, "\"]"));
+        string memory receipt = vm.rpcJson("eth_getTransactionReceipt", string.concat("[\"", txHash, "\"]"));
+        require(bytes(transaction).length > 2, "recorded transaction is unavailable from public RPC");
+        require(bytes(receipt).length > 2, "recorded transaction has no public receipt");
+        _expectAddress(
+            string.concat(path, " sender"),
+            vm.parseJsonAddress(transaction, ".from"),
+            record.readAddress(".deployer")
+        );
+        if (keccak256(bytes(path)) == keccak256(bytes(".positions.initialization"))) {
+            _expectAddress(
+                string.concat(path, " created router"),
+                vm.parseJsonAddress(receipt, ".contractAddress"),
+                record.readAddress(".router")
+            );
+        } else {
+            _expectAddress(
+                string.concat(path, " target router"),
+                vm.parseJsonAddress(transaction, ".to"),
+                record.readAddress(".router")
+            );
+        }
+        _expectString(
+            string.concat(path, " receipt hash"), vm.parseJsonString(receipt, ".transactionHash"), txHash
+        );
+        _expectString(string.concat(path, " receipt status"), vm.parseJsonString(receipt, ".status"), "0x1");
+        _expectString(
+            string.concat(path, " receipt block"),
+            vm.parseJsonString(receipt, ".blockHash"),
+            record.readString(string.concat(path, ".blockHash"))
+        );
+        _expectString(
+            string.concat(path, " block number"),
+            vm.toString(_hexQuantity(vm.parseJsonString(receipt, ".blockNumber"))),
+            record.readString(string.concat(path, ".blockNumber"))
+        );
+    }
+
+    function _hexQuantity(string memory encoded) private pure returns (uint256 value) {
+        bytes memory raw = bytes(encoded);
+        require(raw.length >= 3 && raw[0] == "0" && (raw[1] == "x" || raw[1] == "X"), "invalid RPC quantity");
+        for (uint256 i = 2; i < raw.length; ++i) {
+            uint8 digit = uint8(raw[i]);
+            if (digit >= 48 && digit <= 57) digit -= 48;
+            else if (digit >= 65 && digit <= 70) digit = digit - 65 + 10;
+            else if (digit >= 97 && digit <= 102) digit = digit - 97 + 10;
+            else revert("invalid RPC quantity");
+            value = value * 16 + digit;
         }
     }
 
