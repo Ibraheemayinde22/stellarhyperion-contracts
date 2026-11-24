@@ -70,8 +70,9 @@ pub use axelar::{
 };
 pub use axelar::{TokenMappingConflict, TokenMappingReport};
 pub use cctp::{
-    validate_burn_boundary, ApprovalDiagnostics, ApprovalFinding, BurnMessage, CctpMessage,
-    HyperionHook, APPROVAL_DIAGNOSTICS_VERSION, DOCUMENTED_RESIDUAL_ALLOWANCE,
+    validate_burn_boundary, ApprovalDiagnostics, ApprovalFinding, BurnAccounting, BurnMessage,
+    CctpMessage, HyperionHook, MintSettlement, APPROVAL_DIAGNOSTICS_VERSION,
+    DOCUMENTED_RESIDUAL_ALLOWANCE, FEE_ACCOUNTING_VERSION,
 };
 pub use error::HyperionError;
 #[cfg(not(target_family = "wasm"))]

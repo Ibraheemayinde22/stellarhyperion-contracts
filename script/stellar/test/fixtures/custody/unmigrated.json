@@ -1,0 +1,14 @@
+{
+  "token": "CTOKENFIXTUREAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "router": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5",
+  "routerBalance": "1000000009",
+  "claimLiability": { "outstanding": "0", "custody": "1000000009", "known": false },
+  "holders": [
+    {
+      "route": "cctp",
+      "role": "adapter",
+      "address": "CBRAILAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N",
+      "balance": "0"
+    }
+  ]
+}

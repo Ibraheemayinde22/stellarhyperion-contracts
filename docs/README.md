@@ -24,6 +24,19 @@ divergence.
   classified as a verified mint; renewal plans preserve source message identity and payout intent.
   Unknown or paused messenger/transmitter reads fail closed, and unsupported recovery methods
   remain explicitly unavailable.
+- CCTP fee accounting events (`cctp_fee_out`, `cctp_fee_in`) are additive and versioned. They
+  record the fee budget, measured burn, retained dust and attested destination deduction in
+  explicit units, and existing `cctp_out` / `cctp_in` decoding is unchanged. See
+  `CCTP_FEE_ACCOUNTING.md`.
+- The Axelar token-manager probe (`probe_token_manager`) is an additive read-only view. It
+  establishes token id, manager type, local mapping, remote trust and paid-send reads through
+  real ITS calls. Unknown manager types and missing methods block it, and a matching symbol never
+  qualifies a mapping. See `AXELAR_TOKEN_MANAGER_PROBE.md`.
+- `script/stellar/custody-audit.mjs` is an offline orphaned-custody auditor built on existing
+  router and token views; there is no contract change, because the router is at the 64KB limit. It
+  separates unsettled claims from unexplained router and adapter balances, reports missing
+  liability history or unreadable balances as unknown, and cannot move funds. See
+  `claim-operations.md`.
 - Inbound routers reject zero and provider amounts outside the router's supported `i128`/`uint128`
   representable range before custody changes. The exact upper bounds retain normal payout and claim
   behavior. Active deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail paths

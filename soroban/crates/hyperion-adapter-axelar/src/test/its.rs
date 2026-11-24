@@ -58,6 +58,10 @@ enum ItsKey {
     Last,
     Count,
     Native,
+    /// A manager discriminant this build has never reviewed, answered instead of `Kind`.
+    RawKind(BytesN<32>),
+    /// Answer `token_manager_type` with a value of the wrong type.
+    MalformedKind(BytesN<32>),
 }
 
 #[contract]
@@ -223,11 +227,36 @@ impl MockIts {
             .ok_or(ItsError::InvalidTokenId)
     }
 
-    pub fn token_manager_type(
-        env: Env,
-        token_id: BytesN<32>,
-    ) -> Result<TokenManagerType, ItsError> {
-        Self::kind_of(&env, &token_id)
+    /// The real interface returns the manager enum, which travels as its `u32` discriminant.
+    /// Returned as a raw value here so a test can make ITS report an unreviewed or malformed type.
+    pub fn token_manager_type(env: Env, token_id: BytesN<32>) -> Result<Val, ItsError> {
+        if env
+            .storage()
+            .instance()
+            .has(&ItsKey::MalformedKind(token_id.clone()))
+        {
+            return Ok(Symbol::new(&env, "mint_burn").into_val(&env));
+        }
+        if let Some(raw) = env
+            .storage()
+            .instance()
+            .get::<_, u32>(&ItsKey::RawKind(token_id.clone()))
+        {
+            return Ok(raw.into_val(&env));
+        }
+        Self::kind_of(&env, &token_id).map(|kind| kind.into_val(&env))
+    }
+
+    pub fn set_raw_manager_type(env: Env, token_id: BytesN<32>, raw: u32) {
+        env.storage()
+            .instance()
+            .set(&ItsKey::RawKind(token_id), &raw);
+    }
+
+    pub fn set_malformed_manager_type(env: Env, token_id: BytesN<32>) {
+        env.storage()
+            .instance()
+            .set(&ItsKey::MalformedKind(token_id), &true);
     }
 
     pub fn flow_limit(env: Env, token_id: BytesN<32>) -> Option<i128> {

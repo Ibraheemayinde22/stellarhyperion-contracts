@@ -18,6 +18,7 @@ mod capability;
 
 mod admin;
 mod circle;
+mod fee_accounting;
 mod inbound;
 mod outbound;
 mod paid;
