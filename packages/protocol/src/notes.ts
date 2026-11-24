@@ -17,6 +17,7 @@
  */
 import {
   AddressKind,
+  STRKEY_LEN_MUXED,
   parseStellarAddress,
   strkeyDestination,
   taggedDestination,
@@ -75,6 +76,12 @@ export const OUTBOUND_NOTE_LEN = 29;
 
 /** The shortest an inbound note can be: version, kind, length, a strkey, a nonce. */
 const INBOUND_NOTE_MIN = 1 + 3 + 8;
+
+/** Largest inbound note: version, kind, length, muxed strkey and nonce. */
+export const MAX_INBOUND_NOTE_LEN = 1 + 2 + STRKEY_LEN_MUXED + 8;
+
+/** Largest CCTP hook: version, mapping revision, tag, key and muxed id. */
+export const MAX_CCTP_HOOK_LEN = 46;
 
 /** Axelar's own envelope version for "there is a payload and it is for a contract". */
 export const METADATA_CONTRACT_CALL = 0;
@@ -167,12 +174,15 @@ export function decodeInboundNote(
 
 function decodeInboundNoteV1(bytes: Uint8Array): InboundNote {
   if (bytes.length < INBOUND_NOTE_MIN) fail("MalformedMessage", "too short to be a note");
+  if (bytes.length > MAX_INBOUND_NOTE_LEN)
+    fail("MalformedMessage", `an inbound note is at most ${String(MAX_INBOUND_NOTE_LEN)} bytes`);
 
   const tag = bytes[1] ?? 0xff;
   if (tag > AddressKind.MuxedAccount) fail("MalformedMessage", `address kind ${String(tag)}`);
   const kind = tag as AddressKind;
 
   const len = bytes[2] ?? 0;
+  if (len > STRKEY_LEN_MUXED) fail("MalformedMessage", "strkey exceeds the supported maximum");
   if (bytes.length !== 3 + len + 8)
     fail("MalformedMessage", "the length byte and the note disagree");
 

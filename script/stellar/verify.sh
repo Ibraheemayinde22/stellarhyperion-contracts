@@ -106,6 +106,35 @@ import(process.argv[2])
   || die "the record does not validate. If the error above is about a missing module, build the
   protocol package first: cd packages/protocol && npm install && npm run build"
 
+note "public transfer evidence"
+if TRANSFER_RESULT=$(node "$CONTRACTS_ROOT/script/stellar/transfer-evidence.mjs" \
+  --record "$RECORD" --network "$CHAIN_KEY" 2>&1); then
+  TRANSFER_STATUS=$(printf '%s' "$TRANSFER_RESULT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).status))')
+  case "$TRANSFER_STATUS" in
+    delivered)
+      printf '%s\n' "$TRANSFER_RESULT"
+      ;;
+    not-provided)
+      say "no v1 source/destination evidence bundle is attached; delivery is not certified"
+      ;;
+    *)
+      printf '%s\n' "$TRANSFER_RESULT"
+      ;;
+  esac
+  LEGACY_ACCEPTANCE=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const n=d.networks[process.argv[2]]??{};process.stdout.write(String(n.activation?.acceptance??""))' "$RECORD" "$CHAIN_KEY")
+  if [ "$TRANSFER_STATUS" = "not-provided" ] && [ -n "$LEGACY_ACCEPTANCE" ]; then
+    say "legacy acceptance \"$LEGACY_ACCEPTANCE\" remains historical evidence and is not certified by the v1 validator"
+  fi
+else
+  evidence_status=$?
+  printf '%s\n' "$TRANSFER_RESULT"
+  if [ "$evidence_status" -eq 2 ]; then
+    problems=$((problems + 1))
+  else
+    die "transfer evidence could not be validated"
+  fi
+fi
+
 note "the router"
 CONFIG=$(read_only "$ROUTER" get_config)
 field() { printf '%s' "$CONFIG" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s);process.stdout.write(String(o[process.argv[1]]))})' "$1"; }
@@ -203,7 +232,7 @@ printf '\n'
 if [ "$problems" -eq 0 ]; then
   printf '\033[32mEverything on chain matches the record.\033[0m\n'
 else
-  die "$problems mismatch(es) between the chain and the record"
+  die "$problems mismatch(es) between the chain/transfer evidence and the record"
 fi
 
 say "Historical cleanup: claim_history distinguishes Live, intentional Archived(id), and Unavailable (restore via RPC)."

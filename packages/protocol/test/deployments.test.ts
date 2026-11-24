@@ -3,6 +3,7 @@ import {
   DEPLOYMENT_SCHEMA_VERSION,
   DeploymentFormatError,
   adapterFor,
+  compareDeploymentSets,
   deployedChains,
   deploymentFor,
   hasValidatedOutboundQuoteWiring,
@@ -635,5 +636,141 @@ describe("refusing a record that does not", () => {
         generatedAt: "2026-09-30T12:00:00.000Z",
       }),
     ).toThrow(/networks/);
+  });
+});
+
+describe("comparing parsed deployment sets", () => {
+  it("reports display and generation metadata separately from trust changes", () => {
+    const before = parseDeploymentSet(set({ base: evmRecord() }));
+    const after = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          tokens: {
+            USDC: {
+              symbol: "USD Coin",
+              address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              decimals: 6,
+              flowLimit: "1000000000000",
+              routes: ["cctp", "axelar-its"],
+            },
+          },
+        }),
+      }),
+    );
+    const comparison = compareDeploymentSets(before, {
+      ...after,
+      generatedAt: "2026-10-01T12:00:00.000Z",
+    });
+
+    expect(comparison.hasMetadataChanges).toBe(true);
+    expect(comparison.hasTrustChanges).toBe(false);
+    expect(comparison.changes.map(({ field }) => field)).toEqual([
+      "generatedAt",
+      "symbol",
+      "symbol",
+    ]);
+    expect(
+      comparison.changes.filter(({ kind }) => kind === "lane").map(({ route }) => route),
+    ).toEqual([RouteKind.AxelarIts, RouteKind.Cctp]);
+  });
+
+  it("reports trust changes and preserves uint256 flow limits exactly", () => {
+    const maxUint256 =
+      "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+    const before = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          tokens: {
+            USDC: {
+              address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              decimals: 6,
+              flowLimit: maxUint256,
+              routes: ["cctp"],
+            },
+          },
+        }),
+      }),
+    );
+    const after = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          adapters: { cctp: "0x6666666666666666666666666666666666666666" },
+          tokens: {
+            USDC: {
+              address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              decimals: 6,
+              flowLimit: `${maxUint256.slice(0, -1)}4`,
+              routes: ["cctp"],
+            },
+          },
+        }),
+      }),
+    );
+    const comparison = compareDeploymentSets(before, after);
+
+    expect(comparison.hasTrustChanges).toBe(true);
+    expect(
+      comparison.changes.find((change) => change.kind === "lane" && change.field === "flowLimit"),
+    ).toMatchObject({ before: maxUint256, after: `${maxUint256.slice(0, -1)}4` });
+    expect(comparison.changes.some((change) => change.kind === "adapter")).toBe(true);
+  });
+
+  it("represents deleted and renamed lanes explicitly and orders results reproducibly", () => {
+    const before = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          tokens: {
+            USDC: {
+              address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              decimals: 6,
+              flowLimit: "1000000000000",
+              routes: ["cctp", "axelar-its"],
+            },
+          },
+        }),
+      }),
+    );
+    const after = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          tokens: {
+            USDC: {
+              address: "0x6666666666666666666666666666666666666666",
+              decimals: 6,
+              flowLimit: "1000000000000",
+              routes: ["cctp"],
+            },
+          },
+        }),
+      }),
+    );
+    const comparison = compareDeploymentSets(before, after);
+    const laneChanges = comparison.changes.filter((change) => change.kind === "lane");
+
+    expect(laneChanges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ change: "renamed", field: "identity", route: RouteKind.Cctp }),
+        expect.objectContaining({ change: "removed", route: RouteKind.AxelarIts }),
+      ]),
+    );
+    expect(compareDeploymentSets(before, after).changes).toEqual(comparison.changes);
+
+    expect(() =>
+      parseDeploymentSet(
+        set({
+          base: evmRecord({
+            tokens: {
+              USDC: {
+                address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                decimals: 6,
+                flowLimit:
+                  "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+                routes: ["cctp"],
+              },
+            },
+          }),
+        }),
+      ),
+    ).toThrow(DeploymentFormatError);
   });
 });

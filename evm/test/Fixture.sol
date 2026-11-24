@@ -66,6 +66,7 @@ contract Fixture is Test {
     uint8 internal constant USDC_DECIMALS = 6;
     uint8 internal constant STELLAR_DECIMALS = 7;
     uint256 internal constant FLOW_LIMIT = 1_000_000e6;
+    uint256 internal constant MAX_CANCELLATION_NOTE_LEN = 128;
     /// @dev The fixture's breaker sits at the ordinary token ceiling so existing tests are not
     /// silently squeezed; the breaker suite lowers it per test to exercise the tighter boundary.
     uint256 internal constant BREAKER_THRESHOLD = FLOW_LIMIT;
@@ -280,6 +281,14 @@ contract Fixture is Test {
 
     function _replayOrigin(bytes32 messageId, uint64 displayNonce) internal pure returns (Origin memory) {
         return Origin({chain: STELLAR, nonce: displayNonce, messageId: messageId, sender: bytes32(0)});
+    }
+
+    function _asciiString(uint256 length) internal pure returns (string memory) {
+        bytes memory value = new bytes(length);
+        for (uint256 i; i < length; ++i) {
+            value[i] = 0x61;
+        }
+        return string(value);
     }
 
     function _request(uint256 amount, RouteKind route) internal pure returns (OutboundRequest memory) {

@@ -28,6 +28,7 @@ if is_dry_run; then
   exit 0
 fi
 require_tools
+require_stellar_operation_target
 require_identity
 assert_selected_network
 
@@ -322,6 +323,7 @@ say "$RECORD"
 
 note "phase one is done"
 say "Nothing is routable yet, and two separate things are still missing."
+say "Deployment and activation records alone do not certify a delivered payment."
 say ""
 say "Queued actions   ${#QUEUE_IDS[@]}"
 say "Earliest execution is $TIMELOCK seconds from the ledger that queued them."

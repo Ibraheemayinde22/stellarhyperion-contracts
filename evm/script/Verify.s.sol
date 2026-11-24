@@ -46,7 +46,9 @@ contract Verify is DeployConfig {
 
         console.log("record              ", path);
         console.log("router              ", address(router));
-        console.log("");
+        console.log(
+            "Deployment configuration verification; destination payment requires independent transfer evidence."
+        );
 
         _expectUint("chain id", block.chainid, record.readUint(".chainId"));
         bytes32 observedGenesis = observedGenesisBlockHash();

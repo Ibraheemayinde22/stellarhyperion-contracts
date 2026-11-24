@@ -77,7 +77,7 @@ export function decodeOutboundNote(payload) {
 }
 
 // Independent SEP-23 decoding for the standalone Node CLI; SDK parity fixtures cover both paths.
-function validStellarRecipient(value) {
+export function validStellarRecipient(value) {
   if (typeof value !== "string" || ![56, 69].includes(value.length))
     throw new Error("invalid strkey length");
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

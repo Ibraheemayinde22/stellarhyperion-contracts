@@ -43,6 +43,12 @@ library HyperionNotes {
 
     /// @dev The shortest an inbound note can be: version, kind, length, a strkey, a nonce.
     uint256 private constant INBOUND_NOTE_MIN = 1 + 3 + 8;
+    /// @dev Longest strkey defined by the Stellar address format.
+    uint256 internal constant MAX_STRKEY_LEN = 69;
+    /// @dev Largest supported inbound note with a muxed Stellar strkey.
+    uint256 internal constant MAX_INBOUND_NOTE_LEN = 1 + 2 + MAX_STRKEY_LEN + 8;
+    /// @dev Largest supported CCTP hook with a tagged muxed destination.
+    uint256 internal constant MAX_CCTP_HOOK_LEN = 46;
 
     /// @notice Whether this build has a codec registered for `version`.
     function supportsNoteVersion(uint8 version) internal pure returns (bool) {
@@ -137,13 +143,16 @@ library HyperionNotes {
         pure
         returns (AddressKind kind, string memory strkey, uint64 nonce)
     {
-        if (payload.length < INBOUND_NOTE_MIN) revert MalformedMessage();
+        if (payload.length < INBOUND_NOTE_MIN || payload.length > MAX_INBOUND_NOTE_LEN) {
+            revert MalformedMessage();
+        }
 
         uint8 tag = uint8(payload[1]);
         if (tag > uint8(AddressKind.MuxedAccount)) revert MalformedMessage();
         kind = AddressKind(tag);
 
         uint256 len = uint8(payload[2]);
+        if (len > MAX_STRKEY_LEN) revert MalformedMessage();
         if (payload.length != 3 + len + 8) revert MalformedMessage();
 
         bytes memory chars = new bytes(len);

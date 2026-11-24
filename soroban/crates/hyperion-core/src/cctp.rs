@@ -73,6 +73,15 @@ const BURN_EXPIRATION_BLOCK: u32 = 196;
 /// Anything past here is the hook payload, which is where Hyperion puts the Stellar recipient.
 pub const BURN_HOOK_DATA: u32 = 228;
 
+/// Largest supported Hyperion CCTP hook: version, mapping revision and tagged muxed destination.
+pub const MAX_CCTP_HOOK_LEN: u32 = 1 + 4 + crate::address::TAGGED_LEN_MUXED;
+
+/// Largest supported CCTP burn body, including Hyperion's maximum-size hook.
+pub const MAX_CCTP_BURN_BODY_LEN: u32 = BURN_HOOK_DATA + MAX_CCTP_HOOK_LEN;
+
+/// Largest supported CCTP message: header, burn body and maximum-size hook.
+pub const MAX_CCTP_MESSAGE_LEN: u32 = MSG_BODY + MAX_CCTP_BURN_BODY_LEN;
+
 // ------------------------------------------------------------------------------------------
 // Primitive reads
 // ------------------------------------------------------------------------------------------
@@ -152,7 +161,7 @@ pub struct CctpMessage {
 impl CctpMessage {
     /// Parse a header, refusing anything too short to hold one.
     pub fn parse(env: &Env, raw: &Bytes) -> Result<Self, HyperionError> {
-        if raw.len() < MSG_BODY {
+        if raw.len() < MSG_BODY || raw.len() > MAX_CCTP_MESSAGE_LEN {
             return Err(HyperionError::MalformedMessage);
         }
         Ok(Self {
@@ -170,7 +179,7 @@ impl CctpMessage {
 
     /// The body, which is the part Circle hands to whichever handler the recipient names.
     pub fn body(raw: &Bytes) -> Result<Bytes, HyperionError> {
-        if raw.len() < MSG_BODY {
+        if raw.len() < MSG_BODY || raw.len() > MAX_CCTP_MESSAGE_LEN {
             return Err(HyperionError::MalformedMessage);
         }
         Ok(raw.slice(MSG_BODY..raw.len()))
@@ -211,7 +220,7 @@ pub struct BurnMessage {
 
 impl BurnMessage {
     pub fn parse(env: &Env, body: &Bytes) -> Result<Self, HyperionError> {
-        if body.len() < BURN_HOOK_DATA {
+        if body.len() < BURN_HOOK_DATA || body.len() > MAX_CCTP_BURN_BODY_LEN {
             return Err(HyperionError::MalformedMessage);
         }
         Ok(Self {
@@ -228,7 +237,7 @@ impl BurnMessage {
 
     /// The trailing hook payload, empty when the sender attached none.
     pub fn hook_data(body: &Bytes) -> Result<Bytes, HyperionError> {
-        if body.len() < BURN_HOOK_DATA {
+        if body.len() < BURN_HOOK_DATA || body.len() > MAX_CCTP_BURN_BODY_LEN {
             return Err(HyperionError::MalformedMessage);
         }
         Ok(body.slice(BURN_HOOK_DATA..body.len()))
