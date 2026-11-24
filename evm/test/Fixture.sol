@@ -285,7 +285,9 @@ contract Fixture is Test {
 
     function _asciiString(uint256 length) internal pure returns (string memory) {
         bytes memory value = new bytes(length);
-        for (uint256 i; i < length; ++i) value[i] = 0x61;
+        for (uint256 i; i < length; ++i) {
+            value[i] = 0x61;
+        }
         return string(value);
     }
 

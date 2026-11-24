@@ -41,10 +41,7 @@ import {
   NOTE_VERSION,
   OUTBOUND_NOTE_LEN,
 } from "../src/notes.js";
-import {
-  MAX_CANCELLATION_NOTE_LEN,
-  MAX_QUEUED_ACTION_CHAIN_LEN,
-} from "../src/timelock.js";
+import { MAX_CANCELLATION_NOTE_LEN, MAX_QUEUED_ACTION_CHAIN_LEN } from "../src/timelock.js";
 import { WIRE_SCHEMAS } from "../src/wire-compat.js";
 import { abiSignature, compareAbiSets } from "../src/abi-compat.js";
 import type { AbiEntry } from "../src/abi-compat.js";

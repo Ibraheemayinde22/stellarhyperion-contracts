@@ -115,7 +115,7 @@ contract HyperionNotesTest is Test {
 
     function test_the_maximum_note_is_accepted_and_one_extra_byte_is_refused() public {
         bytes memory note = notes.encodeInboundNote(AddressKind.MuxedAccount, M_ADDR, NONCE);
-        assertEq(note.length, MAX_INBOUND_NOTE_LEN);
+        assertEq(note.length, HyperionNotes.MAX_INBOUND_NOTE_LEN);
         (AddressKind kind, string memory strkey, uint64 nonce) = notes.decodeInboundNote(note);
         assertEq(uint256(kind), uint256(AddressKind.MuxedAccount));
         assertEq(strkey, M_ADDR);
