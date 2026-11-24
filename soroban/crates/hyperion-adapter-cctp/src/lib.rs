@@ -58,8 +58,8 @@ mod test;
 use hyperion_core::{
     address::assert_route_supports,
     cctp::{
-        self, BurnMessage, CctpMessage, CctpOutboundNote, HyperionHook,
-        DEFAULT_ROTATION_OVERLAP_WINDOW, MIN_PEER_ROTATION_DELAY,
+        self, BurnAccounting, BurnMessage, CctpMessage, CctpOutboundNote, HyperionHook,
+        MintSettlement, DEFAULT_ROTATION_OVERLAP_WINDOW, MIN_PEER_ROTATION_DELAY,
     },
     codec,
     inbound::{Origin, Recipient, RouterClient},
@@ -171,7 +171,7 @@ impl CctpAdapter {
         nonce: u64,
     ) -> Result<(), HyperionError> {
         caller.require_auth();
-        let (cfg, domain, _, finality_threshold) = validate_dispatch(
+        let (cfg, domain, _, finality_threshold, source_decimals) = validate_dispatch(
             &env,
             &caller,
             &token,
@@ -201,6 +201,7 @@ impl CctpAdapter {
             router_nonce: nonce,
         }
         .encode(&env)?;
+        let balance_before = asset.balance(&this);
         TokenMessengerClient::new(&env, &cfg.token_messenger).deposit_for_burn_with_hook(
             &this,
             &amount,
@@ -212,6 +213,8 @@ impl CctpAdapter {
             &finality_threshold,
             &hook,
         );
+        let accounting =
+            BurnAccounting::measure(amount, max_fee, balance_before, asset.balance(&this))?;
 
         close_approval(
             &env,
@@ -223,7 +226,7 @@ impl CctpAdapter {
         )?;
 
         events::Dispatched {
-            token,
+            token: token.clone(),
             destination_domain: domain,
             amount,
             mint_recipient: destination,
@@ -233,6 +236,16 @@ impl CctpAdapter {
             router_nonce: nonce,
         }
         .publish(&env);
+        publish_burn_accounting(
+            &env,
+            token,
+            domain,
+            nonce,
+            source_decimals,
+            &accounting,
+            false,
+            finality_threshold,
+        );
         Ok(())
     }
 
@@ -259,17 +272,18 @@ impl CctpAdapter {
     ) -> Result<(), HyperionError> {
         caller.require_auth();
         sender.require_auth();
-        let (cfg, domain, destination_caller, finality_threshold) = validate_dispatch(
-            &env,
-            &caller,
-            &token,
-            amount,
-            &destination_chain,
-            &destination,
-            mapping_revision,
-            destination_decimals,
-            Some(gas_amount),
-        )?;
+        let (cfg, domain, destination_caller, finality_threshold, source_decimals) =
+            validate_dispatch(
+                &env,
+                &caller,
+                &token,
+                amount,
+                &destination_chain,
+                &destination,
+                mapping_revision,
+                destination_decimals,
+                Some(gas_amount),
+            )?;
         let this = env.current_contract_address();
         let asset = token::Client::new(&env, &token);
         let sender_before = asset.balance(&sender);
@@ -286,6 +300,7 @@ impl CctpAdapter {
         // before burn, and do not append application bytes to this provider-defined payload.
         let mut hook = [0u8; 32];
         hook[..12].copy_from_slice(b"cctp-forward");
+        let balance_before = asset.balance(&this);
         TokenMessengerClient::new(&env, &cfg.token_messenger).deposit_for_burn_with_hook(
             &this,
             &amount,
@@ -297,6 +312,8 @@ impl CctpAdapter {
             &finality_threshold,
             &Bytes::from_array(&env, &hook),
         );
+        let accounting =
+            BurnAccounting::measure(amount, gas_amount, balance_before, asset.balance(&this))?;
         close_approval(
             &env,
             &asset,
@@ -306,7 +323,7 @@ impl CctpAdapter {
             allowance_before,
         )?;
         events::Dispatched {
-            token,
+            token: token.clone(),
             destination_domain: domain,
             amount,
             mint_recipient: destination,
@@ -316,6 +333,16 @@ impl CctpAdapter {
             router_nonce: nonce,
         }
         .publish(&env);
+        publish_burn_accounting(
+            &env,
+            token,
+            domain,
+            nonce,
+            source_decimals,
+            &accounting,
+            true,
+            finality_threshold,
+        );
         Ok(())
     }
 
@@ -433,18 +460,12 @@ impl CctpAdapter {
         {
             return Err(HyperionError::UnsupportedMessageVersion);
         }
-        if burn.amount <= 0
-            || burn.max_fee > burn.amount
-            || burn.fee_executed > burn.max_fee
-            || burn.fee_executed >= burn.amount
-        {
-            return Err(HyperionError::InvalidAmount);
-        }
+        let settlement = MintSettlement::from_burn(&burn)?;
         if burn.expiration_block != 0 && burn.expiration_block < i128::from(env.ledger().sequence())
         {
             return Err(HyperionError::TimelockExpired);
         }
-        let expected_minted = burn.amount - burn.fee_executed;
+        let expected_minted = settlement.minted;
 
         // Resolve the destination before anything is minted. A muxed account cannot be delivered
         // to over this route, and finding that out after the mint would mean funds sitting in an
@@ -514,15 +535,28 @@ impl CctpAdapter {
         );
 
         events::Received {
-            token,
+            token: token.clone(),
             source_domain: msg.source_domain,
             amount: minted,
-            nonce: msg.nonce,
+            nonce: msg.nonce.clone(),
             source_chain,
             recipient,
             claim_id,
             relayer,
             mapping_revision: mapping.revision,
+        }
+        .publish(&env);
+        events::MintAccounted {
+            token,
+            source_domain: msg.source_domain,
+            version: cctp::FEE_ACCOUNTING_VERSION,
+            nonce: msg.nonce,
+            local_decimals: mapping.local_decimals,
+            remote_decimals: mapping.remote_decimals,
+            burn_amount: settlement.burn_amount,
+            fee_budget: settlement.fee_budget,
+            fee_executed: settlement.fee_executed,
+            minted,
         }
         .publish(&env);
         Ok(claim_id)
@@ -1298,7 +1332,7 @@ fn validate_dispatch(
     mapping_revision: u32,
     destination_decimals: u32,
     gas_amount: Option<i128>,
-) -> Result<(Config, u32, BytesN<32>, u32), HyperionError> {
+) -> Result<(Config, u32, BytesN<32>, u32, u32), HyperionError> {
     let cfg = storage::config(env)?;
     if caller != &cfg.router {
         return Err(HyperionError::Unauthorized);
@@ -1347,5 +1381,39 @@ fn validate_dispatch(
         return Err(HyperionError::InvalidLimit);
     }
     cctp::validate_burn_boundary(amount, destination, max_fee, finality_threshold)?;
-    Ok((cfg, domain, destination_caller, finality_threshold))
+    Ok((
+        cfg,
+        domain,
+        destination_caller,
+        finality_threshold,
+        mapping.local_decimals,
+    ))
+}
+
+/// Announce a measured burn. Called only after the burn and allowance cleanup have succeeded.
+#[allow(clippy::too_many_arguments)]
+fn publish_burn_accounting(
+    env: &Env,
+    token: Address,
+    destination_domain: u32,
+    router_nonce: u64,
+    source_decimals: u32,
+    accounting: &BurnAccounting,
+    forwarding: bool,
+    min_finality_threshold: u32,
+) {
+    events::BurnAccounted {
+        token,
+        destination_domain,
+        version: cctp::FEE_ACCOUNTING_VERSION,
+        router_nonce,
+        source_decimals,
+        source_debit: accounting.source_debit,
+        fee_budget: accounting.fee_budget,
+        burned: accounting.burned,
+        retained: accounting.retained,
+        forwarding,
+        min_finality_threshold,
+    }
+    .publish(env);
 }

@@ -577,6 +577,107 @@ pub fn validate_burn_boundary(
     Ok(())
 }
 
+// ------------------------------------------------------------------------------------------
+// Fee accounting
+// ------------------------------------------------------------------------------------------
+
+/// Format version of the CCTP fee accounting events (`cctp_fee_out` and `cctp_fee_in`).
+///
+/// Independent of the CCTP message version and of the existing `cctp_out` / `cctp_in` events,
+/// which keep their version 1 shape. A field added to, removed from or reinterpreted in either
+/// accounting event bumps this number; indexers must reject a version they do not know.
+pub const FEE_ACCOUNTING_VERSION: u32 = 1;
+
+/// What one outbound burn actually cost, measured rather than assumed.
+///
+/// Every amount is in the source token's own base units (the Stellar asset's decimals on the
+/// Soroban adapter). Nothing here is converted, scaled or rounded.
+///
+/// * `source_debit` is the exact amount the adapter held for this burn and approved to Circle.
+/// * `fee_budget` is the `max_fee` handed to Circle: the most the destination may deduct.
+/// * `burned` is the adapter's measured balance decrease across the messenger call.
+/// * `retained` is `source_debit - burned`, the dust Circle normalised away and left behind,
+///   which stays in the adapter until `sweep` moves it to the treasury.
+///
+/// `burned + retained == source_debit` always holds. On the destination, Circle mints
+/// `burned - fee_executed` with `fee_executed <= fee_budget`, so the destination deduction can be
+/// reconciled against this record without reimplementing Circle's arithmetic.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct BurnAccounting {
+    pub source_debit: i128,
+    pub fee_budget: i128,
+    pub burned: i128,
+    pub retained: i128,
+}
+
+impl BurnAccounting {
+    /// Derive the accounting from balances read immediately before and after the burn call.
+    ///
+    /// Refuses anything that cannot be a successful burn of this debit: no measured burn, a burn
+    /// larger than the debit (the exact approval makes that impossible for an honest token), or a
+    /// fee budget outside `0..source_debit`. A refusal aborts the transaction, so a failed or
+    /// inconsistent burn never commits accounting metadata.
+    pub fn measure(
+        source_debit: i128,
+        fee_budget: i128,
+        balance_before: i128,
+        balance_after: i128,
+    ) -> Result<Self, HyperionError> {
+        if source_debit <= 0 {
+            return Err(HyperionError::InvalidAmount);
+        }
+        if fee_budget < 0 || fee_budget >= source_debit {
+            return Err(HyperionError::FeeTooHigh);
+        }
+        let burned = balance_before
+            .checked_sub(balance_after)
+            .ok_or(HyperionError::DecimalOverflow)?;
+        if burned <= 0 || burned > source_debit {
+            return Err(HyperionError::InvalidAmount);
+        }
+        Ok(Self {
+            source_debit,
+            fee_budget,
+            burned,
+            retained: source_debit - burned,
+        })
+    }
+}
+
+/// The fee fields of an attested inbound burn, checked for internal consistency.
+///
+/// `burn_amount`, `fee_budget` and `fee_executed` are the wire values Circle attested.
+/// `minted` is `burn_amount - fee_executed`, the exact delta the receiving adapter must observe;
+/// `minted + fee_executed == burn_amount` always holds.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct MintSettlement {
+    pub burn_amount: i128,
+    pub fee_budget: i128,
+    pub fee_executed: i128,
+    pub minted: i128,
+}
+
+impl MintSettlement {
+    /// Same bounds the receiver has always enforced, under the same error.
+    pub fn from_burn(burn: &BurnMessage) -> Result<Self, HyperionError> {
+        if burn.amount <= 0
+            || burn.max_fee < 0
+            || burn.fee_executed < 0
+            || burn.max_fee > burn.amount
+            || burn.fee_executed > burn.max_fee
+            || burn.fee_executed >= burn.amount
+        {
+            return Err(HyperionError::InvalidAmount);
+        }
+        Ok(Self {
+            burn_amount: burn.amount,
+            fee_budget: burn.max_fee,
+            fee_executed: burn.fee_executed,
+            minted: burn.amount - burn.fee_executed,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,5 +1021,104 @@ mod tests {
     fn minimum_peer_rotation_delay_is_at_least_one_hour() {
         assert_eq!(MIN_PEER_ROTATION_DELAY, 3_600);
         assert_eq!(DEFAULT_ROTATION_OVERLAP_WINDOW, 86_400);
+    }
+
+    #[test]
+    fn burn_accounting_conserves_the_debit_in_source_units() {
+        // Existing adapter dust in the starting balance does not leak into this burn's record.
+        let exact = BurnAccounting::measure(1_000_000, 0, 1_000_007, 7).unwrap();
+        assert_eq!(exact.burned, 1_000_000);
+        assert_eq!(exact.retained, 0);
+
+        let dusty = BurnAccounting::measure(1_000_009, 500, 1_000_009, 9).unwrap();
+        assert_eq!(dusty.burned, 1_000_000);
+        assert_eq!(dusty.retained, 9);
+        assert_eq!(dusty.fee_budget, 500);
+        assert_eq!(dusty.burned + dusty.retained, dusty.source_debit);
+
+        let big = i128::MAX - 1;
+        let edge = BurnAccounting::measure(big, big - 1, big, 0).unwrap();
+        assert_eq!(edge.burned, big);
+        assert_eq!(edge.retained, 0);
+    }
+
+    #[test]
+    fn burn_accounting_refuses_anything_that_is_not_a_successful_burn() {
+        // Nothing burned: a provider that returned without pulling funds.
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, 1_000, 1_000),
+            Err(HyperionError::InvalidAmount)
+        );
+        // Balance went up across the call.
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, 1_000, 1_001),
+            Err(HyperionError::InvalidAmount)
+        );
+        // More than the debit left the adapter.
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, 2_000, 999),
+            Err(HyperionError::InvalidAmount)
+        );
+        assert_eq!(
+            BurnAccounting::measure(0, 0, 1_000, 0),
+            Err(HyperionError::InvalidAmount)
+        );
+        assert_eq!(
+            BurnAccounting::measure(1_000, -1, 1_000, 0),
+            Err(HyperionError::FeeTooHigh)
+        );
+        assert_eq!(
+            BurnAccounting::measure(1_000, 1_000, 1_000, 0),
+            Err(HyperionError::FeeTooHigh)
+        );
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, i128::MIN, 1),
+            Err(HyperionError::DecimalOverflow)
+        );
+    }
+
+    fn burn_with(env: &Env, amount: i128, max_fee: i128, fee_executed: i128) -> BurnMessage {
+        let word = BytesN::from_array(env, &[0u8; 32]);
+        BurnMessage {
+            version: BURN_MESSAGE_VERSION,
+            burn_token: word.clone(),
+            mint_recipient: word.clone(),
+            amount,
+            message_sender: word,
+            max_fee,
+            fee_executed,
+            expiration_block: 0,
+        }
+    }
+
+    #[test]
+    fn mint_settlement_conserves_the_attested_burn() {
+        let env = Env::default();
+        let settled = MintSettlement::from_burn(&burn_with(&env, 1_000, 30, 12)).unwrap();
+        assert_eq!(settled.minted, 988);
+        assert_eq!(settled.fee_budget, 30);
+        assert_eq!(settled.minted + settled.fee_executed, settled.burn_amount);
+
+        let free = MintSettlement::from_burn(&burn_with(&env, 1_000, 0, 0)).unwrap();
+        assert_eq!(free.minted, 1_000);
+    }
+
+    #[test]
+    fn mint_settlement_keeps_the_receivers_fee_bounds() {
+        let env = Env::default();
+        for (amount, max_fee, executed) in [
+            (0, 0, 0),
+            (1_000, 1_001, 0),
+            (1_000, 10, 11),
+            (1_000, 1_000, 1_000),
+            (1_000, -1, 0),
+            (1_000, 10, -1),
+        ] {
+            assert_eq!(
+                MintSettlement::from_burn(&burn_with(&env, amount, max_fee, executed)),
+                Err(HyperionError::InvalidAmount),
+                "{amount}/{max_fee}/{executed}"
+            );
+        }
     }
 }

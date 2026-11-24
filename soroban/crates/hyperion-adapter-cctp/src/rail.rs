@@ -30,6 +30,11 @@
 //!   old-messenger deliveries are rejected and unauthorized peers never acquire inbound custody.
 //! - Emergency disable controls: administrative disable controls halt inbound and outbound
 //!   custody immediately, preserving fund safety across rotation transitions.
+//! - Fee accounting: `max_fee` is the fee budget in the burn token's base units. The adapter
+//!   measures the actual burn as its own balance delta across `deposit_for_burn_with_hook` and
+//!   refuses a call that burns nothing or more than the approved debit. A provider upgrade that
+//!   changes how the burn pulls funds (for example, pulling the fee separately from `amount`)
+//!   breaks `burned + retained == source_debit` and needs a new `FEE_ACCOUNTING_VERSION`.
 //!
 //! # Active Deployment Gating
 //!
