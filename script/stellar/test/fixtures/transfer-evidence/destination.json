@@ -1,0 +1,18 @@
+{
+  "network": "sepolia",
+  "chainId": "11155111",
+  "transactionHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "status": "success",
+  "block": "12013724",
+  "confirmations": 15,
+  "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "recipient": "0x2222222222222222222222222222222222222222",
+  "asset": "0x1111111111111111111111111111111111111111",
+  "amount": "99700000000000000001",
+  "receiptStatus": "success",
+  "observation": {
+    "kind": "independent-rpc",
+    "provider": "sepolia-public-rpc",
+    "checkedAt": "2026-10-28T17:11:00.000Z"
+  }
+}

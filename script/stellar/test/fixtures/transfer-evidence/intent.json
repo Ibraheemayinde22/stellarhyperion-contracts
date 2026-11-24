@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "rail": "axelar-its",
+  "source": {
+    "network": "stellar-testnet",
+    "networkPassphrase": "Test SDF Network ; September 2015",
+    "sender": "GBQIDJU4YPHVI6E7LIYGQ2NEEQ7VW55SFWTRPOHYW52BLW65KF2WUPC3",
+    "asset": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+    "decimals": 7,
+    "amount": "100000000000000000001"
+  },
+  "destination": {
+    "network": "sepolia",
+    "chainId": "11155111",
+    "asset": "0x1111111111111111111111111111111111111111",
+    "decimals": 6,
+    "amount": "99700000000000000001"
+  },
+  "recipient": "0x2222222222222222222222222222222222222222"
+}

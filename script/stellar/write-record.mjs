@@ -29,10 +29,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   loadDeploymentProtocol,
+  readBoundedText,
   storageMigrationFromEnv,
 } from "./record-evidence.mjs";
 import { rpcClient } from "./restore-plan.mjs";
 import { validateRpcUrl } from "./rollback-report.mjs";
+import { validateTransferEvidence } from "./transfer-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const contractsRoot = resolve(here, "..", "..");
@@ -200,6 +202,50 @@ export async function buildRecord(env = process.env, dependencies = {}) {
     return values;
   }
 
+  const transferInputs = [
+    "HYPERION_TRANSFER_INTENT",
+    "HYPERION_SOURCE_EVIDENCE",
+    "HYPERION_DESTINATION_EVIDENCE",
+  ];
+  const hasTransferEvidence = transferInputs.some((name) => env[name]);
+  let transferEvidence;
+  if (hasTransferEvidence) {
+    if (!env.HYPERION_TRANSFER_INTENT || !env.HYPERION_SOURCE_EVIDENCE) {
+      throw new Error(
+        "transfer evidence requires HYPERION_TRANSFER_INTENT and HYPERION_SOURCE_EVIDENCE",
+      );
+    }
+    const intent = JSON.parse(
+      readBoundedText(need("HYPERION_TRANSFER_INTENT")),
+    );
+    const source = JSON.parse(
+      readBoundedText(need("HYPERION_SOURCE_EVIDENCE")),
+    );
+    const destination = env.HYPERION_DESTINATION_EVIDENCE
+      ? JSON.parse(readBoundedText(need("HYPERION_DESTINATION_EVIDENCE")))
+      : null;
+    const verification = validateTransferEvidence(intent, source, destination);
+    if (verification.bindings.sourceAsset !== need("HYPERION_SAC")) {
+      throw new Error(
+        "transfer evidence source asset does not match HYPERION_SAC",
+      );
+    }
+    if (
+      (intent.rail === "cctp" && !env.HYPERION_CCTP) ||
+      (intent.rail === "axelar-its" && !env.HYPERION_AXELAR)
+    ) {
+      throw new Error(
+        `transfer evidence rail ${intent.rail} is not present in the deployment record`,
+      );
+    }
+    transferEvidence = {
+      intent,
+      source,
+      ...(destination ? { destination } : {}),
+      verification,
+    };
+  }
+
   const deployment = {
     family: "stellar",
     networkPassphrase: entry.networkPassphrase,
@@ -258,6 +304,7 @@ export async function buildRecord(env = process.env, dependencies = {}) {
       "QUEUE_WHAT_JSON",
       (value) => typeof value === "string" && value.length <= 2048,
     ),
+    ...(transferEvidence ? { transferEvidence } : {}),
   };
 
   const record = {

@@ -66,6 +66,61 @@ activated as part of the current Stellar Testnet rollout.
 
 `deployments/stellar-testnet-phase1.json` is the canonical app/indexer record, retaining its historical filename. `deployments/evidence/2026-10-28-paid-its.json` records actual transaction hashes, ledgers, artifact hashes, token mapping, lane link, queued actions, execution and transfer acceptance status. Check that evidence for the latest source/destination verification result.
 
+### Unsigned transfer plans and delivery evidence
+
+`script/stellar/transfer-evidence.mjs` supports durable, unsigned transfer intents and repeatable
+validation of source and destination evidence files. Create an intent from JSON containing
+`schemaVersion: 1`, `rail`, `source`, `destination`, and `recipient`:
+
+```sh
+node script/stellar/transfer-evidence.mjs --plan intent-input.json --out intent.json
+node script/stellar/transfer-evidence.mjs --verify \
+  --intent intent.json --source source-evidence.json \
+  --destination destination-evidence.json
+```
+
+An intent binds Stellar Testnet's exact passphrase, sender, SAC, seven-decimal source amount,
+destination testnet and chain ID, destination token and decimals, recipient, and exact destination
+amount. Amounts and chain IDs are decimal strings, never floating-point numbers. The plan command
+adds a SHA-256 `intentId` over the canonical intent and creates the output without overwriting an
+existing plan. It signs and submits nothing. ITS is admitted only for Sepolia; CCTP is admitted for
+Sepolia, Base Sepolia and Arc Testnet.
+
+The source evidence file must match the intent ID and source bindings and include a successful
+public-RPC observation, a 64-character Stellar transaction hash (without a prefix) and positive
+ledger. Destination evidence must reference that exact source hash and bind its successful receipt
+to the planned destination network, chain ID,
+token, recipient and exact amount. It must include a positive confirmation count and an
+independent-RPC observation from a different provider identifier. Without destination evidence the
+result is `source-confirmed`, never `delivered`; mock, fixture and local-provider observations are
+rejected. Only the validator's result may be stored as `transferEvidence` by `write-record.mjs`:
+
+```sh
+HYPERION_TRANSFER_INTENT=intent.json \
+HYPERION_SOURCE_EVIDENCE=source-evidence.json \
+HYPERION_DESTINATION_EVIDENCE=destination-evidence.json \
+node script/stellar/write-record.mjs deployments/stellar-testnet-phase1.json
+```
+
+`verify.sh` recomputes any attached v1 evidence rather than trusting its saved status. The validator
+checks the bindings and evidence-file structure; it does not connect to providers or cryptographically
+authenticate provider declarations. Independently inspect public source transaction details and the
+destination's canonical receipt/events with a separate provider before supplying those observations.
+A source-only observation is useful for recovery but is not proof of delivery.
+
+Compatibility and migration: the deployment-set schema version does not change; `transferEvidence`
+is an optional supplemental field, so existing protocol consumers can continue reading older
+records. The validator refuses to interpret legacy `activation.acceptance` strings as v1 proof.
+Existing `deployments/evidence/*.json` files, including delivered historical claims, remain
+unchanged and historical. To migrate a historical transfer, preserve its original record, construct
+an intent from the original exact recipient/asset/network/amount details, retrieve the public source
+transaction and independently verified destination receipt from their respective providers, and
+attach the newly validated bundle alongside—not in place of—the legacy evidence. A legacy status
+alone cannot be upgraded to `delivered`. Public operations in `deploy.sh`, `execute.sh`, and
+`link.sh` remain limited to the active Stellar Testnet deployment; other networks and rails require
+separate validation before their gate is changed. Local-network operations remain rehearsal-only.
+EVM `Verify.s.sol` validates EVM configuration only and is not destination payment evidence.
+
 The current router uses WASM `281d946ea78b194c0ef44ad9488ed02b2aa6912fb4f6fbab523ad38f1e0803f1`; the CCTP adapter uses `80f109e7467ace6899f865a4f77079917a2bea8a5def593a4d87c08c09206af4`, built from forwarding implementation `b91c6ca`. The unchanged ITS adapter uses `5f32139554d29edc3501a39ae3d05761101234523dd48b4d9e2d81ebf001f2c3`, built from `60b3310`. Actual deployed code was downloaded and its SHA-256 verified. All initial configuration actions and the later CCTP/router upgrade actions were confirmed after their original 3600-second timelocks matured. No shortened timelock or bootstrap bypass was used.
 
 The older deployment is preserved in `deployments/archive/stellar-testnet-2026-10-01.json`. Its separate admin upgrade instructions are historical in `docs/LEGACY_TESTNET_UPGRADE.md`. Do not run those old-address commands against this fresh deployment.

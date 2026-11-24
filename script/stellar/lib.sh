@@ -42,6 +42,14 @@ require_identity() {
     stellar keys add $IDENTITY --secure-store"
 }
 
+require_stellar_operation_target() {
+  case "$NETWORK" in
+    testnet) ;;
+    local) say "local-network operations are rehearsal-only and are not public-network validation" ;;
+    *) die "only Stellar Testnet outbound ITS/CCTP is active; public deployment, execution and linking on other networks remain gated until independently validated" ;;
+  esac
+}
+
 deployer_address() { stellar keys address "$IDENTITY"; }
 
 # Every signing command in phase one/two reserves its public intent before launching the CLI.

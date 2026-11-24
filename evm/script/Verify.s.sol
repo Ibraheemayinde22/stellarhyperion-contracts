@@ -32,6 +32,7 @@ contract Verify is DeployConfig {
 
     function run() external {
         problems = 0;
+        console.log("EVM verification checks deployment configuration only; it does not certify destination payment.");
         string memory path = vm.envOr(
             "HYPERION_RECORD", string.concat("deployments/evm-", vm.toString(block.chainid), "-phase1.json")
         );

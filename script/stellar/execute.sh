@@ -13,6 +13,7 @@
 # Usage: script/stellar/execute.sh
 source "$(dirname "$0")/lib.sh"
 require_tools
+require_stellar_operation_target
 require_identity
 
 JOURNAL="${HYPERION_JOURNAL:-$RECORD_DIR/stellar-$NETWORK-operations.json}"

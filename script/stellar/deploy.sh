@@ -23,6 +23,7 @@
 #   HYPERION_PEER_CHAIN=arc-testnet script/stellar/deploy.sh
 source "$(dirname "$0")/lib.sh"
 require_tools
+require_stellar_operation_target
 require_identity
 
 # Public-only operation journal. Existing uncertain intents are reused instead of resubmitted.
@@ -321,6 +322,7 @@ say "$RECORD"
 
 note "phase one is done"
 say "Nothing is routable yet, and two separate things are still missing."
+say "Deployment and activation records alone do not certify a delivered payment."
 say ""
 say "Queued actions   ${#QUEUE_IDS[@]}"
 say "Earliest execution is $TIMELOCK seconds from the ledger that queued them."
