@@ -385,8 +385,7 @@ contract RouterCircuitBreakerTest is Fixture {
 
         assertEq(
             uint8(
-                router.quoteV2(RouteKind.Cctp, address(usdc), 1e6, _dest(G_ADDR), STELLAR_DECIMALS)
-                    .quote
+                router.quoteV2(RouteKind.Cctp, address(usdc), 1e6, _dest(G_ADDR), STELLAR_DECIMALS).quote
                     .reason
             ),
             uint8(QuoteBlocker.CircuitBreakerTripped)
