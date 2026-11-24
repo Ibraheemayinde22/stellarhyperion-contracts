@@ -19,12 +19,13 @@
  */
 import type { Hex } from "./bytes.js";
 import type { ChainKey } from "./chains.js";
-import { chain, isChainKey } from "./chains.js";
+import { chain as chainConfig, isChainKey } from "./chains.js";
 import type { AssetIdentity, AssetRepresentation } from "./registry/assets.js";
 import { RouteKind } from "./routes.js";
 import { ROUTE_KINDS, ROUTE_SLUGS, tryRouteFromSlug } from "./routes.js";
 import { isStellarAddress } from "./addresses.js";
 import type { ProviderAddressOverrides } from "./registry/assets.js";
+import { MAX_DEPLOYMENT_TOKENS, MAX_DEPLOYMENT_WASM_HASHES } from "./limits.js";
 
 /** The schema version of a deployment file, so an old file fails loudly rather than oddly. */
 export const DEPLOYMENT_SCHEMA_VERSION = 1;
@@ -41,6 +42,27 @@ export interface DeployedAtEvm {
 export interface DeployedAtStellar {
   readonly ledger: number;
   readonly timestamp: string;
+}
+
+export interface EvmTransactionPosition {
+  readonly blockNumber: string;
+  readonly blockHash: Hex;
+  readonly txHash: Hex;
+}
+
+export interface EvmDeploymentPositions {
+  readonly initialization: EvmTransactionPosition | null;
+  readonly activation: readonly EvmTransactionPosition[];
+}
+
+export interface StellarTransactionPosition {
+  readonly ledger: number;
+  readonly txHash: string;
+}
+
+export interface StellarDeploymentPositions {
+  readonly initialization: StellarTransactionPosition | null;
+  readonly activation: readonly StellarTransactionPosition[];
 }
 
 export interface EvmTokenDeployment {
@@ -92,6 +114,9 @@ export interface EvmDeployment extends DeploymentLifecycle {
   readonly family: "evm";
   readonly chain: ChainKey;
   readonly chainId: number;
+  /** Public genesis hash binding this record to a network, beyond its chain ID. */
+  readonly genesisBlockHash?: Hex;
+  readonly positions: EvmDeploymentPositions;
   readonly router: Hex;
   readonly adapters: Readonly<Partial<Record<RouteKind, Hex>>>;
   /** Keyed by symbol, because that is what a person picks from a list. */
@@ -104,6 +129,7 @@ export interface EvmDeployment extends DeploymentLifecycle {
   readonly flowWindow: number;
   readonly timelockDelay: number;
   readonly deployedAt: DeployedAtEvm;
+  readonly evidenceLimitations: readonly string[];
   /** The commit the bytecode was built from. The only thing tying an address to a source tree. */
   readonly commit: string;
 }
@@ -125,6 +151,10 @@ export interface StellarDeployment extends DeploymentLifecycle {
   /** Hex hashes of the uploaded WASM, one per contract, so an installed build is identifiable. */
   readonly wasmHashes: Readonly<Record<string, string>>;
   readonly deployedAt: DeployedAtStellar;
+  /** Public transaction evidence, separated by the two activation phases. */
+  readonly positions: StellarDeploymentPositions;
+  /** Limitations are explicit for legacy and phase-one-only records. */
+  readonly evidenceLimitations: readonly string[];
   readonly commit: string;
 }
 
@@ -134,6 +164,29 @@ export interface DeploymentSet {
   readonly schemaVersion: number;
   readonly generatedAt: string;
   readonly networks: Readonly<Partial<Record<ChainKey, Deployment>>>;
+  /** Explicit activation capabilities. A registry or deployment route is not activated without this. */
+  readonly routeCapabilities?: RouteCapabilitySet;
+}
+
+export const ROUTE_CAPABILITY_REVISION = 1;
+export const ROUTE_CAPABILITY_SCHEMA_VERSION = ROUTE_CAPABILITY_REVISION;
+
+export type RouteRecipientKind = "account" | "contract" | "muxed-account";
+export type RecipientKind = RouteRecipientKind;
+
+export interface RouteCapabilityRecord {
+  readonly revision: number;
+  readonly chain: ChainKey;
+  readonly symbol: string;
+  readonly route: RouteKind;
+  readonly status: "active" | "gated";
+  readonly paidDispatch: boolean;
+  readonly recipientKinds: readonly RouteRecipientKind[];
+}
+
+export interface RouteCapabilitySet {
+  readonly revision: number;
+  readonly records: readonly RouteCapabilityRecord[];
 }
 
 /** Thrown when a deployment file does not hold together. Carries the path to the bad field. */
@@ -230,6 +283,11 @@ function asTimestamp(value: unknown, path: string): string {
   const text = asString(value, path);
   if (Number.isNaN(Date.parse(text))) fail(path, "expected an ISO 8601 timestamp");
   return text;
+}
+
+function asBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") fail(path, "expected a boolean");
+  return value;
 }
 
 /**
@@ -342,6 +400,11 @@ function readEvmDeployment(
   chain: ChainKey,
   path: string,
 ): EvmDeployment {
+  const expectedChain = chainConfig(chain);
+  const chainId = asInteger(raw.chainId, `${path}.chainId`, 1);
+  if (expectedChain.family !== "evm" || chainId !== expectedChain.chainId) {
+    fail(`${path}.chainId`, "does not match the selected chain");
+  }
   const adapters = asAdapters(raw.adapters, `${path}.adapters`, asEvmAddress);
   const tokensRaw = asRecord(raw.tokens, `${path}.tokens`);
   const tokens: Record<string, EvmTokenDeployment> = {};
@@ -371,10 +434,38 @@ function readEvmDeployment(
   }
 
   const deployedAt = asRecord(raw.deployedAt, `${path}.deployedAt`);
+  const positionsRaw =
+    raw.positions === undefined ? null : asRecord(raw.positions, `${path}.positions`);
+  const initializationRaw =
+    positionsRaw?.initialization === undefined || positionsRaw.initialization === null
+      ? null
+      : asRecord(positionsRaw.initialization, `${path}.positions.initialization`);
+  const activationRaw = positionsRaw?.activation === undefined ? [] : positionsRaw.activation;
+  if (!Array.isArray(activationRaw) || activationRaw.length > 128) {
+    fail(`${path}.positions.activation`, "expected a bounded transaction array");
+  }
+  function readPosition(value: unknown, positionPath: string): EvmTransactionPosition {
+    const position = asRecord(value, positionPath);
+    return {
+      blockNumber: asUintString(position.blockNumber, `${positionPath}.blockNumber`),
+      blockHash: asHash(position.blockHash, `${positionPath}.blockHash`),
+      txHash: asHash(position.txHash, `${positionPath}.txHash`),
+    };
+  }
+  const initialization = initializationRaw
+    ? readPosition(initializationRaw, `${path}.positions.initialization`)
+    : null;
+  const activation = activationRaw.map((position, index) =>
+    readPosition(position, `${path}.positions.activation[${String(index)}]`),
+  );
   return {
     family: "evm",
     chain,
-    chainId: asInteger(raw.chainId, `${path}.chainId`, 1),
+    chainId,
+    ...(raw.genesisBlockHash === undefined
+      ? {}
+      : { genesisBlockHash: asHash(raw.genesisBlockHash, `${path}.genesisBlockHash`) }),
+    positions: { initialization, activation },
     router: asEvmAddress(raw.router, `${path}.router`),
     adapters,
     tokens,
@@ -389,6 +480,13 @@ function readEvmDeployment(
       timestamp: asTimestamp(deployedAt.timestamp, `${path}.deployedAt.timestamp`),
       txHash: asHash(deployedAt.txHash, `${path}.deployedAt.txHash`),
     },
+    evidenceLimitations: [
+      ...(raw.genesisBlockHash === undefined
+        ? ["genesis-block network binding unavailable in legacy record"]
+        : []),
+      ...(initialization ? [] : ["initialization transaction evidence unavailable"]),
+      ...(activation.length ? [] : ["activation transaction evidence unavailable"]),
+    ],
     commit: asString(raw.commit, `${path}.commit`),
     ...readLifecycle(raw, path),
   };
@@ -399,10 +497,24 @@ function readStellarDeployment(
   chain: ChainKey,
   path: string,
 ): StellarDeployment {
+  const expectedChain = chainConfig(chain);
+  if (
+    expectedChain.family !== "stellar" ||
+    raw.networkPassphrase !== expectedChain.networkPassphrase
+  ) {
+    fail(`${path}.networkPassphrase`, "does not match the selected Stellar network");
+  }
   const adapters = asAdapters(raw.adapters, `${path}.adapters`, asStellarContract);
   const tokensRaw = asRecord(raw.tokens, `${path}.tokens`);
+  const tokenEntries = Object.entries(tokensRaw);
+  if (tokenEntries.length > MAX_DEPLOYMENT_TOKENS) {
+    fail(
+      `${path}.tokens`,
+      `more than ${String(MAX_DEPLOYMENT_TOKENS)} token entries exceeds the record input limit`,
+    );
+  }
   const tokens: Record<string, StellarTokenDeployment> = {};
-  for (const [symbol, entry] of Object.entries(tokensRaw)) {
+  for (const [symbol, entry] of tokenEntries) {
     const tokenPath = `${path}.tokens.${symbol}`;
     const token = asRecord(entry, tokenPath);
     const routes = asRoutes(token.routes, `${tokenPath}.routes`);
@@ -430,8 +542,15 @@ function readStellarDeployment(
   }
 
   const hashesRaw = asRecord(raw.wasmHashes, `${path}.wasmHashes`);
+  const hashEntries = Object.entries(hashesRaw);
+  if (hashEntries.length > MAX_DEPLOYMENT_WASM_HASHES) {
+    fail(
+      `${path}.wasmHashes`,
+      `more than ${String(MAX_DEPLOYMENT_WASM_HASHES)} wasm hashes exceeds the record input limit`,
+    );
+  }
   const wasmHashes: Record<string, string> = {};
-  for (const [name, entry] of Object.entries(hashesRaw)) {
+  for (const [name, entry] of hashEntries) {
     const hash = asString(entry, `${path}.wasmHashes.${name}`);
     if (!/^[0-9a-f]{64}$/.test(hash)) {
       fail(`${path}.wasmHashes.${name}`, "expected 64 lowercase hex characters");
@@ -440,6 +559,37 @@ function readStellarDeployment(
   }
 
   const deployedAt = asRecord(raw.deployedAt, `${path}.deployedAt`);
+  const positionsRaw =
+    raw.positions === undefined ? null : asRecord(raw.positions, `${path}.positions`);
+  const initializationRaw =
+    positionsRaw?.initialization === undefined || positionsRaw.initialization === null
+      ? null
+      : asRecord(positionsRaw.initialization, `${path}.positions.initialization`);
+  const activationRaw = positionsRaw?.activation === undefined ? [] : positionsRaw.activation;
+  if (!Array.isArray(activationRaw) || activationRaw.length > 128) {
+    fail(`${path}.positions.activation`, "expected a bounded transaction array");
+  }
+  function readPosition(value: unknown, positionPath: string): StellarTransactionPosition {
+    const position = asRecord(value, positionPath);
+    const txHash = asString(position.txHash, `${positionPath}.txHash`);
+    if (!/^[0-9a-f]{64}$/.test(txHash)) {
+      fail(`${positionPath}.txHash`, "expected 64 lowercase hex characters");
+    }
+    return {
+      ledger: asInteger(position.ledger, `${positionPath}.ledger`, 1),
+      txHash,
+    };
+  }
+  const initialization = initializationRaw
+    ? readPosition(initializationRaw, `${path}.positions.initialization`)
+    : null;
+  const activation = activationRaw.map((position, index) =>
+    readPosition(position, `${path}.positions.activation[${String(index)}]`),
+  );
+  const evidenceLimitations = [
+    ...(initialization ? [] : ["initialization transaction evidence unavailable"]),
+    ...(activation.length ? [] : ["activation transaction evidence unavailable"]),
+  ];
   return {
     family: "stellar",
     chain,
@@ -458,9 +608,176 @@ function readStellarDeployment(
       ledger: asInteger(deployedAt.ledger, `${path}.deployedAt.ledger`, 1),
       timestamp: asTimestamp(deployedAt.timestamp, `${path}.deployedAt.timestamp`),
     },
+    positions: { initialization, activation },
+    evidenceLimitations,
     commit: asString(raw.commit, `${path}.commit`),
     ...readLifecycle(raw, path),
   };
+}
+
+export function parseRouteCapabilitySet(value: unknown): RouteCapabilitySet {
+  const raw = asRecord(value, "$.routeCapabilities");
+  const revision = asInteger(raw.revision, "$.routeCapabilities.revision", 1);
+  if (revision !== ROUTE_CAPABILITY_REVISION) {
+    fail(
+      "$.routeCapabilities.revision",
+      `unknown route capability revision ${String(revision)}; expected ${String(ROUTE_CAPABILITY_REVISION)}`,
+    );
+  }
+  const recordsRaw = asRecord(raw, "$.routeCapabilities");
+  const entries = recordsRaw.records ?? recordsRaw.entries;
+  if (!Array.isArray(entries)) {
+    fail("$.routeCapabilities.records", "expected an array");
+  }
+
+  const records: RouteCapabilityRecord[] = [];
+  const identities = new Set<string>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const path = `$.routeCapabilities.records[${String(index)}]`;
+    const entry = asRecord(entries[index], path);
+    const recordRevision = asInteger(entry.revision, `${path}.revision`, 1);
+    if (recordRevision !== ROUTE_CAPABILITY_REVISION) {
+      fail(`${path}.revision`, `unknown route capability revision ${String(recordRevision)}`);
+    }
+    const chainName = asString(entry.chain, `${path}.chain`);
+    if (!isChainKey(chainName)) fail(`${path}.chain`, `unknown chain key "${chainName}"`);
+    const symbol = asString(entry.symbol, `${path}.symbol`);
+    const routeSlug = asString(entry.route, `${path}.route`);
+    const route = tryRouteFromSlug(routeSlug);
+    if (route === null) fail(`${path}.route`, `unknown rail slug "${routeSlug}"`);
+
+    const status = asString(entry.status, `${path}.status`);
+    if (status !== "active" && status !== "gated") {
+      fail(`${path}.status`, 'expected "active" or "gated"');
+    }
+    const paidDispatch = asBoolean(entry.paidDispatch, `${path}.paidDispatch`);
+
+    const recipientRaw = entry.recipientKinds;
+    if (!Array.isArray(recipientRaw)) {
+      fail(`${path}.recipientKinds`, "expected an array");
+    }
+    const recipientKinds: RouteRecipientKind[] = [];
+    const recipientSeen = new Set<RouteRecipientKind>();
+    for (let recipientIndex = 0; recipientIndex < recipientRaw.length; recipientIndex += 1) {
+      const recipientPath = `${path}.recipientKinds[${String(recipientIndex)}]`;
+      const recipient = asString(recipientRaw[recipientIndex], recipientPath);
+      if (recipient !== "account" && recipient !== "contract" && recipient !== "muxed-account") {
+        fail(recipientPath, 'expected "account", "contract", or "muxed-account"');
+      }
+      if (recipientSeen.has(recipient)) fail(recipientPath, "duplicate recipient kind");
+      recipientSeen.add(recipient);
+      recipientKinds.push(recipient);
+    }
+
+    const identity = `${chainName}:${symbol}:${ROUTE_SLUGS[route]}`;
+    if (identities.has(identity)) {
+      fail(path, "duplicate capability identity");
+    }
+    identities.add(identity);
+    records.push(
+      Object.freeze({
+        revision: recordRevision,
+        chain: chainName,
+        symbol,
+        route,
+        status,
+        paidDispatch,
+        recipientKinds: Object.freeze(recipientKinds),
+      }),
+    );
+  }
+  return Object.freeze({ revision, records: Object.freeze(records) });
+}
+
+export const parseRouteCapabilities = parseRouteCapabilitySet;
+
+export function routeCapabilityFor(
+  set: RouteCapabilitySet | DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+): RouteCapabilityRecord | null {
+  const supplied: unknown = set;
+  if (typeof supplied !== "object" || supplied === null) return null;
+  const capabilitySet = "records" in set && "revision" in set ? set : set.routeCapabilities;
+  if (capabilitySet?.revision !== ROUTE_CAPABILITY_REVISION) return null;
+  const entries: readonly unknown[] = capabilitySet.records;
+  if (!Array.isArray(entries)) return null;
+  const matches: RouteCapabilityRecord[] = [];
+  for (const entry of entries) {
+    if (!validCapabilityRecord(entry)) return null;
+    if (entry.chain === chain && entry.symbol === symbol && entry.route === route)
+      matches.push(entry);
+  }
+  return matches.length === 1 ? (matches[0] ?? null) : null;
+}
+
+function validCapabilityRecord(value: unknown): value is RouteCapabilityRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (
+    record.revision !== ROUTE_CAPABILITY_REVISION ||
+    typeof record.chain !== "string" ||
+    !isChainKey(record.chain) ||
+    typeof record.symbol !== "string" ||
+    !record.symbol ||
+    record.symbol.length > 4096 ||
+    typeof record.route !== "number" ||
+    !ROUTE_KINDS.includes(record.route as RouteKind) ||
+    (record.status !== "active" && record.status !== "gated") ||
+    typeof record.paidDispatch !== "boolean" ||
+    !Array.isArray(record.recipientKinds)
+  )
+    return false;
+  const recipients: readonly unknown[] = record.recipientKinds;
+  return (
+    !recipients.some(
+      (kind) => kind !== "account" && kind !== "contract" && kind !== "muxed-account",
+    ) && new Set(recipients).size === recipients.length
+  );
+}
+
+export const routeCapability = routeCapabilityFor;
+
+export function hasActivatedRouteCapability(
+  set: DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+): boolean {
+  const deployment = set.networks[chain];
+  if (deployment?.status !== "active") return false;
+  if (!deployment.adapters[route]) return false;
+  const token = deployment.tokens[symbol];
+  if (!token?.routes.includes(route)) return false;
+  return routeCapabilityFor(set, chain, symbol, route)?.status === "active";
+}
+
+export const isRouteCapabilityActive = hasActivatedRouteCapability;
+
+export function supportsPaidDispatch(
+  set: DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+): boolean {
+  return (
+    hasActivatedRouteCapability(set, chain, symbol, route) &&
+    routeCapabilityFor(set, chain, symbol, route)?.paidDispatch === true
+  );
+}
+
+export function supportsRecipientKind(
+  set: DeploymentSet,
+  chain: ChainKey,
+  symbol: string,
+  route: RouteKind,
+  recipientKind: RouteRecipientKind,
+): boolean {
+  if (!hasActivatedRouteCapability(set, chain, symbol, route)) return false;
+  return (
+    routeCapabilityFor(set, chain, symbol, route)?.recipientKinds.includes(recipientKind) === true
+  );
 }
 
 /**
@@ -491,10 +808,11 @@ export function parseDeploymentSet(value: unknown): DeploymentSet {
     const record = asRecord(entry, path);
     const family = record.family;
     if (family === "evm") {
-      if (chain(key).family !== "evm") fail(`${path}.family`, "does not match the chain family");
+      if (chainConfig(key).family !== "evm")
+        fail(`${path}.family`, "does not match the chain family");
       networks[key] = readEvmDeployment(record, key, path);
     } else if (family === "stellar") {
-      if (chain(key).family !== "stellar") {
+      if (chainConfig(key).family !== "stellar") {
         fail(`${path}.family`, "does not match the chain family");
       }
       networks[key] = readStellarDeployment(record, key, path);
@@ -517,7 +835,29 @@ export function parseDeploymentSet(value: unknown): DeploymentSet {
     }
   }
 
-  return { schemaVersion, generatedAt, networks };
+  const routeCapabilities =
+    raw.routeCapabilities === undefined
+      ? undefined
+      : parseRouteCapabilitySet(raw.routeCapabilities);
+  if (routeCapabilities !== undefined) {
+    for (const record of routeCapabilities.records) {
+      const deployment = networks[record.chain];
+      if (deployment?.status !== "active") continue;
+      if (deployment.tokens[record.symbol] === undefined) {
+        fail(
+          `$.routeCapabilities.records`,
+          `capability names unknown token "${record.symbol}" on ${record.chain}`,
+        );
+      }
+    }
+  }
+
+  return {
+    schemaVersion,
+    generatedAt,
+    networks,
+    ...(routeCapabilities !== undefined ? { routeCapabilities } : {}),
+  };
 }
 
 /** Records that are still in service. Archived records are excluded by construction. */

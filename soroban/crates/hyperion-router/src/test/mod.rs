@@ -6,8 +6,8 @@ mod doubles;
 mod hostile;
 mod setup;
 
-mod admin;
 mod abi_compatibility;
+mod admin;
 mod benchmarks;
 mod capabilities;
 mod codec_parity;
@@ -20,7 +20,7 @@ mod maintenance;
 mod operations;
 mod outbound;
 mod quotes;
-mod resource_limits;
+mod replay_identity;
 mod stateful_model;
 mod storage_maintenance;
 mod trust_surface;

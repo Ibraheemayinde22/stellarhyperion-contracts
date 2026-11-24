@@ -10,6 +10,12 @@ import {
   isStellarDeployment,
   parseDeploymentSet,
   providerAddressOverridesFromDeploymentSet,
+  parseRouteCapabilitySet,
+  routeCapabilityFor,
+  hasActivatedRouteCapability,
+  supportsPaidDispatch,
+  supportsRecipientKind,
+  type RouteCapabilitySet,
   tokenFor,
 } from "../src/deployments.js";
 import { RouteKind } from "../src/routes.js";
@@ -85,6 +91,167 @@ function set(networks: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe("reading a record that holds together", () => {
+  const capability = {
+    revision: 1,
+    chain: "stellar-testnet",
+    symbol: "USDC",
+    route: "cctp",
+    status: "active",
+    paidDispatch: true,
+    recipientKinds: ["account", "contract"],
+  };
+  it("fails conservatively for directly constructed unknown revisions or ambiguous capabilities", () => {
+    const valid = parseRouteCapabilitySet({ revision: 1, records: [capability] });
+    for (const routeCapabilities of [
+      { ...valid, revision: 2 },
+      { ...valid, records: valid.records.map((record) => ({ ...record, revision: 2 })) },
+      { ...valid, records: [valid.records[0]!, valid.records[0]!] },
+      {
+        ...valid,
+        records: valid.records.map((record) => ({
+          ...record,
+          recipientKinds: ["account", "account"] as const,
+        })),
+      },
+    ] satisfies RouteCapabilitySet[]) {
+      const deployed = {
+        ...parseDeploymentSet(
+          set({
+            "stellar-testnet": stellarRecord({
+              networkPassphrase: "Test SDF Network ; September 2015",
+            }),
+          }),
+        ),
+        routeCapabilities,
+      };
+      expect(
+        routeCapabilityFor(routeCapabilities, "stellar-testnet", "USDC", RouteKind.Cctp),
+      ).toBeNull();
+      expect(hasActivatedRouteCapability(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+        false,
+      );
+      expect(supportsPaidDispatch(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(false);
+      expect(
+        supportsRecipientKind(deployed, "stellar-testnet", "USDC", RouteKind.Cctp, "account"),
+      ).toBe(false);
+    }
+  });
+  it("freezes parsed capability records and recipient sets against later activation mutation", () => {
+    const parsed = parseRouteCapabilitySet({
+      revision: 1,
+      records: [{ ...capability, status: "gated" }],
+    });
+    expect(Object.isFrozen(parsed.records[0])).toBe(true);
+    expect(Object.isFrozen(parsed.records[0]?.recipientKinds)).toBe(true);
+    expect(() => Reflect.set(parsed.records[0]!, "status", "active")).not.toThrow();
+    expect(parsed.records[0]?.status).toBe("gated");
+    const deployed = {
+      ...parseDeploymentSet(
+        set({
+          "stellar-testnet": stellarRecord({
+            networkPassphrase: "Test SDF Network ; September 2015",
+          }),
+        }),
+      ),
+      routeCapabilities: parsed,
+    };
+    expect(hasActivatedRouteCapability(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+      false,
+    );
+  });
+  it("keeps paid dispatch and each recipient kind explicit on an activated route", () => {
+    const routeCapabilities = parseRouteCapabilitySet({
+      revision: 1,
+      records: [{ ...capability, paidDispatch: false, recipientKinds: ["account"] }],
+    });
+    const deployed = {
+      ...parseDeploymentSet(
+        set({
+          "stellar-testnet": stellarRecord({
+            networkPassphrase: "Test SDF Network ; September 2015",
+          }),
+        }),
+      ),
+      routeCapabilities,
+    };
+    expect(hasActivatedRouteCapability(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+      true,
+    );
+    expect(supportsPaidDispatch(deployed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(false);
+    expect(
+      supportsRecipientKind(deployed, "stellar-testnet", "USDC", RouteKind.Cctp, "account"),
+    ).toBe(true);
+    expect(
+      supportsRecipientKind(deployed, "stellar-testnet", "USDC", RouteKind.Cctp, "contract"),
+    ).toBe(false);
+    expect(
+      supportsRecipientKind(deployed, "stellar-testnet", "USDC", RouteKind.Cctp, "muxed-account"),
+    ).toBe(false);
+    expect(
+      supportsPaidDispatch(
+        { ...deployed, networks: {} },
+        "stellar-testnet",
+        "USDC",
+        RouteKind.Cctp,
+      ),
+    ).toBe(false);
+  });
+  it("rejects malformed external capability identities, flags and recipients", () => {
+    for (const changed of [
+      { revision: 2 },
+      { chain: "unknown" },
+      { route: "unknown" },
+      { status: "enabled" },
+      { paidDispatch: "true" },
+      { recipientKinds: ["unknown"] },
+      { recipientKinds: ["account", "account"] },
+    ])
+      expect(() =>
+        parseRouteCapabilitySet({ revision: 1, records: [{ ...capability, ...changed }] }),
+      ).toThrow(DeploymentFormatError);
+    expect(() =>
+      parseRouteCapabilitySet({ revision: 1, records: [capability, capability] }),
+    ).toThrow(/duplicate/);
+  });
+  it("models route activation independently from registry and deployment presence", () => {
+    const parsed = parseDeploymentSet(
+      set({
+        "stellar-testnet": stellarRecord({
+          networkPassphrase: "Test SDF Network ; September 2015",
+        }),
+      }),
+    );
+    expect(hasActivatedRouteCapability(parsed, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+      false,
+    );
+
+    const capabilities = parseRouteCapabilitySet({
+      revision: 1,
+      records: [
+        {
+          revision: 1,
+          chain: "stellar-testnet",
+          symbol: "USDC",
+          route: "cctp",
+          status: "active",
+          paidDispatch: true,
+          recipientKinds: ["account", "contract", "muxed-account"],
+        },
+      ],
+    });
+    expect(
+      routeCapabilityFor(capabilities, "stellar-testnet", "USDC", RouteKind.Cctp)?.status,
+    ).toBe("active");
+
+    const activated = { ...parsed, routeCapabilities: capabilities };
+    expect(hasActivatedRouteCapability(activated, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(
+      true,
+    );
+    expect(supportsPaidDispatch(activated, "stellar-testnet", "USDC", RouteKind.Cctp)).toBe(true);
+    expect(
+      supportsRecipientKind(activated, "stellar-testnet", "USDC", RouteKind.Cctp, "muxed-account"),
+    ).toBe(true);
+  });
   it("reads an EVM deployment", () => {
     const parsed = parseDeploymentSet(set({ base: evmRecord() }));
     const base = deploymentFor(parsed, "base");
@@ -93,7 +260,43 @@ describe("reading a record that holds together", () => {
       expect(base.chainId).toBe(8453);
       expect(base.feeBps).toBe(30);
       expect(base.tokens.USDC?.routes).toEqual([RouteKind.Cctp, RouteKind.AxelarIts]);
+      expect(base.evidenceLimitations).toEqual([
+        "genesis-block network binding unavailable in legacy record",
+        "initialization transaction evidence unavailable",
+        "activation transaction evidence unavailable",
+      ]);
     }
+  });
+
+  it("reads public EVM initialization and activation receipt positions", () => {
+    const parsed = parseDeploymentSet(
+      set({
+        base: evmRecord({
+          genesisBlockHash: `0x${"11".repeat(32)}`,
+          positions: {
+            initialization: {
+              txHash: `0x${"22".repeat(32)}`,
+              blockNumber: "21000000",
+              blockHash: `0x${"33".repeat(32)}`,
+            },
+            activation: [
+              {
+                txHash: `0x${"44".repeat(32)}`,
+                blockNumber: "21000010",
+                blockHash: `0x${"55".repeat(32)}`,
+              },
+            ],
+          },
+        }),
+      }),
+    );
+    const deployment = parsed.networks.base;
+    if (deployment === undefined || !isEvmDeployment(deployment)) {
+      throw new Error("expected an EVM Base deployment");
+    }
+    expect(deployment.positions.initialization?.blockNumber).toBe("21000000");
+    expect(deployment.positions.activation[0]?.blockNumber).toBe("21000010");
+    expect(deployment.evidenceLimitations).toEqual([]);
   });
 
   it("reads a Stellar deployment", () => {
@@ -104,7 +307,45 @@ describe("reading a record that holds together", () => {
       expect(stellar.router).toBe(ROUTER_C);
       expect(stellar.wasmHashes.router).toBe("a".repeat(64));
       expect(stellar.deployedAt.ledger).toBe(55_000_000);
+      expect(stellar.positions).toEqual({ initialization: null, activation: [] });
+      expect(stellar.evidenceLimitations).toEqual([
+        "initialization transaction evidence unavailable",
+        "activation transaction evidence unavailable",
+      ]);
     }
+  });
+
+  it("rejects a passphrase that does not belong to the selected Stellar network", () => {
+    expect(() =>
+      parseDeploymentSet(
+        set({
+          "stellar-testnet": stellarRecord({
+            networkPassphrase: "Public Global Stellar Network ; September 2015",
+          }),
+        }),
+      ),
+    ).toThrow(/networkPassphrase/);
+  });
+
+  it("reads separately identified Stellar initialization and activation positions", () => {
+    const parsed = parseDeploymentSet(
+      set({
+        "stellar-testnet": stellarRecord({
+          networkPassphrase: "Test SDF Network ; September 2015",
+          positions: {
+            initialization: { ledger: 55_000_001, txHash: "a".repeat(64) },
+            activation: [{ ledger: 55_000_010, txHash: "b".repeat(64) }],
+          },
+        }),
+      }),
+    );
+    const deployment = parsed.networks["stellar-testnet"];
+    if (deployment === undefined || !isStellarDeployment(deployment)) {
+      throw new Error("expected a Stellar Testnet deployment");
+    }
+    expect(deployment.positions.initialization?.ledger).toBe(55_000_001);
+    expect(deployment.positions.activation[0]?.ledger).toBe(55_000_010);
+    expect(deployment.evidenceLimitations).toEqual([]);
   });
 
   it("reads explicit provider addresses without changing declared asset metadata", () => {
@@ -161,6 +402,7 @@ describe("reading a record that holds together", () => {
 
   it("keeps inverse-quote wiring gated to configured Stellar Testnet CCTP and ITS", () => {
     const activeTestnet = stellarRecord({
+      networkPassphrase: "Test SDF Network ; September 2015",
       adapters: { cctp: ROUTER_C, "axelar-its": C_ADDR },
       tokens: {
         USDC: {
@@ -208,6 +450,15 @@ describe("reading a record that holds together", () => {
 });
 
 describe("refusing a record that does not", () => {
+  it("refuses unknown route capability revisions conservatively", () => {
+    expect(() =>
+      parseRouteCapabilitySet({
+        revision: 2,
+        records: [],
+      }),
+    ).toThrow(/route capability revision/);
+  });
+
   it("names the field it choked on", () => {
     try {
       parseDeploymentSet(set({ base: evmRecord({ router: "0xnope" }) }));

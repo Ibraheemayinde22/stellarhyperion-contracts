@@ -27,6 +27,8 @@ import type { Hex } from "./bytes.js";
 import { AddressKind, encodeStellarAddress } from "./addresses.js";
 import { isRouteKind } from "./routes.js";
 import type { RouteKind } from "./routes.js";
+import { byteLimit } from "./limits.js";
+import type { ByteParserLimits } from "./limits.js";
 
 /** The inspector's own schema version. Bumped when a decoded field changes meaning. */
 export const ROUTER_EVENT_INSPECTOR_VERSION = 1 as const;
@@ -232,8 +234,13 @@ function refuse(code: EventDiagnosticCode, path: string, detail: string): never 
 
 const BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/** Strict, canonical base64. Rejects bad characters, bad padding and nonzero padding bits. */
-export function decodeBase64(text: string, path = "input"): Uint8Array {
+/**
+ * Strict, canonical base64. Rejects bad characters, bad padding and nonzero padding bits.
+ *
+ * The decoded length is checked against `limits.maxBytes` before the output array is allocated, so
+ * an oversized external event fails instead of producing an equally oversized buffer.
+ */
+export function decodeBase64(text: string, path = "input", limits?: ByteParserLimits): Uint8Array {
   if (text.length % 4 !== 0) {
     refuse(
       "MalformedEncoding",
@@ -242,7 +249,16 @@ export function decodeBase64(text: string, path = "input"): Uint8Array {
     );
   }
   const pad = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0;
-  const out = new Uint8Array((text.length / 4) * 3 - pad);
+  const decodedLength = (text.length / 4) * 3 - pad;
+  const maxBytes = byteLimit(limits);
+  if (decodedLength > maxBytes) {
+    refuse(
+      "MalformedEncoding",
+      path,
+      `${String(decodedLength)} decoded bytes is over the ${String(maxBytes)} byte input limit`,
+    );
+  }
+  const out = new Uint8Array(decodedLength);
   let o = 0;
   for (let i = 0; i < text.length; i += 4) {
     let n = 0;
@@ -513,8 +529,20 @@ function readScAddress(r: XdrReader): ScValue {
 }
 
 /** Decode one base64 (or raw) XDR `ScVal`, consuming every byte. */
-export function decodeScVal(input: string | Uint8Array, path = "input"): ScValue {
-  const bytes = typeof input === "string" ? decodeBase64(input, path) : input;
+export function decodeScVal(
+  input: string | Uint8Array,
+  path = "input",
+  limits?: ByteParserLimits,
+): ScValue {
+  const maxBytes = byteLimit(limits);
+  if (typeof input !== "string" && input.length > maxBytes) {
+    refuse(
+      "MalformedEncoding",
+      path,
+      `${String(input.length)} bytes is over the ${String(maxBytes)} byte input limit`,
+    );
+  }
+  const bytes = typeof input === "string" ? decodeBase64(input, path, limits) : input;
   const reader = new XdrReader(bytes, path);
   const value = readScVal(reader, 0);
   reader.done();

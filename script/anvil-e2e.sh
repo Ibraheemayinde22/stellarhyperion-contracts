@@ -59,7 +59,7 @@ fi
 CHAIN_ID=$(cast chain-id --rpc-url "$RPC")
 
 note "checking generated ABI provenance"
-( cd evm && forge build >/tmp/hyperion-abi-build.log 2>&1 ) \
+( cd evm && forge build --skip test >/tmp/hyperion-abi-build.log 2>&1 ) \
   || { cat /tmp/hyperion-abi-build.log; die "Foundry ABI build provenance"; }
 ( cd packages/protocol && npm run gen >/tmp/hyperion-abi-gen.log 2>&1 ) \
   || { cat /tmp/hyperion-abi-gen.log; die "generated ABI provenance"; }
@@ -83,6 +83,9 @@ note "using deterministic provider fault schedule (seed ${HYPERION_FAULT_SEED})"
 ( cd "$EVM_DIR" && forge test --match-contract RouterProviderFaultTest --fuzz-seed "$HYPERION_FAULT_SEED" ) \
   > /tmp/hyperion-provider-faults.log 2>&1 \
   || { tail -30 /tmp/hyperion-provider-faults.log; die "seeded provider rollback/retry rehearsal"; }
+( cd "$EVM_DIR" && forge test --match-contract ReplayIdentityCollisionTest ) \
+  > /tmp/hyperion-replay-identities.log 2>&1 \
+  || { tail -30 /tmp/hyperion-replay-identities.log; die "full-width replay-identity collision corpus"; }
 ( cd "$EVM_DIR" && mkdir -p deployments && forge script script/LocalRails.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" >/tmp/hyperion-rails.log 2>&1 ) \
   || { tail -30 /tmp/hyperion-rails.log; die "LocalRails"; }
 
@@ -112,6 +115,7 @@ export AXELAR_STELLAR_CHAIN=stellar
 # Stands in for the Soroban router's contract id. A real run takes this from the Stellar half's
 # deployment record, which is why neither side can be deployed without reference to the other.
 export STELLAR_RAIL_RECIPIENT=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
+export STELLAR_CCTP_TOKEN=0xcab975307fe155049e626f7c9b7334a63a870899a55a261857b6eacfe2d30672
 export STELLAR_AXELAR_PEER=0x0d1ea8b866708fdad0f4ed8c677cf4fe66e56a247837266036e4e0f3d05c7b10
 
 note "phase one: deploy and queue"
@@ -139,7 +143,6 @@ sleep 2
 note "phase two: execute"
 ( cd "$EVM_DIR" && forge script script/Execute.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (executed|already done|CCTP)' || die "Execute"
-
 note "phase two again, to prove it is idempotent"
 ( cd "$EVM_DIR" && forge script script/Execute.s.sol --rpc-url "$RPC" --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (executed this run|already done)' || die "Execute is not idempotent"

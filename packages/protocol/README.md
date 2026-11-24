@@ -248,6 +248,35 @@ Compatibility is additive: no existing exported name changed its parameters or r
 behavioural change is the ambiguity rule above, which only differs for a registry or record that
 actually lists a duplicate symbol.
 
+### Route activation capabilities
+
+Registry membership and a deployment adapter/token route describe configuration, but neither one
+alone means that a route is activated. Deployment sets can carry a separate
+`routeCapabilities` record set, with schema revision `1`:
+
+```json
+{
+  "revision": 1,
+  "records": [
+    {
+      "revision": 1,
+      "chain": "stellar-testnet",
+      "symbol": "USDC",
+      "route": "cctp",
+      "status": "active",
+      "paidDispatch": true,
+      "recipientKinds": ["account", "contract", "muxed-account"]
+    }
+  ]
+}
+```
+
+`paidDispatch` and `recipientKinds` are explicit and require the record to be active before
+dispatch planning may use them. Unknown capability revisions, unknown rails or recipient kinds,
+duplicate identities and capabilities naming an unknown token fail the loader. The active
+deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail entries stay gated unless
+a reviewed, validated capability record names them active.
+
 ### Current deployment scope
 
 The active deployment is **Stellar Testnet, outbound ITS/CCTP**. EVM and other rail development
@@ -307,10 +336,47 @@ because a checksum that only agrees with itself is not a checksum.
 npm install          # the committed lockfile is what CI installs
 npm run gen          # regenerate src/abi from ../../evm/out, after a forge build
 npm run check        # format, lint, typecheck, test, build
+npm run release      # build, create a deterministic archive and provenance manifest
+npm run verify:archive -- path/to/hyperion-protocol-0.1.0.tgz
 ```
 
 `npm run gen` needs `forge build` to have run in `../../evm` first. It reads what the compiler
 produced rather than guessing, and says so if the artifacts are missing.
+
+`npm run release` requires a clean Git tree and runs the normal TypeScript build with npm lifecycle
+hooks disabled. It writes an npm-compatible USTAR `.tgz` under `release/` and a sibling
+`.manifest.json` containing the full Git revision, package version, Node/npm versions, archive
+SHA-256 and sorted path/SHA-256 entries. Archive metadata (mtime, owner, group, mode and order) is
+normalized, so identical packaged files produce identical archive bytes. The release does not
+publish or modify consumer repositories.
+
+`npm run verify:archive -- <archive>` validates the archive structure before reading package
+contents, then compares it with a fresh build and reports changed, missing and extra paths with
+their digests. It rejects duplicate or unsafe paths, links, executable entries and lifecycle
+hooks. It does not install or execute the supplied archive. The `.` and `./abi` exports are smoke
+tested from a temporary extraction of the local clean build, in an isolated consumer directory.
+
+After review, maintainers can synchronize each consumer explicitly by copying the reviewed
+`release/hyperion-protocol-0.1.0.tgz` to that repository's committed archive path and updating its
+lock/reference as appropriate. Rebuild and verify the consumer changes before committing them.
+The manifest proves artifact identity against the recorded source and file digests; it does not
+prove that the source revision is approved for release. That decision remains with maintainer
+review.
+
+For example, from this package directory, set these variables to the existing committed archive
+paths in each consumer repository:
+
+```sh
+export FRONTEND_ARCHIVE=/absolute/path/to/frontend/hyperion-protocol-0.1.0.tgz
+export BACKEND_ARCHIVE=/absolute/path/to/backend/hyperion-protocol-0.1.0.tgz
+cp release/hyperion-protocol-0.1.0.tgz "$FRONTEND_ARCHIVE"
+cp release/hyperion-protocol-0.1.0.tgz "$BACKEND_ARCHIVE"
+npm run verify:archive -- "$FRONTEND_ARCHIVE"
+npm run verify:archive -- "$BACKEND_ARCHIVE"
+```
+
+These are maintainer-run synchronization steps; the release and CI commands never write to either
+consumer repository.
 
 `.npmrc` sets `legacy-peer-deps`, and that is deliberate rather than lazy. viem pulls `abitype`,
 whose peer range is `typescript >=5.0.4`; TypeScript 7 satisfies that while this package pins the
@@ -404,6 +470,49 @@ pairs and malformed values raise `ProviderAddressError` with the failing field p
 token addresses, chain identities, and precision are never inferred from or replaced by provider
 overrides. Older deployment records remain valid because the field is optional. Adding overrides
 is therefore data-only and requires no schema-version change.
+
+## Input-size budgets for external parsers
+
+Every public byte or message parser applies an explicit budget before it allocates. The input comes
+from a CCTP attestation, a rail payload, a public RPC or another build, so a parser that allocates
+in proportion to whatever it was handed turns a large or hostile response into a large allocation
+before the first field is checked. In a browser that is a dead tab rather than a failed request.
+
+| Parser                                                                 | Default budget                                | Override                                     |
+| ---------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------- |
+| `parseCctpMessage`, `cctpBody`, `parseCctpBurnMessage`, `cctpHookData` | 65,535 decoded bytes                          | `{ maxBytes }`                               |
+| `decodeOutboundNote`, `decodeInboundNote`, `decodeCctpHook`            | 65,535 decoded bytes                          | `{ maxBytes }`                               |
+| `decodeBase64`, `decodeScVal`                                          | 65,535 decoded bytes                          | `{ maxBytes }`                               |
+| `readWireMessage`                                                      | 65,535 bytes                                  | `{ maxBytes }`                               |
+| `parseWireSchemaSet`                                                   | 256 schemas, 512 fields, 1,024 error entries  | `{ maxSchemas, maxFields, maxErrorEntries }` |
+| `parseQuoteSnapshot`                                                   | 1,048,576 characters                          | `{ maxCharacters }`                          |
+| `parseDeploymentSet`                                                   | 512 token entries, 256 wasm hashes per record | documented constants in `limits`             |
+| `fromHex`                                                              | none; only when `maxBytes` is passed          | `maxBytes`                                   |
+
+The hex path is why the check lives before allocation: `fromHex` writes `length / 2` bytes, so a
+budget checked after conversion has already paid the cost it was meant to avoid. A hex string over
+the budget is refused before it is decoded, which also means it is refused before its characters
+are validated. `parseQuoteSnapshot` checks length before `JSON.parse`, and the array-shaped parsers
+check counts before mapping, so refusing an oversized document does not build a second copy of it.
+
+The defaults are far above every message the routers actually emit; the largest registered wire
+layout is a few hundred bytes. Invalid overrides (`0`, a negative number or a non-integer) are
+refused rather than treated as unlimited. Each refusal names the input or field path and the budget
+it crossed: `MalformedMessage` for CCTP and notes, `MalformedEncoding` for base64 and XDR,
+`WireSchemaFormatError` for schema sets, `DeploymentFormatError` for deployment records and
+`TypeError` for quote snapshots.
+
+**Compatibility and migration.** This adds optional parameters and new exports only. No wire
+format, ABI, event layout, deployment record or error table changes, and no existing caller needs
+to change. Accepted messages decode identically to the current fixtures; the full format checks
+(exact note lengths, hook lengths, field offsets and message sizes) still apply underneath the
+budget. A provider extension that carries larger hook data or registers more schemas raises the
+matching budget at the call site. `PROTOCOL_INPUT_LIMITS` exposes the defaults so an extension does
+not restate them, and `DEFAULT_MAX_MESSAGE_BYTES` and the per-collection constants are available for
+application configuration. Raising a budget is a local parsing decision: it does not activate a
+rail, change what the contracts accept, or turn reference EVM data into a live route. The active
+deployment remains Stellar Testnet outbound ITS/CCTP; EVM and other rail execution stays gated
+until independently validated.
 
 ## Inspecting raw router events
 
