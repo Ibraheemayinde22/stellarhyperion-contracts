@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Restrict build network access
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # verified upstream v2 snapshot
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # verified upstream v2 snapshot
         with:
           egress-policy: block
           disable-sudo-and-containers: true
@@ -69,7 +69,7 @@ jobs:
         # this TypeScript job. That is not a mistake: the ABI this package ships comes out of this
         # compile, so a compile nobody trusts is an SDK nobody should trust either.
         working-directory: evm
-        run: forge build
+        run: forge build --skip test --skip script
 
       - name: Set up node
         # The package's engines floor is node >=20.11. 22 is the active LTS line, which is the
@@ -161,3 +161,10 @@ jobs:
         if: failure()
         working-directory: packages/protocol
         run: git --no-pager diff -- src/abi || true
+
+      - name: Release and independently verify the SDK archive
+        working-directory: packages/protocol
+        run: |
+          set -euo pipefail
+          npm run release -- --out "$RUNNER_TEMP/hyperion-protocol.tgz"
+          npm run verify:archive -- "$RUNNER_TEMP/hyperion-protocol.tgz"

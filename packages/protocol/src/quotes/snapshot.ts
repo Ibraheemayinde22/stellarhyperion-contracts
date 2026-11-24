@@ -10,6 +10,8 @@ import { MAX_DECIMALS, MAX_FEE_BPS } from "../amounts.js";
 import { chain, isChainKey } from "../chains.js";
 import { tryParseStellarAddress, AddressKind } from "../addresses.js";
 import type { AssetIdentity } from "../registry/assets.js";
+import { MAX_SNAPSHOT_CHARACTERS, characterLimit } from "../limits.js";
+import type { CharacterParserLimits } from "../limits.js";
 import {
   object,
   boolean,
@@ -167,9 +169,20 @@ function tokenIdentity(input: unknown): AssetIdentity {
   throw new TypeError("router.tokenIdentity is invalid");
 }
 
-/** Parse unknown historical data before allowing its fields into typed local planning. */
-export function parseQuoteSnapshot(serialized: string): QuoteSnapshot {
-  if (typeof serialized !== "string" || serialized.length > 1_048_576)
+/**
+ * Parse unknown historical data before allowing its fields into typed local planning.
+ *
+ * `limits.maxCharacters` defaults to `MAX_SNAPSHOT_CHARACTERS` and is checked before JSON parsing,
+ * so an oversized document fails without building a parsed copy of it.
+ */
+export function parseQuoteSnapshot(
+  serialized: string,
+  limits?: CharacterParserLimits,
+): QuoteSnapshot {
+  if (
+    typeof serialized !== "string" ||
+    serialized.length > characterLimit(limits, MAX_SNAPSHOT_CHARACTERS)
+  )
     throw new TypeError("quote snapshot exceeds its input limit");
   let raw: unknown;
   try {

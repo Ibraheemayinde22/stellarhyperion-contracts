@@ -12,6 +12,9 @@
 //! reproducible trace. Chain-specific time semantics (Stellar ledger sequence versus EVM
 //! block timestamps) are modeled explicitly rather than assumed to be interchangeable.
 //!
+//! Replay identity is the route-scoped full-width provider message ID. A source nonce or a
+//! shortened display form is diagnostic metadata only and must never become the replay key.
+//!
 //! # Deployment trust assumptions
 //!
 //! The active deployment is Stellar Testnet outbound ITS/CCTP; these notes do not activate
@@ -81,7 +84,8 @@ pub use maintenance::{
     MAX_MAINTENANCE_BATCH,
 };
 pub use model::{
-    ChainClock, ModelError, ModelRouter, Operation, Rail, Trace, TraceStep, MODEL_MAX_CLAIMS,
+    timelock_boundary_cases, timelock_boundary_cases_for, ChainClock, ModelError, ModelRouter,
+    Operation, Rail, TimelockBoundaryCase, Trace, TraceStep, MODEL_MAX_CLAIMS,
 };
 pub use route::RouteKind;
 pub use strkey::{StrkeyDestination, STRKEY_LEN_MUXED, STRKEY_LEN_PLAIN};
