@@ -664,7 +664,14 @@ describe("comparing parsed deployment sets", () => {
 
     expect(comparison.hasMetadataChanges).toBe(true);
     expect(comparison.hasTrustChanges).toBe(false);
-    expect(comparison.changes.map(({ field }) => field)).toEqual(["generatedAt", "symbol"]);
+    expect(comparison.changes.map(({ field }) => field)).toEqual([
+      "generatedAt",
+      "symbol",
+      "symbol",
+    ]);
+    expect(
+      comparison.changes.filter(({ kind }) => kind === "lane").map(({ route }) => route),
+    ).toEqual([RouteKind.AxelarIts, RouteKind.Cctp]);
   });
 
   it("reports trust changes and preserves uint256 flow limits exactly", () => {

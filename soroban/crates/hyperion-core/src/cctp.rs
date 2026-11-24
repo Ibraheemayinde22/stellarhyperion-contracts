@@ -73,8 +73,8 @@ const BURN_EXPIRATION_BLOCK: u32 = 196;
 /// Anything past here is the hook payload, which is where Hyperion puts the Stellar recipient.
 pub const BURN_HOOK_DATA: u32 = 228;
 
-/// Largest supported Hyperion CCTP hook: version plus a tagged muxed destination.
-pub const MAX_CCTP_HOOK_LEN: u32 = 1 + crate::address::TAGGED_LEN_MUXED;
+/// Largest supported Hyperion CCTP hook: version, mapping revision and tagged muxed destination.
+pub const MAX_CCTP_HOOK_LEN: u32 = 1 + 4 + crate::address::TAGGED_LEN_MUXED;
 
 /// Largest supported CCTP burn body, including Hyperion's maximum-size hook.
 pub const MAX_CCTP_BURN_BODY_LEN: u32 = BURN_HOOK_DATA + MAX_CCTP_HOOK_LEN;
