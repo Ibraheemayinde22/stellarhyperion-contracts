@@ -28,8 +28,9 @@ import { TokenMappingConflict } from "../src/tokenMapping.js";
 import { AddressKind, STRKEY_LEN_MUXED } from "../src/addresses.js";
 import {
   BURN_MESSAGE_VERSION,
+  CCTP_HOOK_VERSION,
+  CCTP_OUTBOUND_NOTE_LEN,
   FINALITY_THRESHOLD_FINALIZED,
-  HOOK_VERSION,
   MESSAGE_VERSION,
   STELLAR_DOMAIN,
 } from "../src/cctp.js";
@@ -40,12 +41,10 @@ import {
   NOTE_VERSION,
   OUTBOUND_NOTE_LEN,
 } from "../src/notes.js";
-import {
-  MAX_CANCELLATION_NOTE_LEN,
-  MAX_QUEUED_ACTION_CHAIN_LEN,
-} from "../src/timelock.js";
+import { MAX_CANCELLATION_NOTE_LEN, MAX_QUEUED_ACTION_CHAIN_LEN } from "../src/timelock.js";
 import { WIRE_SCHEMAS } from "../src/wire-compat.js";
 import { abiSignature, compareAbiSets } from "../src/abi-compat.js";
+import type { AbiEntry } from "../src/abi-compat.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..");
@@ -477,6 +476,26 @@ describe("the documented inbound trust surface", () => {
       "EVM timelock delay",
     );
     requireEvidence(
+      solidityFunction(read(join(evmRoot, "src", "RouterActionValidator.sol")), "actionStatus"),
+      /block\.timestamp\s*<\s*queued\.eta[\s\S]*block\.timestamp\s*>\s*queued\.expiresAt/,
+      "EVM typed timelock boundary status",
+    );
+    requireEvidence(
+      solidityFunction(read(join(evmRoot, "src", "RouterActionValidator.sol")), "actionStatus"),
+      /keccak256\(abi\.encode\(queued\.action\)\)/,
+      "EVM timelock payload identity",
+    );
+    requireEvidence(
+      solidityFunction(evmRouter, "actionStatus"),
+      /_forwardProvenance\(\)/,
+      "EVM typed status forwards through the shared immutable helper",
+    );
+    requireEvidence(
+      solidityFunction(evmRouter, "_forwardProvenance"),
+      /address\(OUTBOUND_PROVENANCE\)\.staticcall\(msg\.data\)/,
+      "EVM typed status forwards the immutable helper schema",
+    );
+    requireEvidence(
       read(join(evmTest, "Fixture.sol")),
       /target\.executeAction\(id\)/,
       "EVM fixture timelock path",
@@ -533,6 +552,38 @@ describe("the deterministic provider fault fixtures", () => {
     expect(solidity).toMatch(/function _nextProviderFault\(uint8 stage\)/);
     expect(rehearsal).toMatch(/HYPERION_FAULT_SEED=\"\$\{HYPERION_FAULT_SEED:-156\}\"/);
     expect(rehearsal).toMatch(/deterministic provider fault schedule/);
+  });
+});
+
+describe("the replay-identity collision corpus", () => {
+  it("keeps every full-width identifier distinct through the Rust and EVM harnesses", () => {
+    const vectors = read(join(repoRoot, "testdata", "replay-identity-collision-corpus.tsv"))
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => {
+        const [name, route, id, displayNonce] = line.split("|");
+        return { name, route, id, displayNonce };
+      });
+    const ids = vectors.map(({ id }) => id);
+    expect(vectors.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(vectors.every(({ route }) => route === "cctp")).toBe(true);
+    expect(vectors.every(({ id }) => /^0x[0-9a-f]{64}$/.test(id ?? ""))).toBe(true);
+    expect(new Set(vectors.map(({ id }) => id!.slice(2, 18))).size).toBe(1);
+    expect(new Set(vectors.map(({ id }) => id!.slice(-16))).size).toBe(1);
+    expect(new Set(vectors.map(({ displayNonce }) => displayNonce)).size).toBe(1);
+
+    const rust = read(join(sorobanRouterSrc, "test", "replay_identity.rs"));
+    const rustDouble = read(join(sorobanRouterSrc, "test", "doubles.rs"));
+    const solidity = read(join(evmTest, "unit", "ReplayIdentityCollision.t.sol"));
+    const fixture = read(join(evmTest, "Fixture.sol"));
+    const e2e = read(resolve(packageRoot, "..", "..", "script", "anvil-e2e.sh"));
+    expect(rust).toMatch(/replay-identity-collision-corpus\.tsv/);
+    expect(rust).toMatch(/to_array\(\)/);
+    expect(rustDouble).toMatch(/message_id:\s*BytesN<32>/);
+    for (const id of ids) expect(solidity.toLowerCase()).toContain(id!.toLowerCase());
+    expect(fixture).toMatch(/function _replayOrigin\(bytes32 messageId/);
+    expect(e2e).toMatch(/--match-contract ReplayIdentityCollisionTest/);
   });
 });
 
@@ -670,7 +721,7 @@ describe("the constants both chains agree on", () => {
     expect(source).toMatch(/VERSION_MUXED[^=]*=\s*12\s*<<\s*3/);
   });
 
-  it("has the same CCTP offsets and constants in the Rust", () => {
+  it("has the same CCTP offsets and revision-bound wire formats across Rust and Solidity", () => {
     const source = read(join(coreSrc, "cctp.rs"));
     const expectConst = (name: string, value: number): void => {
       const match = new RegExp(`${name}\\s*:\\s*[a-z0-9]+\\s*=\\s*(\\d+)`).exec(source);
@@ -681,9 +732,16 @@ describe("the constants both chains agree on", () => {
     expectConst("MESSAGE_VERSION", MESSAGE_VERSION);
     expectConst("BURN_MESSAGE_VERSION", BURN_MESSAGE_VERSION);
     expectConst("FINALITY_THRESHOLD_FINALIZED", FINALITY_THRESHOLD_FINALIZED);
-    expectConst("HOOK_VERSION", HOOK_VERSION);
+    expectConst("HOOK_VERSION", CCTP_HOOK_VERSION);
+    expectConst("CCTP_OUTBOUND_NOTE_LEN", CCTP_OUTBOUND_NOTE_LEN);
     expectConst("MSG_BODY", 148);
     expectConst("BURN_HOOK_DATA", 228);
+
+    const solidity = read(join(evmRoot, "src", "libraries", "HyperionNotes.sol"));
+    expect(solidity).toMatch(new RegExp(`CCTP_HOOK_VERSION\\s*=\\s*${String(CCTP_HOOK_VERSION)}`));
+    expect(solidity).toMatch(
+      new RegExp(`CCTP_OUTBOUND_NOTE_LEN\\s*=\\s*${String(CCTP_OUTBOUND_NOTE_LEN)}`),
+    );
   });
 
   it("registers the same CCTP and note offsets as the Rust, field for field", () => {
@@ -799,41 +857,57 @@ describe("the constants both chains agree on", () => {
 });
 
 describe("payout-relevant ABI compatibility", () => {
-  const baseline: readonly any[] = [{
-    type: "function",
-    name: "settleClaim",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "id", type: "uint64" },
-      { name: "amount", type: "uint256" },
-      { name: "recipient", type: "address" },
-      { name: "nonce", type: "bytes32" },
-    ],
-    outputs: [],
-  }, {
-    type: "event",
-    name: "ClaimSettled",
-    inputs: [
-      { name: "id", type: "uint64", indexed: true },
-      { name: "recipient", type: "address", indexed: true },
-      { name: "amount", type: "uint256", indexed: false },
-    ],
-  }];
+  const baseline = [
+    {
+      type: "function",
+      name: "settleClaim",
+      stateMutability: "nonpayable",
+      inputs: [
+        { name: "id", type: "uint64" },
+        { name: "amount", type: "uint256" },
+        { name: "recipient", type: "address" },
+        { name: "nonce", type: "bytes32" },
+      ],
+      outputs: [],
+    },
+    {
+      type: "event",
+      name: "ClaimSettled",
+      inputs: [
+        { name: "id", type: "uint64", indexed: true },
+        { name: "recipient", type: "address", indexed: true },
+        { name: "amount", type: "uint256", indexed: false },
+      ],
+    },
+  ] as const satisfies readonly AbiEntry[];
 
   it("fails removed and reordered payout fields", () => {
     const removed = [{ ...baseline[0], inputs: baseline[0].inputs.slice(0, 3) }];
     expect(compareAbiSets(baseline, removed).result).toBe("breaking");
 
-    const reordered = [{ ...baseline[0], inputs: [baseline[0].inputs[0], baseline[0].inputs[2], baseline[0].inputs[1], baseline[0].inputs[3]] }];
+    const reordered = [
+      {
+        ...baseline[0],
+        inputs: [
+          baseline[0].inputs[0],
+          baseline[0].inputs[2],
+          baseline[0].inputs[1],
+          baseline[0].inputs[3],
+        ],
+      },
+    ];
     expect(compareAbiSets(baseline, reordered).result).toBe("breaking");
   });
 
   it("assesses additive ABI entries as migration work rather than activation", () => {
-    const additive = [...baseline, {
-      type: "event",
-      name: "ClaimSettledV2",
-      inputs: [...(baseline[1].inputs as any[]), { name: "migration", type: "bytes32", indexed: false }],
-    }];
+    const additive: readonly AbiEntry[] = [
+      ...baseline,
+      {
+        type: "event",
+        name: "ClaimSettledV2",
+        inputs: [...baseline[1].inputs, { name: "migration", type: "bytes32", indexed: false }],
+      },
+    ];
     const report = compareAbiSets(baseline, additive);
     expect(report.result).toBe("compatible");
     expect(report.decisions[0]?.rule).toBe("entry-added");
@@ -855,7 +929,7 @@ describe("the generated ABI modules", () => {
       stdio: "pipe",
     });
     expect(snapshotAbiDir()).toEqual(before);
-  });
+  }, 30_000);
 
   it("exports an ABI for every contract the app has to talk to", () => {
     const abiDir = join(packageRoot, "src", "abi");

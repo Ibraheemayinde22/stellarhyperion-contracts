@@ -12,7 +12,10 @@
 //! Axelar routes encompass two trust and message boundaries:
 //! 1. **ITS Token-Manager transitions**: Native interchain token transfers, mint/burn, and lock/unlock
 //!    managers authenticate token operations and gas relaying. Token mappings are verified against ITS
-//!    at registration (`map_token`), ensuring asset alignment.
+//!    at registration (`map_token`), ensuring asset alignment. `probe_token_manager` re-reads every
+//!    method below by name before activation and reports a missing method, a wrongly typed answer or
+//!    an unreviewed manager discriminant as a blocker instead of trapping. A provider upgrade that
+//!    renames or retypes any of them shows up there first. See `docs/AXELAR_TOKEN_MANAGER_PROBE.md`.
 //! 2. **GMP message transitions**: Payloads attached to transfers specify the far-side recipient and
 //!    origin router metadata. Inbound execution (`execute_with_interchain_token`) strictly enforces
 //!    that the source caller matches ITS and the originating payload sender matches the trusted `peer`

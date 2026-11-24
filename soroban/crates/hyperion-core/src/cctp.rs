@@ -248,8 +248,10 @@ impl BurnMessage {
 // Hyperion's hook payload
 // ------------------------------------------------------------------------------------------
 
-/// Version byte on Hyperion's own hook payload.
-pub const HOOK_VERSION: u8 = 1;
+/// Version byte on Hyperion's revision-bound CCTP hook payload.
+pub const HOOK_VERSION: u8 = 2;
+/// Fixed length of the revision-bound Stellar-to-EVM outbound note.
+pub const CCTP_OUTBOUND_NOTE_LEN: u32 = 33;
 
 /// What Hyperion's EVM side writes into a CCTP hook so the Stellar side knows where to pay.
 ///
@@ -259,7 +261,16 @@ pub const HOOK_VERSION: u8 = 1;
 /// and the mint recipient is simply the adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HyperionHook {
+    pub mapping_revision: u32,
     pub destination: StellarDestination,
+}
+
+/// CCTP outbound note for EVM settlement: version, mapping revision, recipient, router nonce.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CctpOutboundNote {
+    pub mapping_revision: u32,
+    pub recipient: BytesN<32>,
+    pub router_nonce: u64,
 }
 
 /// Verify the separately commissioned Hyperion burn sender after header messenger authentication.
@@ -275,15 +286,25 @@ pub fn verify_remote_sender(
 }
 
 impl HyperionHook {
-    pub fn new(destination: StellarDestination) -> Self {
-        Self { destination }
+    pub fn new(mapping_revision: u32, destination: StellarDestination) -> Self {
+        Self {
+            mapping_revision,
+            destination,
+        }
     }
 
     /// Serialise as `[version][kind][32 byte key][8 byte muxed id, muxed only]`.
     pub fn encode(&self, env: &Env) -> Result<Bytes, HyperionError> {
+        if self.mapping_revision == 0 {
+            return Err(HyperionError::StaleMapping);
+        }
         self.destination.validate()?;
         let mut out = Bytes::new(env);
         out.push_back(HOOK_VERSION);
+        out.append(&Bytes::from_slice(
+            env,
+            &self.mapping_revision.to_be_bytes(),
+        ));
         out.append(&self.destination.encode(env));
         Ok(out)
     }
@@ -293,17 +314,29 @@ impl HyperionHook {
     /// An unknown version is refused rather than skipped past. A payload we cannot read is a
     /// destination we would be guessing at, and guessing here means paying the wrong person.
     pub fn decode(env: &Env, raw: &Bytes) -> Result<Self, HyperionError> {
-        if raw.is_empty() || raw.len() > MAX_CCTP_HOOK_LEN {
+        if raw.len() < 5 {
             return Err(HyperionError::InvalidDestination);
         }
         let version = raw.get(0).ok_or(HyperionError::InvalidDestination)?;
         if version != HOOK_VERSION {
             return Err(HyperionError::UnsupportedHookVersion);
         }
-        let body = raw.slice(1..raw.len());
+        let revision = u32::from_be_bytes([
+            raw.get(1).ok_or(HyperionError::MalformedMessage)?,
+            raw.get(2).ok_or(HyperionError::MalformedMessage)?,
+            raw.get(3).ok_or(HyperionError::MalformedMessage)?,
+            raw.get(4).ok_or(HyperionError::MalformedMessage)?,
+        ]);
+        if revision == 0 {
+            return Err(HyperionError::StaleMapping);
+        }
+        let body = raw.slice(5..raw.len());
         let destination = StellarDestination::decode(env, &body)?;
         destination.validate()?;
-        Ok(Self { destination })
+        Ok(Self {
+            mapping_revision: revision,
+            destination,
+        })
     }
 
     /// Whether this destination can be paid without its owner opting in first.
@@ -313,6 +346,64 @@ impl HyperionHook {
 
     pub fn kind(&self) -> AddressKind {
         self.destination.kind
+    }
+}
+
+impl CctpOutboundNote {
+    pub fn encode(&self, env: &Env) -> Result<Bytes, HyperionError> {
+        if self.mapping_revision == 0 {
+            return Err(HyperionError::StaleMapping);
+        }
+        let recipient = self.recipient.to_array();
+        if recipient[..12].iter().any(|byte| *byte != 0)
+            || recipient[12..].iter().all(|byte| *byte == 0)
+        {
+            return Err(HyperionError::NotEvmAddress);
+        }
+        let mut out = Bytes::new(env);
+        out.push_back(HOOK_VERSION);
+        out.append(&Bytes::from_slice(
+            env,
+            &self.mapping_revision.to_be_bytes(),
+        ));
+        out.append(&Bytes::from_slice(env, &recipient[12..]));
+        out.append(&Bytes::from_slice(env, &self.router_nonce.to_be_bytes()));
+        Ok(out)
+    }
+
+    pub fn decode(env: &Env, raw: &Bytes) -> Result<Self, HyperionError> {
+        if raw.len() != CCTP_OUTBOUND_NOTE_LEN || raw.get(0) != Some(HOOK_VERSION) {
+            return Err(HyperionError::MalformedMessage);
+        }
+        let mapping_revision = u32::from_be_bytes([
+            raw.get(1).ok_or(HyperionError::MalformedMessage)?,
+            raw.get(2).ok_or(HyperionError::MalformedMessage)?,
+            raw.get(3).ok_or(HyperionError::MalformedMessage)?,
+            raw.get(4).ok_or(HyperionError::MalformedMessage)?,
+        ]);
+        if mapping_revision == 0 {
+            return Err(HyperionError::StaleMapping);
+        }
+        let mut recipient = [0u8; 32];
+        let mut i = 0u32;
+        while i < 20 {
+            recipient[(i + 12) as usize] = raw.get(i + 5).ok_or(HyperionError::MalformedMessage)?;
+            i += 1;
+        }
+        if recipient[12..].iter().all(|byte| *byte == 0) {
+            return Err(HyperionError::InvalidDestination);
+        }
+        let mut nonce = [0u8; 8];
+        i = 0;
+        while i < 8 {
+            nonce[i as usize] = raw.get(i + 25).ok_or(HyperionError::MalformedMessage)?;
+            i += 1;
+        }
+        Ok(Self {
+            mapping_revision,
+            recipient: BytesN::from_array(env, &recipient),
+            router_nonce: u64::from_be_bytes(nonce),
+        })
     }
 }
 
@@ -486,6 +577,107 @@ pub fn validate_burn_boundary(
     Ok(())
 }
 
+// ------------------------------------------------------------------------------------------
+// Fee accounting
+// ------------------------------------------------------------------------------------------
+
+/// Format version of the CCTP fee accounting events (`cctp_fee_out` and `cctp_fee_in`).
+///
+/// Independent of the CCTP message version and of the existing `cctp_out` / `cctp_in` events,
+/// which keep their version 1 shape. A field added to, removed from or reinterpreted in either
+/// accounting event bumps this number; indexers must reject a version they do not know.
+pub const FEE_ACCOUNTING_VERSION: u32 = 1;
+
+/// What one outbound burn actually cost, measured rather than assumed.
+///
+/// Every amount is in the source token's own base units (the Stellar asset's decimals on the
+/// Soroban adapter). Nothing here is converted, scaled or rounded.
+///
+/// * `source_debit` is the exact amount the adapter held for this burn and approved to Circle.
+/// * `fee_budget` is the `max_fee` handed to Circle: the most the destination may deduct.
+/// * `burned` is the adapter's measured balance decrease across the messenger call.
+/// * `retained` is `source_debit - burned`, the dust Circle normalised away and left behind,
+///   which stays in the adapter until `sweep` moves it to the treasury.
+///
+/// `burned + retained == source_debit` always holds. On the destination, Circle mints
+/// `burned - fee_executed` with `fee_executed <= fee_budget`, so the destination deduction can be
+/// reconciled against this record without reimplementing Circle's arithmetic.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct BurnAccounting {
+    pub source_debit: i128,
+    pub fee_budget: i128,
+    pub burned: i128,
+    pub retained: i128,
+}
+
+impl BurnAccounting {
+    /// Derive the accounting from balances read immediately before and after the burn call.
+    ///
+    /// Refuses anything that cannot be a successful burn of this debit: no measured burn, a burn
+    /// larger than the debit (the exact approval makes that impossible for an honest token), or a
+    /// fee budget outside `0..source_debit`. A refusal aborts the transaction, so a failed or
+    /// inconsistent burn never commits accounting metadata.
+    pub fn measure(
+        source_debit: i128,
+        fee_budget: i128,
+        balance_before: i128,
+        balance_after: i128,
+    ) -> Result<Self, HyperionError> {
+        if source_debit <= 0 {
+            return Err(HyperionError::InvalidAmount);
+        }
+        if fee_budget < 0 || fee_budget >= source_debit {
+            return Err(HyperionError::FeeTooHigh);
+        }
+        let burned = balance_before
+            .checked_sub(balance_after)
+            .ok_or(HyperionError::DecimalOverflow)?;
+        if burned <= 0 || burned > source_debit {
+            return Err(HyperionError::InvalidAmount);
+        }
+        Ok(Self {
+            source_debit,
+            fee_budget,
+            burned,
+            retained: source_debit - burned,
+        })
+    }
+}
+
+/// The fee fields of an attested inbound burn, checked for internal consistency.
+///
+/// `burn_amount`, `fee_budget` and `fee_executed` are the wire values Circle attested.
+/// `minted` is `burn_amount - fee_executed`, the exact delta the receiving adapter must observe;
+/// `minted + fee_executed == burn_amount` always holds.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct MintSettlement {
+    pub burn_amount: i128,
+    pub fee_budget: i128,
+    pub fee_executed: i128,
+    pub minted: i128,
+}
+
+impl MintSettlement {
+    /// Same bounds the receiver has always enforced, under the same error.
+    pub fn from_burn(burn: &BurnMessage) -> Result<Self, HyperionError> {
+        if burn.amount <= 0
+            || burn.max_fee < 0
+            || burn.fee_executed < 0
+            || burn.max_fee > burn.amount
+            || burn.fee_executed > burn.max_fee
+            || burn.fee_executed >= burn.amount
+        {
+            return Err(HyperionError::InvalidAmount);
+        }
+        Ok(Self {
+            burn_amount: burn.amount,
+            fee_budget: burn.max_fee,
+            fee_executed: burn.fee_executed,
+            minted: burn.amount - burn.fee_executed,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,7 +835,7 @@ mod tests {
             StellarDestination::contract(BytesN::from_array(&env, &[0x22u8; 32])),
             StellarDestination::muxed(BytesN::from_array(&env, &[0x23u8; 32]), 9_000_001),
         ] {
-            let hook = HyperionHook::new(destination.clone());
+            let hook = HyperionHook::new(1, destination.clone());
             let wire = hook.encode(&env).unwrap();
             assert_eq!(HyperionHook::decode(&env, &wire).unwrap(), hook);
             assert_eq!(
@@ -657,7 +849,9 @@ mod tests {
     fn a_hook_travels_inside_a_burn_message_without_being_disturbed() {
         let env = Env::default();
         let destination = StellarDestination::account(BytesN::from_array(&env, &[0x31u8; 32]));
-        let wire = HyperionHook::new(destination.clone()).encode(&env).unwrap();
+        let wire = HyperionHook::new(1, destination.clone())
+            .encode(&env)
+            .unwrap();
         let body = burn_body(&env, 500, &wire);
 
         let recovered = BurnMessage::hook_data(&body).unwrap();
@@ -673,6 +867,7 @@ mod tests {
         let env = Env::default();
         let mut wire = Bytes::new(&env);
         wire.push_back(99);
+        wire.append(&Bytes::from_slice(&env, &1u32.to_be_bytes()));
         wire.append(
             &StellarDestination::account(BytesN::from_array(&env, &[0x41u8; 32])).encode(&env),
         );
@@ -696,6 +891,7 @@ mod tests {
         let env = Env::default();
         let mut wire = Bytes::new(&env);
         wire.push_back(HOOK_VERSION);
+        wire.append(&Bytes::from_slice(&env, &1u32.to_be_bytes()));
         wire.append(
             &StellarDestination::account(BytesN::from_array(&env, &[0u8; 32])).encode(&env),
         );
@@ -708,19 +904,46 @@ mod tests {
     #[test]
     fn a_hook_says_whether_the_recipient_has_to_opt_in_first() {
         let env = Env::default();
-        let account = HyperionHook::new(StellarDestination::account(BytesN::from_array(
-            &env,
-            &[0x51u8; 32],
-        )));
-        let contract = HyperionHook::new(StellarDestination::contract(BytesN::from_array(
-            &env,
-            &[0x52u8; 32],
-        )));
+        let account = HyperionHook::new(
+            1,
+            StellarDestination::account(BytesN::from_array(&env, &[0x51u8; 32])),
+        );
+        let contract = HyperionHook::new(
+            1,
+            StellarDestination::contract(BytesN::from_array(&env, &[0x52u8; 32])),
+        );
         // A classic account needs a trustline and a contract does not, which decides whether a
         // delivery can go straight through or has to be parked.
         assert!(account.needs_trustline());
         assert!(!contract.needs_trustline());
         assert_eq!(account.kind(), AddressKind::Account);
+    }
+
+    #[test]
+    fn cctp_outbound_note_binds_the_mapping_revision_recipient_and_nonce() {
+        let env = Env::default();
+        let mut recipient = [0u8; 32];
+        recipient[12..].copy_from_slice(&[0xA1u8; 20]);
+        let note = CctpOutboundNote {
+            mapping_revision: 7,
+            recipient: BytesN::from_array(&env, &recipient),
+            router_nonce: 0x0102_0304_0506_0708,
+        };
+        let encoded = note.encode(&env).unwrap();
+        assert_eq!(CctpOutboundNote::decode(&env, &encoded), Ok(note));
+    }
+
+    #[test]
+    fn cctp_outbound_note_refuses_missing_mapping_revision() {
+        let env = Env::default();
+        let mut recipient = [0u8; 32];
+        recipient[12..].copy_from_slice(&[0xA1u8; 20]);
+        let note = CctpOutboundNote {
+            mapping_revision: 0,
+            recipient: BytesN::from_array(&env, &recipient),
+            router_nonce: 1,
+        };
+        assert_eq!(note.encode(&env), Err(HyperionError::StaleMapping));
     }
 
     #[test]
@@ -798,5 +1021,104 @@ mod tests {
     fn minimum_peer_rotation_delay_is_at_least_one_hour() {
         assert_eq!(MIN_PEER_ROTATION_DELAY, 3_600);
         assert_eq!(DEFAULT_ROTATION_OVERLAP_WINDOW, 86_400);
+    }
+
+    #[test]
+    fn burn_accounting_conserves_the_debit_in_source_units() {
+        // Existing adapter dust in the starting balance does not leak into this burn's record.
+        let exact = BurnAccounting::measure(1_000_000, 0, 1_000_007, 7).unwrap();
+        assert_eq!(exact.burned, 1_000_000);
+        assert_eq!(exact.retained, 0);
+
+        let dusty = BurnAccounting::measure(1_000_009, 500, 1_000_009, 9).unwrap();
+        assert_eq!(dusty.burned, 1_000_000);
+        assert_eq!(dusty.retained, 9);
+        assert_eq!(dusty.fee_budget, 500);
+        assert_eq!(dusty.burned + dusty.retained, dusty.source_debit);
+
+        let big = i128::MAX - 1;
+        let edge = BurnAccounting::measure(big, big - 1, big, 0).unwrap();
+        assert_eq!(edge.burned, big);
+        assert_eq!(edge.retained, 0);
+    }
+
+    #[test]
+    fn burn_accounting_refuses_anything_that_is_not_a_successful_burn() {
+        // Nothing burned: a provider that returned without pulling funds.
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, 1_000, 1_000),
+            Err(HyperionError::InvalidAmount)
+        );
+        // Balance went up across the call.
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, 1_000, 1_001),
+            Err(HyperionError::InvalidAmount)
+        );
+        // More than the debit left the adapter.
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, 2_000, 999),
+            Err(HyperionError::InvalidAmount)
+        );
+        assert_eq!(
+            BurnAccounting::measure(0, 0, 1_000, 0),
+            Err(HyperionError::InvalidAmount)
+        );
+        assert_eq!(
+            BurnAccounting::measure(1_000, -1, 1_000, 0),
+            Err(HyperionError::FeeTooHigh)
+        );
+        assert_eq!(
+            BurnAccounting::measure(1_000, 1_000, 1_000, 0),
+            Err(HyperionError::FeeTooHigh)
+        );
+        assert_eq!(
+            BurnAccounting::measure(1_000, 0, i128::MIN, 1),
+            Err(HyperionError::DecimalOverflow)
+        );
+    }
+
+    fn burn_with(env: &Env, amount: i128, max_fee: i128, fee_executed: i128) -> BurnMessage {
+        let word = BytesN::from_array(env, &[0u8; 32]);
+        BurnMessage {
+            version: BURN_MESSAGE_VERSION,
+            burn_token: word.clone(),
+            mint_recipient: word.clone(),
+            amount,
+            message_sender: word,
+            max_fee,
+            fee_executed,
+            expiration_block: 0,
+        }
+    }
+
+    #[test]
+    fn mint_settlement_conserves_the_attested_burn() {
+        let env = Env::default();
+        let settled = MintSettlement::from_burn(&burn_with(&env, 1_000, 30, 12)).unwrap();
+        assert_eq!(settled.minted, 988);
+        assert_eq!(settled.fee_budget, 30);
+        assert_eq!(settled.minted + settled.fee_executed, settled.burn_amount);
+
+        let free = MintSettlement::from_burn(&burn_with(&env, 1_000, 0, 0)).unwrap();
+        assert_eq!(free.minted, 1_000);
+    }
+
+    #[test]
+    fn mint_settlement_keeps_the_receivers_fee_bounds() {
+        let env = Env::default();
+        for (amount, max_fee, executed) in [
+            (0, 0, 0),
+            (1_000, 1_001, 0),
+            (1_000, 10, 11),
+            (1_000, 1_000, 1_000),
+            (1_000, -1, 0),
+            (1_000, 10, -1),
+        ] {
+            assert_eq!(
+                MintSettlement::from_burn(&burn_with(&env, amount, max_fee, executed)),
+                Err(HyperionError::InvalidAmount),
+                "{amount}/{max_fee}/{executed}"
+            );
+        }
     }
 }

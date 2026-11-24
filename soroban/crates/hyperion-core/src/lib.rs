@@ -12,6 +12,9 @@
 //! reproducible trace. Chain-specific time semantics (Stellar ledger sequence versus EVM
 //! block timestamps) are modeled explicitly rather than assumed to be interchangeable.
 //!
+//! Replay identity is the route-scoped full-width provider message ID. A source nonce or a
+//! shortened display form is diagnostic metadata only and must never become the replay key.
+//!
 //! # Deployment trust assumptions
 //!
 //! The active deployment is Stellar Testnet outbound ITS/CCTP; these notes do not activate
@@ -62,14 +65,15 @@ pub use axelar::{
 };
 pub use axelar::{
     verify_inbound_reconciliation, verify_outbound_reconciliation, CandidateInboundPayment,
-    CandidatePayment, InboundNote, OutboundNote, ReconciliationDiscrepancy,
-    MAX_INBOUND_NOTE_LEN, MIN_PEER_ROTATION_DELAY,
+    CandidatePayment, InboundNote, OutboundNote, ReconciliationDiscrepancy, MAX_INBOUND_NOTE_LEN,
+    MIN_PEER_ROTATION_DELAY,
 };
 pub use axelar::{TokenMappingConflict, TokenMappingReport};
 pub use cctp::{
-    validate_burn_boundary, ApprovalDiagnostics, ApprovalFinding, BurnMessage, CctpMessage,
-    HyperionHook, APPROVAL_DIAGNOSTICS_VERSION, DOCUMENTED_RESIDUAL_ALLOWANCE,
-    MAX_CCTP_BURN_BODY_LEN, MAX_CCTP_HOOK_LEN, MAX_CCTP_MESSAGE_LEN,
+    validate_burn_boundary, ApprovalDiagnostics, ApprovalFinding, BurnAccounting, BurnMessage,
+    CctpMessage, HyperionHook, MintSettlement, APPROVAL_DIAGNOSTICS_VERSION,
+    DOCUMENTED_RESIDUAL_ALLOWANCE, FEE_ACCOUNTING_VERSION, MAX_CCTP_BURN_BODY_LEN,
+    MAX_CCTP_HOOK_LEN, MAX_CCTP_MESSAGE_LEN,
 };
 pub use error::HyperionError;
 #[cfg(not(target_family = "wasm"))]
@@ -81,7 +85,8 @@ pub use maintenance::{
     MAX_MAINTENANCE_BATCH,
 };
 pub use model::{
-    ChainClock, ModelError, ModelRouter, Operation, Rail, Trace, TraceStep, MODEL_MAX_CLAIMS,
+    timelock_boundary_cases, timelock_boundary_cases_for, ChainClock, ModelError, ModelRouter,
+    Operation, Rail, TimelockBoundaryCase, Trace, TraceStep, MODEL_MAX_CLAIMS,
 };
 pub use route::RouteKind;
 pub use strkey::{StrkeyDestination, STRKEY_LEN_MUXED, STRKEY_LEN_PLAIN};

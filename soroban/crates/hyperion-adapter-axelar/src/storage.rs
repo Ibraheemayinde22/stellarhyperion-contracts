@@ -63,6 +63,13 @@ pub fn link(env: &Env, chain: &String) -> Option<ChainLink> {
     found
 }
 
+/// `link` without the TTL bump, for read-only diagnostics.
+pub fn peek_link(env: &Env, chain: &String) -> Option<ChainLink> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Link(chain.clone()))
+}
+
 pub fn chain_of(env: &Env, axelar_chain: &String) -> Option<String> {
     let key = DataKey::Source(axelar_chain.clone());
     let found: Option<String> = env.storage().persistent().get(&key);

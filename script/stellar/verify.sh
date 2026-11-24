@@ -16,6 +16,11 @@
 #
 # Usage: script/stellar/verify.sh
 source "$(dirname "$0")/lib.sh"
+if is_dry_run; then
+  command -v node >/dev/null || die "node is not on PATH"
+  node "$CONTRACTS_ROOT/script/stellar/unsigned-plan.mjs" verify || die "unsigned verify plan refused"
+  exit 0
+fi
 require_tools
 
 RECORD="${HYPERION_RECORD:-$RECORD_DIR/stellar-$NETWORK-phase1.json}"
@@ -26,6 +31,7 @@ const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
 process.stdout.write(Object.keys(d.networks??{})[0]??"");
 ' "$RECORD")
 [ -n "$CHAIN_KEY" ] || die "the record names no network"
+assert_record_network "$RECORD" "$CHAIN_KEY"
 
 # Lifecycle metadata. A record is active unless it declares otherwise. Parsed, not grepped.
 LIFECYCLE=$(node -e '
@@ -48,6 +54,14 @@ say "file             $RECORD"
 say "network key      $CHAIN_KEY"
 say "router           $ROUTER"
 say "lifecycle        $LC_STATUS"
+INITIALIZATION_POSITION=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const p=d.networks[process.argv[2]].positions?.initialization;process.stdout.write(p?`${p.txHash}@${p.ledger}`:"unavailable")' "$RECORD" "$CHAIN_KEY")
+ACTIVATION_COUNT=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(d.networks[process.argv[2]].positions?.activation?.length??0))' "$RECORD" "$CHAIN_KEY")
+say "initialization    $INITIALIZATION_POSITION"
+if [ "$ACTIVATION_COUNT" -gt 0 ]; then
+  say "activation txs    $ACTIVATION_COUNT recorded"
+else
+  say "WARNING           activation transaction evidence is unavailable"
+fi
 
 if [ "$LC_STATUS" != "active" ]; then
   printf '\033[33mWARNING: this record is %s and is not an active deployment.\033[0m\n' "$LC_STATUS"
@@ -224,6 +238,13 @@ fi
 say "Historical cleanup: claim_history distinguishes Live, intentional Archived(id), and Unavailable (restore via RPC)."
 say "Cost capture (read-only): node script/stellar/storage-cost.mjs --rpc RPC_URL --request recorded-keysets.json"
 say "Cost replay: node script/stellar/storage-cost.mjs --record recorded-rpc.json"
+
+note "consumer deployment copies"
+say "Read-only cross-repository consistency check (backend and frontend at explicit commits):"
+say "  script/stellar/check-deployment-copies.sh \\"
+say "    --copy stellarhyperion-backend=git:../stellarhyperion-backend:\$BACKEND_COMMIT:deployments/stellar-testnet-phase1.json \\"
+say "    --copy stellarhyperion-frontend=git:../stellarhyperion-frontend:\$FRONTEND_COMMIT:deployments/stellar-testnet-phase1.json"
+say "Archived records are reported as archived, never rewritten. See docs/TESTNET_ACTIVATION.md."
 
 note "rollback feasibility"
 say "Read-only report — signs nothing, executes nothing:"

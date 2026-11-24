@@ -8,15 +8,22 @@
 //!
 //! # Inbound delivery resolution
 //!
-//! Inbound transfers verify signed validator messages from Allbridge Core. The digest signed by
-//! the validators covers `(amount, recipient, source_chain_id, destination_chain_id, receive_token, nonce)`.
+//! Inbound transfers verify domain-separated validator signatures. The signed envelope is
+//! `SHA-256("HYPERION_ALLBRIDGE_VALIDATOR_V2" || route_tag || network_id || adapter || epoch ||
+//! validator_key || message_id)`, and `message_id` is Allbridge's provider digest over
+//! `(amount, recipient, source_chain_id, destination_chain_id, receive_token, nonce)`. The route,
+//! network, adapter, validator epoch and key, recipient, amount, source lane, local token and nonce
+//! are therefore all authenticated together.
+//!
 //! The adapter verifies the ed25519 signature against the registered validator key, guards against
-//! replay attacks, ensures the local asset mapping is valid, pre-authorises the transfer to the router,
-//! and forwards the verified delivery to `router.bridge_in`.
+//! replay attacks, ensures the local asset mapping is valid, pre-authorises the transfer to the
+//! router, and forwards the verified delivery to `router.bridge_in`.
 //!
 //! This is a configured-validator trust model: successful verification proves that the configured
 //! Allbridge key signed the message, not that Circle or Axelar independently attested to it.
 //! Deployment readiness is assessed off-chain; this contract does not implement an activation gate.
+//! The only exception to domain separation is the legacy epoch-zero form, whose raw provider digest
+//! is accepted solely while an administrator has opened a bounded migration window.
 //!
 //! One consequence worth stating plainly: `receive_amount_min`, the slippage guard, is chosen by
 //! whoever calls `receive_tokens` on the destination chain. Outbound from Stellar that is not
@@ -82,15 +89,47 @@ use hyperion_core::{
 };
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractimpl, token, vec, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
-    U256,
+    contract, contractclient, contractimpl, contracttype, token, vec, Address, Bytes, BytesN, Env,
+    IntoVal, String, Symbol, Vec, U256,
 };
 
 use rail::{AllbridgeBridgeClient, AllbridgeMessengerClient, STELLAR_CHAIN_ID};
 use types::{
-    AssetLink, ChainLane, Config, OutboundRecord, PendingValidator, ProviderStatus,
-    RecoveryDecision, ValidatorEpoch,
+    AssetLink, ChainLane, Config, InboundAuditReport, InboundAuditRequest, OutboundRecord,
+    PendingValidator, ProviderEvidence, ProviderStatus, RecoveryDecision, ValidatorEpoch,
 };
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuditClaim {
+    pub id: u64,
+    pub recipient: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub route: RouteKind,
+    pub source_chain: String,
+    pub source_nonce: u64,
+    pub created_at: u64,
+    pub settled: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuditClaimProvenance {
+    pub route: RouteKind,
+    pub source_chain: String,
+    pub message_id: BytesN<32>,
+}
+
+#[contractclient(name = "RouterAuditClient")]
+#[expect(
+    dead_code,
+    reason = "This trait generates the client for the deployed router interface"
+)]
+trait RouterAudit {
+    fn audit_claim(env: Env, id: u64) -> Option<AuditClaim>;
+    fn get_claim_provenance(env: Env, id: u64) -> Option<AuditClaimProvenance>;
+}
 
 #[contract]
 pub struct AllbridgeAdapter;
@@ -342,12 +381,25 @@ impl AllbridgeAdapter {
             return Err(HyperionError::Unauthorized);
         }
 
-        let digest = rail::validator_attestation_digest(
-            &env,
-            &env.current_contract_address(),
-            &validator,
-            &message_id,
-        )?;
+        // Fresh deployments sign the domain-bound envelope. Only an upgraded deployment still
+        // holding epoch-zero storage may present the raw provider digest, and only while an
+        // administrator has explicitly opened a bounded migration window. With no window set,
+        // which is the default, a legacy signature is refused like any other unauthorized one.
+        let digest = if validator.epoch == 0 {
+            let deadline =
+                storage::legacy_attestation_deadline(&env).ok_or(HyperionError::Unauthorized)?;
+            if env.ledger().timestamp() > deadline {
+                return Err(HyperionError::RequestExpired);
+            }
+            message_id.clone()
+        } else {
+            rail::validator_attestation_digest(
+                &env,
+                &env.current_contract_address(),
+                &validator,
+                &message_id,
+            )?
+        };
         env.crypto()
             .ed25519_verify(&validator.validator, &digest.into(), &signature);
 
@@ -379,12 +431,6 @@ impl AllbridgeAdapter {
             }),
         ]);
 
-        let mut nonce_bytes = [0u8; 32];
-        nonce.to_be_bytes().copy_into_slice(&mut nonce_bytes);
-        let mut tail = [0u8; 8];
-        tail.copy_from_slice(&nonce_bytes[24..32]);
-        let display_nonce = u64::from_be_bytes(tail);
-
         let claim_id = RouterClient::new(&env, &cfg.router).bridge_in(
             &this,
             &RouteKind::Allbridge,
@@ -397,7 +443,7 @@ impl AllbridgeAdapter {
             },
             &Origin {
                 chain: source_chain.clone(),
-                nonce: display_nonce,
+                nonce: display_nonce(&nonce),
                 message_id: message_id.clone(),
                 sender: BytesN::from_array(&env, &[0u8; 32]),
             },
@@ -810,6 +856,32 @@ impl AllbridgeAdapter {
         Ok(())
     }
 
+    /// Open the bounded window in which epoch-zero provider-digest signatures are accepted.
+    ///
+    /// This exists only for an upgraded deployment whose signers have not yet moved to the
+    /// domain-bound envelope. It is off by default, cannot be opened for more than seven days,
+    /// and expires without any further call. A fresh epoch-one deployment never needs it.
+    pub fn enable_legacy_attestations(env: Env, valid_until: u64) -> Result<(), HyperionError> {
+        require_admin(&env)?;
+        let now = env.ledger().timestamp();
+        if valid_until <= now
+            || valid_until > now.saturating_add(storage::MAX_LEGACY_ATTESTATION_WINDOW)
+        {
+            return Err(HyperionError::InvalidWindow);
+        }
+        storage::set_legacy_attestation_deadline(&env, valid_until);
+        events::LegacyAttestationWindowSet { valid_until }.publish(&env);
+        Ok(())
+    }
+
+    /// Close the legacy window early, refusing raw provider digests from that point on.
+    pub fn disable_legacy_attestations(env: Env) -> Result<(), HyperionError> {
+        require_admin(&env)?;
+        storage::clear_legacy_attestation_deadline(&env);
+        events::LegacyAttestationWindowSet { valid_until: 0 }.publish(&env);
+        Ok(())
+    }
+
     pub fn set_emergency_disabled(env: Env, disabled: bool) -> Result<(), HyperionError> {
         let _ = require_admin(&env)?;
         storage::set_emergency_disabled(&env, disabled);
@@ -927,6 +999,12 @@ impl AllbridgeAdapter {
         active_validator(&env)
     }
 
+    /// The end of the legacy acceptance window, or zero when raw provider digests are refused.
+    pub fn legacy_attestation_deadline(env: Env) -> Result<u64, HyperionError> {
+        let _ = storage::config(&env)?;
+        Ok(storage::legacy_attestation_deadline(&env).unwrap_or(0))
+    }
+
     /// Return source evidence; caller-asserted status never authorizes a second debit.
     pub fn reconcile_outbound(
         env: Env,
@@ -950,11 +1028,137 @@ impl AllbridgeAdapter {
         })
     }
 
+    /// Compare a signed inbound intent with caller-supplied provider evidence and a router claim.
+    ///
+    /// This view never extends storage TTLs or changes adapter or router state. `verified` means
+    /// the configured validator signature and all supplied fields agree; provider evidence itself
+    /// is not independently authenticated by this contract.
+    pub fn audit_inbound(
+        env: Env,
+        request: InboundAuditRequest,
+    ) -> Result<InboundAuditReport, HyperionError> {
+        let cfg = storage::config(&env)?;
+        let intent = request.intent;
+        if intent.amount <= 0 {
+            return Err(HyperionError::InvalidAmount);
+        }
+
+        let validator = active_validator(&env)?;
+        let source_chain =
+            storage::chain_of(&env, intent.source_chain_id).ok_or(HyperionError::UnknownChain)?;
+        let asset_key = storage::DataKey::Asset(intent.token.clone(), intent.source_chain_id);
+        let asset: Option<AssetLink> = env.storage().persistent().get(&asset_key);
+        if asset.is_none() {
+            return Err(HyperionError::TokenNotMapped);
+        }
+
+        let (kind, recipient_key) = codec::address_key(&env, &intent.recipient)?;
+        assert_route_supports(RouteKind::Allbridge, kind)?;
+        let amount = u128::try_from(intent.amount).map_err(|_| HyperionError::InvalidAmount)?;
+        let recipient = BytesN::from_array(&env, &recipient_key);
+        let receive_token = BytesN::from_array(&env, &codec::contract_key(&env, &intent.token)?);
+        let message_id = rail::hash_message(
+            &env,
+            amount,
+            &recipient,
+            intent.source_chain_id,
+            STELLAR_CHAIN_ID,
+            &receive_token,
+            &intent.nonce,
+        );
+        let digest = rail::validator_attestation_digest(
+            &env,
+            &env.current_contract_address(),
+            &validator,
+            &message_id,
+        )?;
+        env.crypto()
+            .ed25519_verify(&validator.validator, &digest.into(), &intent.signature);
+
+        let provider_evidence_present =
+            matches!(&request.provider_evidence, ProviderEvidence::Present(_));
+        let provider_matches_intent = match request.provider_evidence {
+            ProviderEvidence::Missing => false,
+            ProviderEvidence::Present(evidence) => {
+                evidence.amount == amount
+                    && evidence.recipient == recipient
+                    && evidence.source_chain_id == intent.source_chain_id
+                    && evidence.destination_chain_id == STELLAR_CHAIN_ID
+                    && evidence.receive_token == receive_token
+                    && evidence.nonce == intent.nonce
+                    && evidence.message_id == message_id
+            }
+        };
+
+        let (
+            payout_record_present,
+            payout_provenance_present,
+            payout_matches_intent,
+            payout_settled,
+        ) = if let Some(claim_id) = request.claim_id {
+            let router = RouterAuditClient::new(&env, &cfg.router);
+            let claim = router.audit_claim(&claim_id);
+            let provenance = router.get_claim_provenance(&claim_id);
+            let claim_matches = claim.as_ref().is_some_and(|claim| {
+                claim.id == claim_id
+                    && claim.route == RouteKind::Allbridge
+                    && claim.recipient == intent.recipient
+                    && claim.token == intent.token
+                    && claim.amount == intent.amount
+                    && claim.source_chain == source_chain
+                    && claim.source_nonce == display_nonce(&intent.nonce)
+            });
+            let provenance_matches = provenance.as_ref().is_some_and(|provenance| {
+                provenance.route == RouteKind::Allbridge
+                    && provenance.source_chain == source_chain
+                    && provenance.message_id == message_id
+            });
+            let payout_record_present = claim.is_some();
+            let payout_provenance_present = provenance.is_some();
+            let payout_settled = claim.as_ref().is_some_and(|claim| claim.settled);
+            (
+                payout_record_present,
+                payout_provenance_present,
+                claim_matches && provenance_matches,
+                payout_settled,
+            )
+        } else {
+            (false, false, false, false)
+        };
+
+        let verified = provider_evidence_present
+            && provider_matches_intent
+            && payout_record_present
+            && payout_matches_intent
+            && payout_settled;
+
+        Ok(InboundAuditReport {
+            message_id,
+            signature_valid: true,
+            provider_evidence_present,
+            provider_matches_intent,
+            payout_record_present,
+            payout_provenance_present,
+            payout_matches_intent,
+            payout_settled,
+            verified,
+            unresolved_trust_assumption: true,
+        })
+    }
+
     /// Check if an inbound message has already been processed.
     pub fn is_processed(env: Env, message_id: BytesN<32>) -> Result<bool, HyperionError> {
         let _ = storage::config(&env)?;
         Ok(storage::is_processed(&env, &message_id))
     }
+}
+
+fn display_nonce(nonce: &U256) -> u64 {
+    let mut nonce_bytes = [0u8; 32];
+    nonce.to_be_bytes().copy_into_slice(&mut nonce_bytes);
+    let mut tail = [0u8; 8];
+    tail.copy_from_slice(&nonce_bytes[24..32]);
+    u64::from_be_bytes(tail)
 }
 
 /// Read the config and insist the admin signed for whatever is about to happen.
@@ -964,7 +1168,7 @@ fn require_admin(env: &Env) -> Result<Config, HyperionError> {
     Ok(cfg)
 }
 
-/// Retain epoch-zero signatures for legacy Validator-only storage until delayed migration.
+/// Retain an epoch-zero key for legacy Validator-only storage until delayed migration.
 fn active_validator(env: &Env) -> Result<ValidatorEpoch, HyperionError> {
     storage::validator_epoch(env)
         .or_else(|| {

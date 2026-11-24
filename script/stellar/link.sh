@@ -18,6 +18,11 @@
 #   AXELAR_TOKEN_ID=0x... \
 #   script/stellar/link.sh
 source "$(dirname "$0")/lib.sh"
+if is_dry_run; then
+  command -v node >/dev/null || die "node is not on PATH"
+  node "$CONTRACTS_ROOT/script/stellar/unsigned-plan.mjs" link || die "unsigned link plan refused"
+  exit 0
+fi
 require_tools
 require_stellar_operation_target
 require_identity
@@ -38,6 +43,7 @@ fi
 
 CHAIN_KEY=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(Object.keys(d.networks??{})[0]??"")' "$RECORD")
 [ -n "$CHAIN_KEY" ] || die "the record names no network"
+assert_record_network "$RECORD" "$CHAIN_KEY"
 
 PEER="$(peer_chain)"
 SAC=$(node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const t=d.networks[process.argv[2]].tokens;process.stdout.write(t[Object.keys(t)[0]].sacId)' "$RECORD" "$CHAIN_KEY")
