@@ -217,7 +217,7 @@ const sdkStrkeyMax = constant(sdkAddresses, "STRKEY_LEN_MUXED");
 const rustNoteMax = 1 + 2 + rustStrkeyMax + 8;
 const solidityNoteMax = 1 + 2 + constant(solidityNotes, "MAX_STRKEY_LEN") + 8;
 const sdkNoteMax = 1 + 2 + sdkStrkeyMax + 8;
-const rustHookMax = 1 + constant(rustAddress, "TAGGED_LEN_MUXED");
+const rustHookMax = 1 + 4 + constant(rustAddress, "TAGGED_LEN_MUXED");
 const solidityHookMax = constant(solidityNotes, "MAX_CCTP_HOOK_LEN");
 const sdkHookMax = constant(sdkNotes, "MAX_CCTP_HOOK_LEN");
 const rustReasonMax = constant(rustTypes, "MAX_REASON_LEN");
@@ -248,7 +248,7 @@ if (!/MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*MAX_STRKEY_LEN\s*\+\s*8/.test
 if (!/MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*STRKEY_LEN_MUXED\s*\+\s*8/.test(sdkNotes)) {
   throw new Error("SDK inbound note maximum expression drifted");
 }
-if (!/MAX_CCTP_HOOK_LEN\s*:\s*u32\s*=\s*1\s*\+\s*crate::address::TAGGED_LEN_MUXED/.test(rustCctp)) {
+if (!/MAX_CCTP_HOOK_LEN\s*:\s*u32\s*=\s*1\s*\+\s*4\s*\+\s*crate::address::TAGGED_LEN_MUXED/.test(rustCctp)) {
   throw new Error("Rust CCTP hook maximum expression drifted");
 }
 NODE

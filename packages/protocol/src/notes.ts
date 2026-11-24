@@ -80,8 +80,8 @@ const INBOUND_NOTE_MIN = 1 + 3 + 8;
 /** Largest inbound note: version, kind, length, muxed strkey and nonce. */
 export const MAX_INBOUND_NOTE_LEN = 1 + 2 + STRKEY_LEN_MUXED + 8;
 
-/** Largest CCTP hook: version, tag, 32-byte key and muxed id. */
-export const MAX_CCTP_HOOK_LEN = 42;
+/** Largest CCTP hook: version, mapping revision, tag, key and muxed id. */
+export const MAX_CCTP_HOOK_LEN = 46;
 
 /** Axelar's own envelope version for "there is a payload and it is for a contract". */
 export const METADATA_CONTRACT_CALL = 0;

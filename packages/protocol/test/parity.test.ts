@@ -818,11 +818,11 @@ describe("the constants both chains agree on", () => {
       /MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*STRKEY_LEN_MUXED\s*\+\s*8/,
     );
 
-    expect(MAX_CCTP_HOOK_LEN).toBe(42);
+    expect(MAX_CCTP_HOOK_LEN).toBe(46);
     expect(rustCctp).toMatch(
-      /MAX_CCTP_HOOK_LEN\s*:\s*u32\s*=\s*1\s*\+\s*crate::address::TAGGED_LEN_MUXED/,
+      /MAX_CCTP_HOOK_LEN\s*:\s*u32\s*=\s*1\s*\+\s*4\s*\+\s*crate::address::TAGGED_LEN_MUXED/,
     );
-    expect(solidityNotes).toMatch(/MAX_CCTP_HOOK_LEN\s*=\s*42/);
+    expect(solidityNotes).toMatch(/MAX_CCTP_HOOK_LEN\s*=\s*46/);
 
     expect(MAX_CANCELLATION_NOTE_LEN).toBe(128);
     expect(rustConstValue(rustRouterTypes, "MAX_REASON_LEN")).toBe(MAX_CANCELLATION_NOTE_LEN);

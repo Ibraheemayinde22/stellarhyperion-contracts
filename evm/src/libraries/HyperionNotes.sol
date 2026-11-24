@@ -48,7 +48,7 @@ library HyperionNotes {
     /// @dev Largest supported inbound note with a muxed Stellar strkey.
     uint256 internal constant MAX_INBOUND_NOTE_LEN = 1 + 2 + MAX_STRKEY_LEN + 8;
     /// @dev Largest supported CCTP hook with a tagged muxed destination.
-    uint256 internal constant MAX_CCTP_HOOK_LEN = 42;
+    uint256 internal constant MAX_CCTP_HOOK_LEN = 46;
 
     /// @notice Whether this build has a codec registered for `version`.
     function supportsNoteVersion(uint8 version) internal pure returns (bool) {
