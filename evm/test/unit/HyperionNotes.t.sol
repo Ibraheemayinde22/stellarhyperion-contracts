@@ -113,6 +113,19 @@ contract HyperionNotesTest is Test {
         assertEq(uint8(note[2]), 69);
     }
 
+    function test_the_maximum_note_is_accepted_and_one_extra_byte_is_refused() public {
+        bytes memory note = notes.encodeInboundNote(AddressKind.MuxedAccount, M_ADDR, NONCE);
+        assertEq(note.length, MAX_INBOUND_NOTE_LEN);
+        (AddressKind kind, string memory strkey, uint64 nonce) = notes.decodeInboundNote(note);
+        assertEq(uint256(kind), uint256(AddressKind.MuxedAccount));
+        assertEq(strkey, M_ADDR);
+        assertEq(nonce, NONCE);
+
+        bytes memory oversized = bytes.concat(note, hex"00");
+        vm.expectRevert(MalformedMessage.selector);
+        notes.decodeInboundNote(oversized);
+    }
+
     function test_every_kind_of_destination_round_trips() public view {
         _roundTrip(AddressKind.Account, G_ADDR);
         _roundTrip(AddressKind.Contract, C_ADDR);

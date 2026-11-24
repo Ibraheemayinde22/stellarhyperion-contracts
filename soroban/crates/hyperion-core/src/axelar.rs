@@ -127,6 +127,9 @@ pub const OUTBOUND_NOTE_LEN: u32 = 29;
 /// The shortest an inbound note can be: version, kind, length, a strkey, a nonce.
 const INBOUND_NOTE_MIN: u32 = 1 + 3 + 8;
 
+/// The longest inbound note: version, kind, length, muxed strkey and nonce.
+pub const MAX_INBOUND_NOTE_LEN: u32 = 1 + 2 + crate::strkey::STRKEY_LEN_MUXED + 8;
+
 /// Eight bytes of big-endian nonce sitting at the end of a note.
 const NONCE_LEN: u32 = 8;
 
@@ -236,7 +239,7 @@ impl InboundNote {
     }
 
     fn decode_v1(env: &Env, raw: &Bytes) -> Result<Self, HyperionError> {
-        if raw.len() < INBOUND_NOTE_MIN {
+        if raw.len() < INBOUND_NOTE_MIN || raw.len() > MAX_INBOUND_NOTE_LEN {
             return Err(HyperionError::MalformedMessage);
         }
         let nonce = read_nonce(raw, raw.len() - NONCE_LEN)?;

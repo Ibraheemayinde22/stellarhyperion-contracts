@@ -20,6 +20,7 @@ mod maintenance;
 mod operations;
 mod outbound;
 mod quotes;
+mod resource_limits;
 mod stateful_model;
 mod storage_maintenance;
 mod trust_surface;

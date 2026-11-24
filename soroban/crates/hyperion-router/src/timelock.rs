@@ -5,7 +5,8 @@ use soroban_sdk::{Address, ContractExecutable, Env, String};
 use crate::storage;
 use crate::types::{
     ActionAuditStatus, AdminAction, CancelReason, Config, MigrationStatus, ParsedAction,
-    QueuedAction, RouteConfig, TokenConfig, CURRENT_SCHEMA_VERSION, MAX_REASON_LEN,
+    QueuedAction, RouteConfig, TokenConfig, CURRENT_SCHEMA_VERSION, MAX_QUEUED_ACTION_CHAIN_LEN,
+    MAX_REASON_LEN,
 };
 
 /// Shortest and longest delay the router will accept.
@@ -151,6 +152,11 @@ fn validate(action: &ParsedAction) -> Result<(), HyperionError> {
             return Err(HyperionError::InvalidLimit);
         }
         ParsedAction::BeginStorageMigration(version) if *version != CURRENT_SCHEMA_VERSION => {
+            return Err(HyperionError::InvalidLimit);
+        }
+        ParsedAction::SetDestinationFlowLimit(_, _, chain, _)
+            if chain.len() > MAX_QUEUED_ACTION_CHAIN_LEN =>
+        {
             return Err(HyperionError::InvalidLimit);
         }
         _ => {}

@@ -142,6 +142,10 @@ describe("inbound notes, which travel to Stellar", () => {
     expect(note.length).toBe(80);
     expect(note[1]).toBe(AddressKind.MuxedAccount);
     expect(note[2]).toBe(STRKEY_LEN_MUXED);
+    expect(decodeInboundNote(note).strkey).toBe(M_ADDR);
+    expect(() => decodeInboundNote(concatBytes(note, new Uint8Array([0])))).toThrow(
+      /MalformedMessage/,
+    );
   });
 
   it("reads back what it wrote, for all three kinds", () => {
@@ -223,6 +227,7 @@ describe("the CCTP hook", () => {
 
   it("refuses a length that is neither thirty four nor forty two", () => {
     expect(() => decodeCctpHook(new Uint8Array(35))).toThrow(/MalformedMessage/);
+    expect(() => decodeCctpHook(new Uint8Array(43))).toThrow(/MalformedMessage/);
   });
 
   it("refuses a kind byte that does not match the length", () => {

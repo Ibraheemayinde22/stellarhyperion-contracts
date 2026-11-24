@@ -185,6 +185,71 @@ corpus_cases=$(node script/malformed-message-corpus.mjs \
   || die "malformed-message corpus"
 echo "  corpus: $corpus_cases cases"
 
+note "reporting parser and action-note limits"
+node <<'NODE'
+const fs = require("node:fs");
+const read = (path) => fs.readFileSync(path, "utf8");
+const capture = (source, expression, name) => {
+  const match = expression.exec(source);
+  if (!match) throw new Error(`missing ${name}`);
+  return Number(match[1]);
+};
+const rustStrkey = read("soroban/crates/hyperion-core/src/strkey.rs");
+const rustAddress = read("soroban/crates/hyperion-core/src/address.rs");
+const rustAxelar = read("soroban/crates/hyperion-core/src/axelar.rs");
+const rustCctp = read("soroban/crates/hyperion-core/src/cctp.rs");
+const rustTypes = read("soroban/crates/hyperion-router/src/types.rs");
+const solidityAddress = read("evm/src/libraries/StellarAddress.sol");
+const solidityNotes = read("evm/src/libraries/HyperionNotes.sol");
+const solidityRouter = read("evm/src/HyperionRouter.sol");
+const solidityIts = read("evm/src/adapters/AxelarItsAdapter.sol");
+const sdkAddresses = read("packages/protocol/src/addresses.ts");
+const sdkNotes = read("packages/protocol/src/notes.ts");
+const sdkTimelock = read("packages/protocol/src/timelock.ts");
+const constant = (source, name) =>
+  capture(source, new RegExp(`${name}\\s*(?::\\s*\\w+)?\\s*=\\s*(\\d+)`), name);
+const rustStrkeyMax = constant(rustStrkey, "STRKEY_LEN_MUXED");
+const solidityStrkeyMax = constant(solidityAddress, "STRKEY_LEN_MUXED");
+const sdkStrkeyMax = constant(sdkAddresses, "STRKEY_LEN_MUXED");
+const rustNoteMax = 1 + 2 + rustStrkeyMax + 8;
+const solidityNoteMax = 1 + 2 + constant(solidityNotes, "MAX_STRKEY_LEN") + 8;
+const sdkNoteMax = 1 + 2 + sdkStrkeyMax + 8;
+const rustHookMax = 1 + constant(rustAddress, "TAGGED_LEN_MUXED");
+const solidityHookMax = constant(solidityNotes, "MAX_CCTP_HOOK_LEN");
+const sdkHookMax = constant(sdkNotes, "MAX_CCTP_HOOK_LEN");
+const rustReasonMax = constant(rustTypes, "MAX_REASON_LEN");
+const solidityReasonMax = constant(solidityRouter, "MAX_REASON_LEN");
+const sdkReasonMax = constant(sdkTimelock, "MAX_CANCELLATION_NOTE_LEN");
+const rustActionChainMax = constant(rustTypes, "MAX_QUEUED_ACTION_CHAIN_LEN");
+const solidityActionChainMax = constant(solidityIts, "MAX_DESTINATION_CHAIN_LENGTH");
+const sdkActionChainMax = constant(sdkTimelock, "MAX_QUEUED_ACTION_CHAIN_LEN");
+const report = [
+  ["muxed strkey bytes", rustStrkeyMax, solidityStrkeyMax, sdkStrkeyMax],
+  ["inbound note bytes", rustNoteMax, solidityNoteMax, sdkNoteMax],
+  ["CCTP hook bytes", rustHookMax, solidityHookMax, sdkHookMax],
+  ["cancellation note bytes", rustReasonMax, solidityReasonMax, sdkReasonMax],
+  ["queued-action chain bytes", rustActionChainMax, solidityActionChainMax, sdkActionChainMax],
+];
+for (const [label, rust, solidity, sdk] of report) {
+  if (rust !== solidity || rust !== sdk) {
+    throw new Error(`${label} mismatch: Rust=${rust} Solidity=${solidity} SDK=${sdk}`);
+  }
+  console.log(`  ${label}: Rust=${rust} Solidity=${solidity} SDK=${sdk}`);
+}
+if (!/MAX_INBOUND_NOTE_LEN\s*:\s*u32\s*=\s*1\s*\+\s*2\s*\+\s*crate::strkey::STRKEY_LEN_MUXED\s*\+\s*8/.test(rustAxelar)) {
+  throw new Error("Rust inbound note maximum expression drifted");
+}
+if (!/MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*MAX_STRKEY_LEN\s*\+\s*8/.test(solidityNotes)) {
+  throw new Error("Solidity inbound note maximum expression drifted");
+}
+if (!/MAX_INBOUND_NOTE_LEN\s*=\s*1\s*\+\s*2\s*\+\s*STRKEY_LEN_MUXED\s*\+\s*8/.test(sdkNotes)) {
+  throw new Error("SDK inbound note maximum expression drifted");
+}
+if (!/MAX_CCTP_HOOK_LEN\s*:\s*u32\s*=\s*1\s*\+\s*crate::address::TAGGED_LEN_MUXED/.test(rustCctp)) {
+  throw new Error("Rust CCTP hook maximum expression drifted");
+}
+NODE
+
 note "sending one real transfer"
 ( cd "$EVM_DIR" && forge script script/Smoke.s.sol --rpc-url "$RPC" --broadcast --unlocked --sender "$SENDER" 2>&1 ) \
   | grep -E '^  (quote available|sent|fee to treasury|What the rail|The hook)|^    (amount burned|destination domain|mint recipient|hook)' || die "Smoke"

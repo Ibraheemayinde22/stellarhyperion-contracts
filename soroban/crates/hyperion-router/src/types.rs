@@ -6,6 +6,9 @@ pub use hyperion_core::MAX_MAINTENANCE_BATCH;
 // Maximum length in bytes of a timelock cancellation reason note.
 pub const MAX_REASON_LEN: u32 = 128;
 
+// Maximum chain identifier length stored in a queued destination-flow-limit action.
+pub const MAX_QUEUED_ACTION_CHAIN_LEN: u32 = 64;
+
 // Implicit schema version for already-initialized deployments that predate `DataKey::SchemaVersion`.
 pub const LEGACY_SCHEMA_VERSION: u32 = 1;
 

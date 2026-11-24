@@ -63,12 +63,13 @@ pub use axelar::{
 pub use axelar::{
     verify_inbound_reconciliation, verify_outbound_reconciliation, CandidateInboundPayment,
     CandidatePayment, InboundNote, OutboundNote, ReconciliationDiscrepancy,
-    MIN_PEER_ROTATION_DELAY,
+    MAX_INBOUND_NOTE_LEN, MIN_PEER_ROTATION_DELAY,
 };
 pub use axelar::{TokenMappingConflict, TokenMappingReport};
 pub use cctp::{
     validate_burn_boundary, ApprovalDiagnostics, ApprovalFinding, BurnMessage, CctpMessage,
     HyperionHook, APPROVAL_DIAGNOSTICS_VERSION, DOCUMENTED_RESIDUAL_ALLOWANCE,
+    MAX_CCTP_BURN_BODY_LEN, MAX_CCTP_HOOK_LEN, MAX_CCTP_MESSAGE_LEN,
 };
 pub use error::HyperionError;
 #[cfg(not(target_family = "wasm"))]
@@ -83,7 +84,7 @@ pub use model::{
     ChainClock, ModelError, ModelRouter, Operation, Rail, Trace, TraceStep, MODEL_MAX_CLAIMS,
 };
 pub use route::RouteKind;
-pub use strkey::StrkeyDestination;
+pub use strkey::{StrkeyDestination, STRKEY_LEN_MUXED, STRKEY_LEN_PLAIN};
 
 /// Ledgers used as the default flow-limit window. Stellar closes a ledger roughly every
 /// five seconds, so 720 ledgers is about an hour.
