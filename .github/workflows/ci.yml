@@ -14,6 +14,7 @@ name: ci
 # Point branch protection at that and nothing else. It passes only when all five passed.
 on:
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main]
@@ -21,6 +22,7 @@ on:
   # this, a merge queue would report green off the pull request's run and merge something it never
   # tested.
   merge_group:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
