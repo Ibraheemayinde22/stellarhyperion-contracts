@@ -26,6 +26,8 @@ PR descriptions and contribution security remain required. `dev ci` checks forma
 lint and types; the contracts repository also checks Rust and Solidity formatting.
 It omits production builds, integration suites, CodeQL and deployment rehearsals.
 Passing these fast checks permits integration into the contributor wave, not release.
+The required `dev gate` check is distinct from main's full `gate`, so a fast
+development result cannot satisfy main promotion protection.
 The bot verifies `dev-ci.yml`; historical or optional `ci.yml` results belong to main
 promotion. Failed dev checks and other workflows or external checks still block it.
 
@@ -335,7 +337,7 @@ The build workflows are reusable workflows that do one thing: `soroban.yml`,
 `evm.yml`, `protocol.yml`, `deploy-rehearsal.yml` and `security.yml`. `ci.yml` calls the build
 and security jobs and has a final `gate` job that passes only when all required jobs pass. `pr-assignment.yml` separately enforces contribution assignments.
 
-Branch protection points at `gate` and nothing else, which means renaming or splitting a workflow
+`main` branch protection points at `gate`; `dev` requires the distinct `dev gate`, which means renaming or splitting a workflow
 does not quietly stop protecting the branch.
 
 Three things about them worth knowing if you edit one:
