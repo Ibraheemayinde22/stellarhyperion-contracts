@@ -6,6 +6,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadDeploymentProtocol, readBoundedText } from "./record-evidence.mjs";
 
+import { describeArtifact, WASM_LIMIT_BYTES } from "./artifact-admission.mjs";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const MAX_U64 = (1n << 64n) - 1n;
 const MAX_I128 = (1n << 127n) - 1n;
@@ -165,7 +167,7 @@ export async function buildUnsignedPlan(mode, env = process.env, options = {}) {
     );
     const bytes = readFileSync(resolve(wasmDirectory, filename));
     if (
-      bytes.length > 65536 ||
+      bytes.length > WASM_LIMIT_BYTES ||
       bytes.length < 8 ||
       !WebAssembly.validate(bytes)
     )
@@ -189,7 +191,7 @@ export async function buildUnsignedPlan(mode, env = process.env, options = {}) {
     checkedArtifacts[key] = {
       artifact: filename,
       sha256: actual,
-      bytes: bytes.length,
+      ...describeArtifact(bytes.length),
     };
   }
 

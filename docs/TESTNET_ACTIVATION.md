@@ -723,3 +723,21 @@ available) and live RPC confirmation, including the envelope hash and deployer. 
 verifier with a warning, but cannot be used by the phase-two script until the operator performs a
 reviewed network rebinding. Rebinding does not establish that historical transactions occurred;
 retain and review the original public transaction evidence separately.
+
+### WASM admission report
+
+Before using the Stellar signer, `deploy.sh` checks all three WASM artifacts
+against the 64 KiB upload ceiling. It prints the report to stderr. To save a
+report for comparison, run the same check independently after building:
+
+```bash
+node script/stellar/artifact-admission.mjs \
+  soroban/target/wasm32v1-none/release/hyperion_*.wasm > artifact-report.json
+```
+
+Set `HYPERION_PREVIOUS_ARTIFACT_REPORT` to a saved report to include per-file
+size deltas. Set `HYPERION_RESOURCE_RECORD` to a version 2
+`storage-cost.mjs` capture to include the recorded network passphrase,
+protocol version, simulation ledger, measured resources, and resource fees.
+The capture describes the recorded storage scenarios. An absent capture
+produces null diagnostics. Older deployment records require no migration.

@@ -29,6 +29,12 @@ if is_dry_run; then
 fi
 require_tools
 require_stellar_operation_target
+ADMISSION_PASSPHRASE=$(expected_network_passphrase) || die "unsupported Stellar network"
+HYPERION_ADMISSION_PASSPHRASE="$ADMISSION_PASSPHRASE" \
+node "$CONTRACTS_ROOT/script/stellar/artifact-admission.mjs" \
+  "$WASM_DIR/hyperion_router.wasm" \
+  "$WASM_DIR/hyperion_adapter_cctp.wasm" \
+  "$WASM_DIR/hyperion_adapter_axelar.wasm" >&2 || die "artifact admission refused"
 require_identity
 assert_selected_network
 

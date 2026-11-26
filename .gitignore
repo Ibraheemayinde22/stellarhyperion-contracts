@@ -24,8 +24,6 @@ packages/protocol/release/
 .pnpm-store/
 
 # Secrets. Nothing in here ever reaches a commit.
-.env
-.env.*
 !.env.example
 *.pem
 *.key
@@ -44,7 +42,6 @@ signer.json
 # Local tooling noise
 .DS_Store
 .idea/
-.vscode/*
 !.vscode/extensions.json
 *.log
 coverage/
@@ -55,3 +52,4 @@ lcov.info
 
 # Generated authority observations from the local ownership rehearsal.
 evm/deployments/ownership-*.json
+config.bat
